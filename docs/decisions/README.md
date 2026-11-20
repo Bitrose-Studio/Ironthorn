@@ -13,6 +13,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0006](0006-math-and-coordinate-conventions.md) | Math library and coordinate conventions | Accepted |
 | [0007](0007-logging-and-profiling.md) | Logging and profiling | Accepted |
 | [0008](0008-editor-familiar-to-unreal-developers.md) | An editor familiar to Unreal Engine developers | Accepted |
+| [0009](0009-rhi.md) | Rendering hardware interface over Vulkan and Direct3D 12 | Accepted |
 
 ## Planned
 
@@ -20,7 +21,6 @@ These decisions are still open. Each is needed by the [roadmap](../architecture.
 
 | Topic | Needed by |
 |---|---|
-| RHI: resources, binding model, command API, frame model; Vulkan and Direct3D 12 backends | P1 |
 | Shader language and pipeline (Slang, ahead-of-time compiled shaders) | P1 |
 | Windowing and the platform event loop | P1 |
 | Input: events, state, routing and consumption | P1 |
