@@ -1,7 +1,6 @@
 # ADR-0011: Shader language and pipeline
 
-- **Status:** Proposed. Accepted when the first `shader_compiler` change links Slang and its
-  tests pass on Windows and Linux CI.
+- **Status:** Accepted
 - **Date:** 2026-11-20
 - **Related:** [ADR-0001](0001-cpp-language-and-safety-rules.md) (no exceptions, no RTTI),
   [ADR-0004](0004-modules-and-layering.md) (tools stay out of the runtime),
@@ -45,10 +44,12 @@ DXIL. Modules (`import`), generics and interfaces suit a material system. Reflec
 bindless helpers that map onto `ResourceDescriptorHeap` on D3D12 and descriptor-indexed arrays on
 Vulkan. Prebuilt releases for Windows and Linux (x86-64 and ARM64); frequent releases (about
 monthly), so upgrades need a deliberate pin.
-- Its C++ API (`slang.h`, COM-style interfaces returning `SlangResult`) was compiled, not linked
-  or run, with MSVC and clang-cl (Visual Studio 2022) using `/std:c++20 /EHs-c-
-  /D_HAS_EXCEPTIONS=0 /GR- /W4 /WX`: no errors or warnings. No exception crosses the interface;
-  the library's internal use of exceptions stays inside its DLL.
+- Its C++ API (`slang.h`, COM-style interfaces returning `SlangResult`) compiles with MSVC and
+  clang-cl (Visual Studio 2022) using `/std:c++20 /EHs-c- /D_HAS_EXCEPTIONS=0 /GR- /W4 /WX`
+  with no errors or warnings. The engine's `shader_compiler` module links it as a shared library,
+  and its tests pass in CI on Windows (MSVC, clang-cl) and Linux (Clang, GCC). No exception
+  crosses the interface; the library's internal use of exceptions stays inside its shared
+  library.
 - DXIL output needs DXC's `dxcompiler` and `dxil` libraries, which the Slang release does not
   include.
 
@@ -75,10 +76,21 @@ DXC and Slang. It adds nothing over a small compiler module plus the cooker, so 
    report the feature (ADR-0005). No source forks per backend.
 3. **Pins (tools only, never shipped in games):**
 
-   | Tool | Pin | License | Used for |
+   | Tool | Version | Archive | SHA-256 |
    |---|---|---|---|
-   | [Slang](https://github.com/shader-slang/slang) | v2026.22.1 (release archives for windows-x86_64 and linux-x86_64) | Apache-2.0 WITH LLVM-exception | Compiling Slang to SPIR-V and DXIL |
-   | [DXC](https://github.com/microsoft/DirectXShaderCompiler) | v1.9.2609 | LLVM release license (NCSA); `dxil` under Microsoft's own license | DXIL code generation, validation and signing |
+   | [Slang](https://github.com/shader-slang/slang) | 2026.22.1 | `slang-2026.22.1-windows-x86_64.zip` | `e72344f7b0323cec8b039c534caaf4680e7ba629489fc796ea4c7f7adb7deb68` |
+   | | | `slang-2026.22.1-linux-x86_64-glibc-2.28.tar.gz` | `0c0e243ac15b7878237e6854313f45c791408227d5bc634f3ad1ac487edbfaf5` |
+   | [DXC](https://github.com/microsoft/DirectXShaderCompiler) | 1.9.2609 | `dxc_2026_09_29.zip` | `ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1` |
+   | | | `linux_dxc_2026_09_28.x86_x64.tar.gz` | `96faadc7f5c282d2ffda49804beb4c3ee38127bc252b723234e3c5cdf7aa39a1` |
+
+   - **Licenses.** Slang: Apache-2.0 WITH LLVM-exception. DXC, Windows archive: `dxcompiler`
+     under the LLVM release license (NCSA) and the `dxil` validator under Microsoft's DirectX
+     Shader Compiler license terms, which allow use on Windows only. DXC, Linux archive: its
+     release notes put every file, `libdxil.so` included, under the NCSA license. Details are in
+     `docs/development/third-party.md`.
+   - The Linux Slang archive is the build without the LLVM-based CPU back end, which the engine
+     doesn't use. Its glibc 2.28 name is not the toolchain minimum: DXC's Linux libraries need
+     **glibc 2.38 or newer** (Ubuntu 24.04 or newer).
 
    - Each archive is pinned by URL and SHA-256 and listed in `docs/development/third-party.md`
      with the module that uses it. Tools are never taken from `PATH` or an SDK install.
@@ -94,7 +106,8 @@ DXC and Slang. It adds nothing over a small compiler module plus the cooker, so 
    crashes ever reach the editor, compilation moves to a `slangc` process behind the same
    module.
 5. **Conventions:** column-major matrix layout and the engine clip space (ADR-0006). DXIL is
-   validated and signed by DXC's validator; SPIR-V is validated in tests.
+   validated and signed by DXC's validator. SPIR-V is validated by the glslang bundled with
+   Slang (Slang's `ValidateWithDownstreamCompiler` option).
 
 ### Reflection and checks
 
@@ -134,13 +147,13 @@ DXC and Slang. It adds nothing over a small compiler module plus the cooker, so 
 
 - One shader source for both APIs, with modules for materials, and no compiler in games.
 - Two tool dependencies that release often; each upgrade is a deliberate, tested change.
-- DXIL needs DXC beside Slang, on every machine that cooks for Direct3D 12.
+- DXIL needs DXC beside Slang, on every machine that cooks for Direct3D 12; on Linux that means
+  glibc 2.38 or newer.
 - Variant budgets push work into runtime branches; some shaders will be slightly slower than a
   fully specialized build, in exchange for fast builds and small packages.
-- Follow-up work: the `shader_compiler` module and the shader runtime (metadata, cache, library)
-  with tests; the engine bindless Slang module; the capability allowlists per tier; the variant
-  budget check in CI; pinning both tools; linking Slang and running its tests on Windows and
-  Linux CI.
+- Follow-up work: the reflection checks and cache in `shader_compiler`; the shader runtime
+  (metadata, cache, library) with tests; the engine bindless Slang module; the capability allowlists per tier; the variant
+  budget check in CI.
 - **Revisit when:**
   - Slang stops supporting a target we need, or its release cadence breaks builds;
   - in-process compilation makes the editor unstable (move compilation to a `slangc` process);
