@@ -19,6 +19,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0012](0012-windowing-and-event-loop.md) | Windowing and the platform event loop | Accepted |
 | [0013](0013-input.md) | Input: events, state, routing and consumption | Accepted |
 | [0014](0014-ecs-storage-and-world.md) | ECS storage and the world | Accepted |
+| [0015](0015-asset-identity-and-reimport.md) | Asset identity and non-destructive reimport | Accepted |
 
 ## Planned
 
@@ -27,7 +28,6 @@ These decisions are still open. Each is needed by the [roadmap](../architecture.
 | Topic | Needed by |
 |---|---|
 | Gameplay model on the ECS | P1 |
-| Asset identity and non-destructive reimport | P1 |
 | Runtime and editor separation | P1 |
 | Editor UI toolkit | P2 |
 | Animation retargeting (rigs, chain mapping, runtime and editor batch retarget) | P5 |
