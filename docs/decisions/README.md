@@ -15,6 +15,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0008](0008-editor-familiar-to-unreal-developers.md) | An editor familiar to Unreal Engine developers | Accepted |
 | [0009](0009-rhi.md) | Rendering hardware interface over Vulkan and Direct3D 12 | Accepted |
 | [0010](0010-serialization.md) | Serialization formats and versioning | Accepted |
+| [0011](0011-shader-language-and-pipeline.md) | Shader language and pipeline | Proposed |
 
 ## Planned
 
@@ -22,7 +23,6 @@ These decisions are still open. Each is needed by the [roadmap](../architecture.
 
 | Topic | Needed by |
 |---|---|
-| Shader language and pipeline (Slang, ahead-of-time compiled shaders) | P1 |
 | Windowing and the platform event loop | P1 |
 | Input: events, state, routing and consumption | P1 |
 | ECS storage and the world | P1 |
