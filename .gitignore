@@ -1,0 +1,15 @@
+# Build output
+/build/
+/out/
+
+# Locally bootstrapped toolchain (scripts/bootstrap.ps1)
+/.tools/
+
+# IDE and OS files
+/.vs/
+/.idea/
+/.vscode/
+*.user
+.DS_Store
+Thumbs.db
+

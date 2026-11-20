@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: windows (msvc + clang-cl + tidy)
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: choco install ninja --no-progress -y
+      - name: Verify (format, MSVC Debug/dev/Release, clang-cl, clang-tidy)
+        shell: pwsh
+        run: ./scripts/dev.ps1 verify
+
+  linux:
+    name: linux (${{ matrix.preset }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset: linux-clang-dev
+            configure: linux-clang
+          - preset: linux-clang-release
+            configure: linux-clang
+          - preset: linux-gcc-dev
+            configure: linux-gcc
+          - preset: linux-asan
+            configure: linux-asan
+          - preset: linux-tsan
+            configure: linux-tsan
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang
+      # The sanitizer runtimes of Clang 18 fail on the runner's high ASLR entropy.
+      - name: Lower ASLR entropy for sanitizers
+        if: contains(matrix.preset, 'san')
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: Configure
+        run: cmake --preset ${{ matrix.configure }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          TSAN_OPTIONS: halt_on_error=1
+        run: ctest --preset ${{ matrix.preset }}
