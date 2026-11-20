@@ -29,3 +29,10 @@ ith_add_test_suite(foundation
         foundation/UuidTests.cpp
         foundation/VersionTests.cpp
     LIBRARIES ith::foundation Threads::Threads)
+
+if(IRONTHORN_BUILD_TOOLS)
+    ith_add_test_suite(shader_compiler
+        SOURCES shader_compiler/ShaderCompilerTests.cpp
+        LIBRARIES ith::shader_compiler)
+    ith_copy_shader_compiler_runtime(ith_shader_compiler_tests)
+endif()

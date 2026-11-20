@@ -34,7 +34,8 @@ tools. Consoles are planned after the first PC release, and no design decision m
 
 ```text
  application   editor · player (game runtime) · dedicated server · tools
- editor        editor modules: viewport, outliner, details, content browser, graph editors
+ editor        editor modules: viewport, outliner, details, content browser, graph editors ·
+               tools-only modules (shader compiler)
  framework     gameplay framework · abilities/attributes/effects · AI · save · gameplay kit
  engine        renderer (3D, 2D) · UI · physics · animation · audio · net · navigation · VFX ·
                terrain · foliage · sky and weather · streaming · scripting
@@ -61,6 +62,7 @@ Foundation conventions: math types and coordinates follow
 | Module | Layer | What it is for | What it must not do |
 |---|---|---|---|
 | [`foundation`](../engine/ith/foundation) | foundation | Asserts (`ITH_ASSERT`, `ITH_VERIFY`, `ITH_FATAL`) with a replaceable handler; `ith::Expected<T, E>` for failures without exceptions; the engine version; string helpers; `Stopwatch` and `FixedTimestep`; FNV-1a hashing; `ith::Uuid`; the `LinearAllocator` arena and `ObjectPool<T>`; compiler and sanitizer hooks (`Compiler.h`) | Depend on anything but the C++ standard library; hold engine state |
+| [`shader_compiler`](../engine/ith/shader_compiler) | editor (tools only) | `ith::ShaderCompiler`: compiles a self-contained Slang source for one entry point and stage to SPIR-V 1.6 or to signed DXIL Shader Model 6.6, through Slang's library API and DXC, with the compiler diagnostics as the error ([ADR-0011](decisions/0011-shader-language-and-pipeline.md)). Built only with `IRONTHORN_BUILD_TOOLS` | Be linked by a game or any runtime module; expose Slang types |
 
 Test support (`tests/support`) provides the doctest entry point and `ith::test::AssertCapture`,
 which records failed asserts so tests can check them.
