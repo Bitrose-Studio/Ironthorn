@@ -84,7 +84,7 @@ TEST_SUITE("foundation.expected") {
         CHECK_FALSE(a == c);
     }
 
-#if defined(ITH_ENABLE_ASSERTS)
+#ifdef ITH_ENABLE_ASSERTS
     TEST_CASE("reading the value of an error asserts") {
         ith::test::AssertCapture capture;
         ith::Expected<int> result = parsePositive(0);

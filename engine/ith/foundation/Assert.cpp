@@ -10,7 +10,7 @@ namespace {
 // Stops in an attached debugger. Foundation may not depend on the platform layer, so the
 // compiler intrinsics are used directly here.
 void breakIntoDebugger() {
-#if defined(_MSC_VER)
+#ifdef _MSC_VER
     __debugbreak();
 #elif defined(__clang__)
     __builtin_debugtrap();

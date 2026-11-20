@@ -10,12 +10,14 @@ namespace {
 
 int g_customHandlerCalls = 0;
 
+#ifdef ITH_ENABLE_ASSERTS
 // Returns its argument through an opaque call, so conditions in the tests are not constant
 // expressions (MSVC warns about constant conditions, and warnings are errors).
 bool runtime(bool value) {
     static volatile bool opaque = true;
     return opaque ? value : !value;
 }
+#endif
 
 ith::AssertAction countingHandler(const ith::AssertInfo&) {
     ++g_customHandlerCalls;
@@ -25,7 +27,7 @@ ith::AssertAction countingHandler(const ith::AssertInfo&) {
 } // namespace
 
 TEST_SUITE("foundation.assert") {
-#if defined(ITH_ENABLE_ASSERTS)
+#ifdef ITH_ENABLE_ASSERTS
     TEST_CASE("a passing assert does not call the handler") {
         ith::test::AssertCapture capture;
         ITH_ASSERT(runtime(true));
@@ -84,7 +86,7 @@ TEST_SUITE("foundation.assert") {
         CHECK(ith::setAssertHandler(before) == nullptr);
     }
 
-#if defined(ITH_ENABLE_ASSERTS)
+#ifdef ITH_ENABLE_ASSERTS
     TEST_CASE("an installed handler is called for every failure") {
         g_customHandlerCalls = 0;
         const ith::AssertHandler previous = ith::setAssertHandler(&countingHandler);

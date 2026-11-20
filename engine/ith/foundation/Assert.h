@@ -48,7 +48,7 @@ void reportAssertFailure(const char* expression, const char* message, const char
 
 #define ITH_FATAL(message) ::ith::detail::reportFatal((message), __FILE__, __LINE__)
 
-#if defined(ITH_ENABLE_ASSERTS)
+#ifdef ITH_ENABLE_ASSERTS
 #define ITH_ASSERT_MSG(condition, message)                                                                             \
     do {                                                                                                               \
         if (!(condition)) [[unlikely]] {                                                                               \
