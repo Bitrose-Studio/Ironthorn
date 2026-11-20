@@ -13,5 +13,7 @@ ith_add_module(foundation
         Stopwatch.h
         StringUtils.h
         StringUtils.cpp
+        Uuid.h
+        Uuid.cpp
         Version.h
         BuildInfo.h.in)

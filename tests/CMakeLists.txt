@@ -13,6 +13,9 @@ set_target_properties(ith_test_support PROPERTIES
     FOLDER "Ironthorn/Tests"
     COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
 
+# std::thread in the tests needs the platform thread library on Linux.
+find_package(Threads REQUIRED)
+
 ith_add_test_suite(foundation
     SOURCES
         foundation/AssertTests.cpp
@@ -21,5 +24,6 @@ ith_add_test_suite(foundation
         foundation/HashTests.cpp
         foundation/StopwatchTests.cpp
         foundation/StringUtilsTests.cpp
+        foundation/UuidTests.cpp
         foundation/VersionTests.cpp
-    LIBRARIES ith::foundation)
+    LIBRARIES ith::foundation Threads::Threads)
