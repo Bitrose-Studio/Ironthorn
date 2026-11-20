@@ -88,25 +88,30 @@ function Import-BuildEnvironment {
     if (-not (Get-Command cmake -ErrorAction SilentlyContinue) -or -not (Get-Command ninja -ErrorAction SilentlyContinue)) {
         throw 'cmake or ninja was not found. Run scripts/bootstrap.ps1 first.'
     }
-    if ($env:VSCMD_VER) {
-        return # already inside a Visual Studio developer prompt
-    }
-
-    $vcvars = Join-Path (Find-VisualStudio) 'VC\Auxiliary\Build\vcvars64.bat'
-    $dump = & cmd.exe /c "`"$vcvars`" > nul 2>&1 && set"
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to load the MSVC environment from $vcvars."
-    }
-    foreach ($line in $dump) {
-        if ($line -match '^([^=]+)=(.*)$') {
-            Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2]
+    if (-not $env:VSCMD_VER) {
+        # Not inside a Visual Studio developer prompt yet: load the MSVC environment.
+        $vcvars = Join-Path (Find-VisualStudio) 'VC\Auxiliary\Build\vcvars64.bat'
+        $dump = & cmd.exe /c "`"$vcvars`" > nul 2>&1 && set"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to load the MSVC environment from $vcvars."
+        }
+        foreach ($line in $dump) {
+            if ($line -match '^([^=]+)=(.*)$') {
+                Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2]
+            }
         }
     }
-    # clang-cl ships with Visual Studio's "C++ Clang tools" component.
-    $llvm = Join-Path (Find-VisualStudio) 'VC\Tools\Llvm\x64\bin'
+    # Put the LLVM bundled with this Visual Studio first on PATH: its clang-cl matches the
+    # MSVC standard library, while a standalone LLVM install may be too old for it.
+    $llvm = Get-BundledLlvmDir
     if (Test-Path $llvm) {
-        $env:PATH = "$env:PATH;$llvm"
+        $env:PATH = "$llvm;$env:PATH"
     }
+}
+
+# LLVM (clang-cl, clang-tidy, clang-format) from Visual Studio's "C++ Clang tools" component.
+function Get-BundledLlvmDir {
+    return Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin'
 }
 
 function Invoke-Checked {
@@ -144,15 +149,15 @@ function Invoke-Test([string]$PresetName, [string]$Configuration) {
 }
 
 function Get-LlvmTool([string]$Name) {
-    $onPath = Get-Command $Name -ErrorAction SilentlyContinue
-    if ($onPath) {
-        return $onPath.Source
+    $bundled = Join-Path (Get-BundledLlvmDir) "$Name.exe"
+    if (Test-Path $bundled) {
+        return $bundled
     }
-    $bundled = Join-Path (Find-VisualStudio) "VC\Tools\Llvm\x64\bin\$Name.exe"
-    if (-not (Test-Path $bundled)) {
+    $onPath = Get-Command $Name -ErrorAction SilentlyContinue
+    if (-not $onPath) {
         throw "$Name was not found. Install the 'C++ Clang tools for Windows' Visual Studio component."
     }
-    return $bundled
+    return $onPath.Source
 }
 
 function Get-SourceFiles([string[]]$Directories) {

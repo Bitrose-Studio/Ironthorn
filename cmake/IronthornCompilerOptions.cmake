@@ -49,14 +49,17 @@ else()
         -Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual -Wimplicit-fallthrough)
 endif()
 
-# Clang 19+ warns when a designated initializer leaves out members that have default member
-# initializers; omitting them is the point of designated initializers. GCC reports the same under
+# Clang and GCC warn when a designated initializer leaves out members that have default member
+# initializers; omitting them is the point of designated initializers. Clang 19+ reports this
+# under -Wmissing-designated-field-initializers; older Clang and GCC report it under
 # -Wmissing-field-initializers.
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     include(CheckCXXCompilerFlag)
     check_cxx_compiler_flag(-Wmissing-designated-field-initializers ITH_HAS_DESIGNATED_FIELD_WARNING)
     if(ITH_HAS_DESIGNATED_FIELD_WARNING)
         target_compile_options(ith_build_options INTERFACE -Wno-missing-designated-field-initializers)
+    else()
+        target_compile_options(ith_build_options INTERFACE -Wno-missing-field-initializers)
     endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(ith_build_options INTERFACE -Wno-missing-field-initializers)
