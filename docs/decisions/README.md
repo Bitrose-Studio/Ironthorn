@@ -17,6 +17,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0010](0010-serialization.md) | Serialization formats and versioning | Accepted |
 | [0011](0011-shader-language-and-pipeline.md) | Shader language and pipeline | Accepted |
 | [0012](0012-windowing-and-event-loop.md) | Windowing and the platform event loop | Accepted |
+| [0013](0013-input.md) | Input: events, state, routing and consumption | Accepted |
 
 ## Planned
 
@@ -24,7 +25,6 @@ These decisions are still open. Each is needed by the [roadmap](../architecture.
 
 | Topic | Needed by |
 |---|---|
-| Input: events, state, routing and consumption | P1 |
 | ECS storage and the world | P1 |
 | Gameplay model on the ECS | P1 |
 | Asset identity and non-destructive reimport | P1 |
