@@ -1,6 +1,6 @@
 # Ironthorn
 
-[![CI](https://github.com/Bitrose-Studio/Ironthorn-/actions/workflows/ci.yml/badge.svg)](https://github.com/Bitrose-Studio/Ironthorn-/actions/workflows/ci.yml)
+[![CI](https://github.com/Bitrose-Studio/Ironthorn/actions/workflows/ci.yml/badge.svg)](https://github.com/Bitrose-Studio/Ironthorn/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Ironthorn is a modular, 3D-first game engine that also does 2D, written in C++20. It aims for:
