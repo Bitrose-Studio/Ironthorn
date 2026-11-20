@@ -31,4 +31,5 @@ These decisions are still open. Each is needed by the [roadmap](../architecture.
 | Topic | Needed by |
 |---|---|
 | Editor UI toolkit | P2 |
+| Material model (OpenPBR-based real-time subset, per-tier approximations) | P3 |
 | Animation retargeting (rigs, chain mapping, runtime and editor batch retarget) | P5 |
