@@ -60,7 +60,7 @@ Foundation conventions: math types and coordinates follow
 
 | Module | Layer | What it is for | What it must not do |
 |---|---|---|---|
-| [`foundation`](../engine/ith/foundation) | foundation | Asserts (`ITH_ASSERT`, `ITH_VERIFY`, `ITH_FATAL`) with a replaceable handler; `ith::Expected<T, E>` for failures without exceptions; the engine version | Depend on anything but the C++ standard library; hold engine state |
+| [`foundation`](../engine/ith/foundation) | foundation | Asserts (`ITH_ASSERT`, `ITH_VERIFY`, `ITH_FATAL`) with a replaceable handler; `ith::Expected<T, E>` for failures without exceptions; the engine version; string helpers; `Stopwatch` and `FixedTimestep`; FNV-1a hashing; `ith::Uuid`; the `LinearAllocator` arena and `ObjectPool<T>`; compiler and sanitizer hooks (`Compiler.h`) | Depend on anything but the C++ standard library; hold engine state |
 
 Test support (`tests/support`) provides the doctest entry point and `ith::test::AssertCapture`,
 which records failed asserts so tests can check them.

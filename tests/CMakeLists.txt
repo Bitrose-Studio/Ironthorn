@@ -22,6 +22,8 @@ ith_add_test_suite(foundation
         foundation/ExpectedTests.cpp
         foundation/FixedTimestepTests.cpp
         foundation/HashTests.cpp
+        foundation/LinearAllocatorTests.cpp
+        foundation/ObjectPoolTests.cpp
         foundation/StopwatchTests.cpp
         foundation/StringUtilsTests.cpp
         foundation/UuidTests.cpp

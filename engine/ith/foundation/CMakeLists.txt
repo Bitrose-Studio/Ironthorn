@@ -10,6 +10,9 @@ ith_add_module(foundation
         FixedTimestep.h
         FixedTimestep.cpp
         Hash.h
+        LinearAllocator.h
+        LinearAllocator.cpp
+        ObjectPool.h
         Stopwatch.h
         StringUtils.h
         StringUtils.cpp
