@@ -7,6 +7,9 @@ ith_add_module(foundation
         Assert.cpp
         Compiler.h
         Expected.h
+        FixedTimestep.h
+        FixedTimestep.cpp
+        Stopwatch.h
         StringUtils.h
         StringUtils.cpp
         Version.h
