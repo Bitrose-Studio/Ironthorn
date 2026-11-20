@@ -5,6 +5,9 @@ ith_add_module(foundation
     SOURCES
         Assert.h
         Assert.cpp
+        Compiler.h
         Expected.h
+        StringUtils.h
+        StringUtils.cpp
         Version.h
         BuildInfo.h.in)

@@ -17,5 +17,6 @@ ith_add_test_suite(foundation
     SOURCES
         foundation/AssertTests.cpp
         foundation/ExpectedTests.cpp
+        foundation/StringUtilsTests.cpp
         foundation/VersionTests.cpp
     LIBRARIES ith::foundation)
