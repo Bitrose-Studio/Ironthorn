@@ -36,11 +36,11 @@ void* LinearAllocator::allocate(std::size_t size, std::size_t alignment) {
         return nullptr;
     }
 
-    std::byte* result = m_buffer.get() + m_offset + padding;
-    ITH_ASAN_UNPOISON(result, size);
-    m_offset += padding + size;
+    const std::size_t start = m_offset + padding;
+    ITH_ASAN_UNPOISON(m_buffer.get() + start, size);
+    m_offset = start + size;
     m_peak = std::max(m_peak, m_offset);
-    return result;
+    return m_buffer.get() + start;
 }
 
 void LinearAllocator::rewind(Marker marker) {

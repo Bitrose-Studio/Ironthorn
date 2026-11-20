@@ -8,7 +8,7 @@
 //   ITH_ASAN_POISON(ptr, size)   in AddressSanitizer builds, marks memory as not addressable, so
 //   ITH_ASAN_UNPOISON(ptr, size) a custom allocator's free memory is reported when touched.
 
-#if defined(__has_cpp_attribute)
+#ifdef __has_cpp_attribute
 #if __has_cpp_attribute(clang::lifetimebound)
 #define ITH_LIFETIMEBOUND [[clang::lifetimebound]]
 #elif __has_cpp_attribute(msvc::lifetimebound)
@@ -19,7 +19,7 @@
 #define ITH_LIFETIMEBOUND
 #endif
 
-#if defined(__SANITIZE_ADDRESS__)
+#ifdef __SANITIZE_ADDRESS__
 #define ITH_HAS_ASAN 1
 #elif defined(__has_feature)
 #if __has_feature(address_sanitizer)
