@@ -52,6 +52,10 @@ Rules ([ADR-0004](decisions/0004-modules-and-layering.md)):
   each frame.
 - No third-party or graphics-backend types appear in public module headers.
 
+Foundation conventions: math types and coordinates follow
+[ADR-0006](decisions/0006-math-and-coordinate-conventions.md), and logging and profiling follow
+[ADR-0007](decisions/0007-logging-and-profiling.md).
+
 ## Modules today
 
 | Module | Layer | What it is for | What it must not do |
@@ -65,8 +69,8 @@ which records failed asserts so tests can check them.
 
 - The **ECS** stores entities in archetype tables, with relations, deferred commands, change
   detection and a parallel scheduler.
-- The editor shows the ECS as an ordered hierarchy of entities with components. "Actor" is an
-  authoring word for an entity with a transform.
+- The editor shows the ECS as an ordered hierarchy of entities with components in the Outliner.
+  "Actor" is an authoring word for an entity with a transform. See [Editor](#editor).
 - **Levels** are assets, and a **world** instantiates them. Open worlds stream in cells.
 - **Prefabs** nest, and changes to a prefab reach the copies that haven't overridden them.
 - The gameplay framework provides game mode, game state, player controller, player state,
@@ -74,13 +78,37 @@ which records failed asserts so tests can check them.
   local player.
 - Gameplay tags and data assets are first-class.
 
+## Editor
+
+The editor follows Unreal Engine workflow conventions, so an Unreal developer can work in it
+without retraining ([ADR-0008](decisions/0008-editor-familiar-to-unreal-developers.md)):
+
+- The default layout puts the viewport in the centre with a toolbar above it (Play and
+  Simulate), the Outliner and Details panels at the side, and the Content Browser below, also
+  available as a content drawer. Panels dock, and layouts are saved.
+- It uses the same generic vocabulary: Level, Actor, Component, Outliner, Details, Content
+  Browser, Play In Editor, Simulate, Possess and Eject, World Settings, Project Settings and
+  Editor Preferences.
+- Viewport shortcuts default to an Unreal-style preset, and every binding can be remapped.
+- The Details panel is generated from reflection.
+- The Content Browser mirrors the folders on disk. Assets have stable ids, so moving or renaming
+  one needs no redirector.
+- Configuration is layered: engine, then project, then platform, then user.
+
+Only workflow conventions are followed. No Unreal Engine code, icons, styles or product names
+are used.
+
 ## Rendering
 
 - A render graph schedules passes, aliases memory and places barriers.
 - Rendering is bindless and GPU-driven, with a visibility buffer or deferred G-buffer.
 - Materials are node graphs compiled to Slang. Shader pipelines are compiled ahead of time, so
   games don't stutter.
-- Backends: Vulkan 1.3 and Direct3D 12, behind an engine-owned RHI.
+- Backends: Vulkan 1.3 and Direct3D 12, behind an engine-owned RHI. Mesh shaders and hardware
+  ray tracing are optional and enabled per tier
+  ([ADR-0005](decisions/0005-reference-hardware.md)).
+- Space is right-handed with +Y up and −Z forward. Scene depth is reversed, and rendering is
+  camera-relative ([ADR-0006](decisions/0006-math-and-coordinate-conventions.md)).
 
 ## Scalability
 
@@ -107,6 +135,9 @@ this as a design problem:
    - Each setting registers its cost.
    - A benchmark tool measures time, memory and perceptual error (FLIP) per setting on
      reference hardware.
+   - [ADR-0005](decisions/0005-reference-hardware.md) sets the reference hardware and targets
+     per tier. Low is a GTX 1650 4 GB desktop at 60 fps and the Steam Deck at 30 fps (40 fps
+     as an option). Epic is 4K at 60 fps. The benchmark lab is phased in as machines join it.
    - Presets are built from the best trade-offs.
    - CI fails when a lower preset no longer saves enough time.
 
@@ -137,7 +168,7 @@ Each phase ends when its exit criteria pass in CI.
 |---|---|---|
 | P0 | Repository, build, CI, foundation module, first ADRs | **in progress** |
 | P1 | Platform, jobs, RHI (Vulkan, D3D12), render graph, reflection, serialization, assets, input | planned |
-| P2 | Editor shell: viewport, outliner, details, content browser, undo, play-in-editor, prefabs | planned |
+| P2 | Editor shell following Unreal Engine workflow conventions ([ADR-0008](decisions/0008-editor-familiar-to-unreal-developers.md)): viewport, outliner, details, content browser, dockable saved layouts, remappable input with the Unreal-style default preset, undo, play-in-editor, prefabs | planned |
 | P3 | Renderer v1 and the scalability framework | planned |
 | P4 | Game UI framework and designer | planned |
 | P5 | Gameplay core: physics, animation, audio, scripting, abilities, networking, dedicated server | planned |
