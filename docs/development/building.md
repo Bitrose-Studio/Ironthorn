@@ -40,6 +40,23 @@ cmake --preset linux-asan && cmake --build --preset linux-asan && ctest --preset
 cmake --preset linux-tsan && cmake --build --preset linux-tsan && ctest --preset linux-tsan
 ```
 
+Sanitizer builds (`IRONTHORN_ENABLE_SANITIZERS` or `IRONTHORN_ENABLE_TSAN`) always build without
+the tools: CMake turns `IRONTHORN_BUILD_TOOLS` off and says so. The shader compiler's Slang and
+DXC are prebuilt, uninstrumented shared libraries, so a sanitizer would check only the module's
+thin wrapper around them; the other Linux and Windows builds test it.
+
+## Tools and their dependencies
+
+`IRONTHORN_BUILD_TOOLS` (on by default) builds the tools-only modules, which the editor and the
+cooker link and games never do. Today that is `shader_compiler`. Its prebuilt Slang and DXC
+releases (Windows and Linux, x86-64) are downloaded at configure time, pinned by SHA-256. Their
+shared libraries are copied next to the test executable after each link, so `ctest` runs
+without any setup. Configure with `-DIRONTHORN_BUILD_TOOLS=OFF` to build only the runtime
+modules without these downloads.
+
+On Linux the tools need glibc 2.38 or newer (Ubuntu 24.04 or newer), which DXC's libraries
+require, and zlib (`libz.so.1`).
+
 ## Configurations
 
 | Configuration | Meaning | Asserts |

@@ -15,9 +15,17 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(IRONTHORN_BUILD_TESTS "Build the unit and integration tests" ON)
+option(IRONTHORN_BUILD_TOOLS "Build the tools-only modules, such as the shader compiler (downloads Slang and DXC)" ON)
 option(IRONTHORN_WARNINGS_AS_ERRORS "Treat warnings in Ironthorn targets as errors" OFF)
 option(IRONTHORN_ENABLE_SANITIZERS "Build with AddressSanitizer and UndefinedBehaviorSanitizer (Clang/GCC)" OFF)
 option(IRONTHORN_ENABLE_TSAN "Build with ThreadSanitizer (Clang/GCC, not with IRONTHORN_ENABLE_SANITIZERS)" OFF)
+
+# Sanitizer builds leave the tools out: their prebuilt libraries are not instrumented, so only
+# the thin wrapper around them would be checked (docs/development/building.md).
+if(IRONTHORN_BUILD_TOOLS AND (IRONTHORN_ENABLE_SANITIZERS OR IRONTHORN_ENABLE_TSAN))
+    message(STATUS "Sanitizers are on: building without the tools (IRONTHORN_BUILD_TOOLS=OFF).")
+    set(IRONTHORN_BUILD_TOOLS OFF)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

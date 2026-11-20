@@ -38,3 +38,102 @@ if(IRONTHORN_BUILD_TESTS)
     ith_dependency_option(DOCTEST_NO_INSTALL ON)
     FetchContent_MakeAvailable(doctest)
 endif()
+
+# --- Slang and DXC: the shader compiler (tools only, never linked into games) ----------
+# Both are their publishers' prebuilt releases: building either from source takes LLVM and far
+# longer than the engine. Slang is linked as a shared library and loads DXC's dxcompiler and
+# dxil libraries from its own directory to write DXIL. Their exceptions and RTTI stay inside
+# these shared libraries; Ironthorn code only calls Slang's COM-style interface (ADR-0011).
+#
+# ITH_SHADER_COMPILER_RUNTIME_FILES lists the shared libraries that must sit next to an
+# executable that compiles shaders; ith_copy_shader_compiler_runtime() puts them there. Slang's
+# standard-module folder is not copied: it is needed only once shaders get `import` search
+# paths.
+if(IRONTHORN_BUILD_TOOLS)
+    set(ith_slang_version 2026.22.1)
+    set(ith_dxc_version 1.9.2609)
+    set(ith_slang_url https://github.com/shader-slang/slang/releases/download/v${ith_slang_version})
+    set(ith_dxc_url https://github.com/microsoft/DirectXShaderCompiler/releases/download/v${ith_dxc_version})
+    if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64)$")
+        message(FATAL_ERROR "The shader compiler tools are available for x86-64 only. "
+            "Configure with -DIRONTHORN_BUILD_TOOLS=OFF to build without them.")
+    endif()
+    if(WIN32)
+        ith_declare_dependency(slang
+            URL ${ith_slang_url}/slang-${ith_slang_version}-windows-x86_64.zip
+            SHA256 e72344f7b0323cec8b039c534caaf4680e7ba629489fc796ea4c7f7adb7deb68)
+        ith_declare_dependency(dxc
+            URL ${ith_dxc_url}/dxc_2026_09_29.zip
+            SHA256 ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Slang's "glibc-2.28" archive is its build without the LLVM-based CPU back end, which
+        # the engine doesn't use and which makes the other archive almost three times larger.
+        # Its name is not the toolchain minimum: DXC's Linux libraries need glibc 2.38
+        # (docs/development/building.md).
+        ith_declare_dependency(slang
+            URL ${ith_slang_url}/slang-${ith_slang_version}-linux-x86_64-glibc-2.28.tar.gz
+            SHA256 0c0e243ac15b7878237e6854313f45c791408227d5bc634f3ad1ac487edbfaf5)
+        ith_declare_dependency(dxc
+            URL ${ith_dxc_url}/linux_dxc_2026_09_28.x86_x64.tar.gz
+            SHA256 96faadc7f5c282d2ffda49804beb4c3ee38127bc252b723234e3c5cdf7aa39a1)
+    else()
+        message(FATAL_ERROR "The shader compiler tools are available on Windows and Linux only. "
+            "Configure with -DIRONTHORN_BUILD_TOOLS=OFF to build without them.")
+    endif()
+    FetchContent_MakeAvailable(slang dxc)
+
+    add_library(ith_slang SHARED IMPORTED GLOBAL)
+    add_library(ith::slang ALIAS ith_slang)
+    target_include_directories(ith_slang SYSTEM INTERFACE "${slang_SOURCE_DIR}/include")
+    if(WIN32)
+        set_target_properties(ith_slang PROPERTIES
+            IMPORTED_LOCATION "${slang_SOURCE_DIR}/bin/slang-compiler.dll"
+            IMPORTED_IMPLIB "${slang_SOURCE_DIR}/lib/slang-compiler.lib")
+        set(ITH_SHADER_COMPILER_RUNTIME_FILES
+            "${slang_SOURCE_DIR}/bin/slang-compiler.dll"
+            "${slang_SOURCE_DIR}/bin/slang-glslang.dll"
+            "${dxc_SOURCE_DIR}/bin/x64/dxcompiler.dll"
+            "${dxc_SOURCE_DIR}/bin/x64/dxil.dll")
+    else()
+        set(ith_slang_library libslang-compiler.so.0.${ith_slang_version})
+        set(ith_dxc_libraries "${dxc_SOURCE_DIR}/lib/libdxcompiler.so" "${dxc_SOURCE_DIR}/lib/libdxil.so")
+        set_target_properties(ith_slang PROPERTIES
+            IMPORTED_LOCATION "${slang_SOURCE_DIR}/lib/${ith_slang_library}"
+            IMPORTED_SONAME "${ith_slang_library}")
+        set(ITH_SHADER_COMPILER_RUNTIME_FILES
+            "${slang_SOURCE_DIR}/lib/${ith_slang_library}"
+            "${slang_SOURCE_DIR}/lib/libslang-glslang-${ith_slang_version}.so"
+            ${ith_dxc_libraries})
+    endif()
+    foreach(file IN LISTS ITH_SHADER_COMPILER_RUNTIME_FILES)
+        if(NOT EXISTS "${file}")
+            message(FATAL_ERROR "The shader compiler release has no ${file}; correct cmake/IronthornDependencies.cmake.")
+        endif()
+    endforeach()
+
+    # ith_copy_shader_compiler_runtime(<target>)
+    #
+    # Copies Slang's and DXC's shared libraries next to the executable <target> as a post-build
+    # step, so it runs from the build tree without PATH or LD_LIBRARY_PATH changes. The copy runs
+    # whenever <target> is relinked. On Linux the executable loads them from its own directory
+    # only, and Slang finds DXC there through its own $ORIGIN run path.
+    function(ith_copy_shader_compiler_runtime target)
+        set(commands
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${ITH_SHADER_COMPILER_RUNTIME_FILES} "$<TARGET_FILE_DIR:${target}>")
+        if(NOT WIN32)
+            # libdxcompiler.so looks for libdxil.so (whose soname is libdxildll.so) through its own
+            # run path, $ORIGIN/../lib. A second copy of both there lets DXC find its validator
+            # however Slang loaded DXC.
+            list(APPEND commands
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/../lib"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${ith_dxc_libraries} "$<TARGET_FILE_DIR:${target}>/../lib")
+            set_target_properties(${target} PROPERTIES BUILD_WITH_INSTALL_RPATH ON INSTALL_RPATH "$ORIGIN")
+        endif()
+        add_custom_command(TARGET ${target} POST_BUILD
+            ${commands}
+            COMMENT "Copying the shader compiler runtime next to ${target}"
+            VERBATIM)
+    endfunction()
+endif()
