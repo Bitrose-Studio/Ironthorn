@@ -9,6 +9,7 @@ ith_add_module(foundation
         Expected.h
         FixedTimestep.h
         FixedTimestep.cpp
+        Hash.h
         Stopwatch.h
         StringUtils.h
         StringUtils.cpp

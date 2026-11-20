@@ -18,6 +18,7 @@ ith_add_test_suite(foundation
         foundation/AssertTests.cpp
         foundation/ExpectedTests.cpp
         foundation/FixedTimestepTests.cpp
+        foundation/HashTests.cpp
         foundation/StopwatchTests.cpp
         foundation/StringUtilsTests.cpp
         foundation/VersionTests.cpp
