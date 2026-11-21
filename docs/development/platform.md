@@ -5,7 +5,9 @@ events into engine events, on top of SDL 3
 ([ADR-0012](../decisions/0012-windowing-and-event-loop.md)). It is a `client` module: players
 and the editor link it, a dedicated server doesn't
 ([ADR-0017](../decisions/0017-runtime-and-editor-separation.md)). SDL is linked privately; no SDL
-type or header appears in the module's API.
+type or header appears in the module's API. The event types themselves (`ith::Event`, key and
+button ids) live in the `runtime` module `platform_events`, so modules that only read events, like
+`input`, don't depend on `platform`.
 
 ## Use
 
@@ -63,7 +65,8 @@ while (running) {
 - **On Wayland a window appears only once something is presented to it**, so a window without a
   renderer (such as `window_player`'s today) stays invisible there.
 - **Errors** from SDL are `ith::Expected` errors with stable codes (`platform.init_failed`,
-  `platform.window_failed`, `platform.clipboard_failed`) and SDL's message. Reading the clipboard
+  `platform.window_failed`, `platform.clipboard_failed`, `platform.relative_mouse_failed`,
+  `platform.text_input_failed`) and SDL's message. Reading the clipboard
   returns an empty string when there is no text or it can't be read.
 
 ## Video drivers
@@ -79,13 +82,52 @@ that both are there. The Linux build log shows `validity error ... deprecated-si
 lines from `wayland-scanner` while SDL generates its Wayland protocol code; they are expected and
 harmless.
 
+## Device input
+
+The pump also translates keyboard, text, mouse and gamepad events
+([ADR-0013](../decisions/0013-input.md)). Most code reads them through the `input` module
+([guide](input.md)), which builds state and routes them; the fields of each event type are
+documented in `ith/platform_events/Event.h`.
+
+- **Keyboard:** `key` is the physical key (`ith::Key`, a USB HID value, named after the US
+  layout), `layoutKey` the character the user's layout prints on it (0 for keys that print
+  nothing), plus `modifiers` and `repeat`. Media and system keys the engine doesn't name are
+  dropped. `Platform::keyDisplayName(key)` gives the name to show for a binding ("Z" for
+  `Key::W` on AZERTY).
+- **Text:** `TextInput` (committed UTF-8) and `TextEditing` (IME composition with cursor and
+  selection) arrive only while `Window::startTextInput()` is on; `Window::setTextInputArea()`
+  places the IME next to the field. An event's `text` view is valid until the next pump.
+- **Mouse:** buttons (left, right, middle, back, forward) with click counts, the position in
+  window pixels, motion, and fractional wheel steps. A flipped wheel ("natural scrolling") is
+  reported like a normal one, positive up and right, with `wheelFlipped` set so a UI can follow
+  the user's setting. `Window::setRelativeMouseMode(true)` hides and locks the cursor; motion is
+  then the mouse's own, unaccelerated. Whether relative mode applies is read when the event is
+  pumped (SDL doesn't record it per event). Mouse button and wheel events carry the modifiers of
+  the key events before them in the queue, so a click keeps the modifiers held when it happened.
+- **Gamepads:** `Platform::create` starts SDL's gamepad subsystem; if it can't, the platform still
+  works without gamepads (no gamepad events; output calls fail with
+  `platform.gamepad_not_found`). The pump opens a gamepad
+  when it connects (gamepads present at start-up connect in the first pump) and closes it when it
+  disconnects. `GamepadConnected` carries the session id (`device`), the name, the type for glyphs,
+  the GUID and the Steam Input handle. Buttons are positional; sticks are -1..1 with up positive,
+  triggers 0..1, raw, without dead zones. `rumbleGamepad`, `rumbleGamepadTriggers` and
+  `setGamepadLed` drive outputs and fail with `platform.gamepad_not_found` or
+  `platform.gamepad_output_failed`. While no window of the application has focus (and at least one
+  window exists), SDL drops gamepad presses and axis motion away from the centre, but still sends
+  button releases and axis motion toward the centre; `input` ignores those (its focus loss has
+  released everything already).
+- **Timestamps:** every event, devices included, carries a `std::chrono::steady_clock` timestamp;
+  `Platform::pumpTimeNs()` is when the last pump finished, the frame's input time.
+
+The `platform` tests push SDL events into the queue to check the translation, and drive a SDL
+virtual gamepad for connect, buttons, axes, outputs and disconnect, all on the `offscreen`
+driver.
+
 ## Not here yet
 
-- **Keyboard, mouse, text input and gamepads** come with the input slice: their engine events
-  need the stable key ids and device model of `core/input`
-  ([ADR-0013](../decisions/0013-input.md)). SDL already has them compiled in.
-- **Cursors, relative mouse mode and file dialogs**: cursors and relative mode come with input;
-  file dialogs with the editor.
+- **Cursor shapes and file dialogs**: cursors with the editor shell's UI, file dialogs with the
+  editor.
+- **Gyro, accelerometer and touchpad** of gamepads, and **touch and pen** (with Android).
 - **Popup windows, fullscreen, position, minimize and maximize calls**: with the editor shell.
 - **Posting work to the main thread** from other threads, routing SDL's allocations to the engine
   allocator, and handling mobile lifecycle events in an event watch (Android); until then
