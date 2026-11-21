@@ -99,10 +99,12 @@ cmake --preset linux-asan && cmake --build --preset linux-asan && ctest --preset
 cmake --preset linux-tsan && cmake --build --preset linux-tsan && ctest --preset linux-tsan
 ```
 
-Sanitizer builds (`IRONTHORN_ENABLE_SANITIZERS` or `IRONTHORN_ENABLE_TSAN`) always build without
-the tools: CMake turns `IRONTHORN_BUILD_TOOLS` off and says so. The shader compiler's Slang and
-DXC are prebuilt, uninstrumented shared libraries, so a sanitizer would check only the module's
-thin wrapper around them; the other Linux and Windows builds test it.
+Sanitizer builds (`IRONTHORN_ENABLE_SANITIZERS` or `IRONTHORN_ENABLE_TSAN`) build the tools
+without the shader compiler: CMake sets the internal `ITH_BUILD_SHADER_COMPILER` off and says so.
+Slang and DXC are prebuilt, uninstrumented shared libraries, so a sanitizer would check only the
+`shader_compiler` module's thin wrapper around them; the other Linux and Windows builds test it.
+With it go its tests, the shaders that tests and samples embed at build time and `scene_player`.
+The other `tools` modules, such as `asset_database`, are built and checked.
 
 The reflection generator `ith_reflect` is instrumented too and runs during the build, so the
 sanitizer runtime's needs apply at build time, not only to `ctest`. Clang 18's runtimes fail on
@@ -111,7 +113,8 @@ kernels with high ASLR entropy; lower it before configuring and building, as CI 
 libFuzzer target for the generator, and run it briefly as the `reflect_tool_fuzz` test, and
 `ith_serialization_text_fuzz` and `ith_serialization_binary_fuzz` for the serialization readers
 (the `serialization_text_fuzz` and `serialization_binary_fuzz` tests), and `ith_rhi_vulkan_spirv_fuzz` for
-the Vulkan backend's SPIR-V check (the `rhi_vulkan_spirv_fuzz` test). Clang ASan builds compile
+the Vulkan backend's SPIR-V check (the `rhi_vulkan_spirv_fuzz` test), and `ith_asset_sidecar_fuzz`
+for the asset database's sidecar and header readers (the `asset_sidecar_fuzz` test). Clang ASan builds compile
 all code with libFuzzer's coverage instrumentation (`-fsanitize=fuzzer-no-link`), so the fuzz
 targets get coverage feedback from the libraries they call; other executables don't link libFuzzer.
 
@@ -161,12 +164,12 @@ its row. Editor and tools applications are left out of the default build of `Rel
 Building one by name in `Release` is not refused, but nothing ships it, and a test that runs one
 must not run in `Release`. Only applications are excluded: `tools` and `editor` modules and their
 tests still build and run in `Release`, so `verify` covers them in every configuration. The
-samples `minimal_player`, `window_player`, `scene_player` (built only with the tools, whose
-`slangc` compiles its shaders) and `minimal_server` (`samples/`) are the applications today.
+samples `minimal_player`, `window_player`, `scene_player` (built only with the shader compiler,
+whose `slangc` compiles its shaders) and `minimal_server` (`samples/`) are the applications today.
 
-Sanitizer builds turn the tools off, and with them the editor, so `editor` modules get no
+Sanitizer builds leave out the shader compiler, and with it the editor, so `editor` modules get no
 sanitizer coverage. That needs a follow-up when the first editor module lands. The same goes for
-`scene_player` and its GPU test, which need the tools' `slangc`: their code
+`scene_player` and its GPU test, which need the shader compiler's `slangc`: their code
 (`samples/scene_player/Scenes.cpp`) gets no sanitizer coverage either.
 
 Each application is meant to call the registration function of every module it links, from a
@@ -177,7 +180,8 @@ the samples register nothing today.
 ## Tools and their dependencies
 
 `IRONTHORN_BUILD_TOOLS` (on by default) builds the `tools` modules, which the editor and the
-cooker link and games never do. Today that is `shader_compiler`. Its prebuilt Slang and DXC
+cooker link and games never do. Today these are `shader_compiler` and `asset_database`. The
+shader compiler's prebuilt Slang and DXC
 releases (Windows and Linux, x86-64) are downloaded at configure time, pinned by SHA-256. Their
 shared libraries are copied next to the test executable after each link, so `ctest` runs
 without any setup. Configure with `-DIRONTHORN_BUILD_TOOLS=OFF` to build without the tools
