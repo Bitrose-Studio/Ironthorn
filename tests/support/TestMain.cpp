@@ -8,6 +8,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
+#include <cstdio>
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -44,6 +46,9 @@ void disableErrorDialogs() {
 
 int main(int argc, char** argv) {
     disableErrorDialogs();
+    // Unbuffered output, so a run killed by a timeout still shows how far it got (with
+    // --duration=true, the last test case that finished).
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     doctest::Context context;
     context.applyCommandLine(argc, argv);
     return context.run();
