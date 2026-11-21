@@ -7,10 +7,12 @@ page shows how to use what exists today:
 - `assets` (core, runtime): `AssetId`, `SubAssetId` and the reflected reference types;
 - `asset_database` (editor layer, tools only): sidecars, native asset headers, the scan of a
   project's `Content` folder, move, rename and delete, importers with import and non-destructive
-  reimport, and the local derived-data cache (DDC).
+  reimport, and the local derived-data cache (DDC);
+- `asset_importers` (editor layer, tools only): the glTF 2.0 importer and the payloads of
+  imported meshes and materials.
 
 The runtime asset manager, the cooked-data loader, the file watcher, the dependents index and
-the real importers come later (see [What is not there yet](#what-is-not-there-yet)).
+the image and audio importers come later (see [What is not there yet](#what-is-not-there-yet)).
 
 ## Ids and references
 
@@ -171,12 +173,85 @@ public:
     std::span<const std::string_view> extensions() const override; // lowercase, with the dot
     ith::serialization::Value defaultSettings() const override;    // a JSON object
     ith::Expected<ith::ImportOutput> import(std::span<const std::byte> source,
+                                            std::span<const ith::ImportFile> files,
                                             const ith::serialization::Value& settings) const override;
 };
 ```
 
 Importers must be deterministic, thread-safe and treat their input as untrusted; each one gets a
 fuzz target. Extensions are matched without ASCII case (`Rock.PNG` uses the `.png` importer).
+
+- **Other files an import reads** (a glTF's external buffers) are named by `dependencies()`, as
+  paths relative to the source's folder. Importers never open files: the database reads them and
+  passes them to `import()` in `files`, sorted by path. They must stay inside the source's folder
+  (no `..`, absolute paths or drive letters), exist with exactly that case, and number at most
+  `kMaxImportDependencies` (256); together with the source they are read up to the 4 GiB source
+  limit. Their content is part of the DDC key, so changing a `.bin` reimports its `.gltf`. A
+  missing one fails the import with `asset.not_found`.
+- **Files the imported objects refer to** without the import reading them (a material's images)
+  are returned in `ImportOutput::references`, relative to the source's folder.
+  `ImportReport::references` lists them relative to `Content`. They are recorded, not checked:
+  the image importer and the dependents index come later.
+
+## The glTF importer
+
+```cpp
+#include "ith/asset_importers/GltfImporter.h"
+
+importers.add(std::make_unique<ith::GltfImporter>()); // ".gltf" and ".glb", id "gltf"
+```
+
+It is our own reader on the serialization module's JSON parser; no glTF library is linked.
+
+| Source | What happens |
+|---|---|
+| `.gltf` | JSON. Buffers are base64 `data:` URIs or files next to it. |
+| `.glb` | Told from `.gltf` by its magic number. The header and chunk lengths must match the file, chunks are 4-byte aligned, the first chunk is JSON, an optional second is `BIN`, other chunk types are skipped. |
+| buffer URIs | `data:<type>;base64,...` (canonical base64: padding optional, unused bits zero), or a relative path, percent-decoded first, that stays inside the source's folder. Other schemes, `..`, `.`, empty segments, absolute paths, drive letters, backslashes, queries and fragments are refused (`import.invalid_uri`). Image URIs follow the same rules. |
+| accessors | Every component type, `normalized`, `byteStride` (4 to 252, a multiple of 4), sparse accessors and accessors without a buffer view (zeros). Offsets must be aligned to the component size; every element must lie inside its buffer view, which must lie inside its buffer, checked with overflow-safe arithmetic. `min` and `max` are ignored. |
+| meshes | One sub-asset `mesh` per mesh, its payload an `ImportedMesh`. Each primitive must be a triangle list (`mode` 4; other modes fail with `import.unsupported`) with `POSITION` (VEC3 floats); `NORMAL` (VEC3 floats) and `TEXCOORD_0` (VEC2 floats or normalized unsigned bytes or shorts) are read when present, other attributes and morph targets are ignored. Indices are unsigned bytes, shorts or ints, a multiple of 3, each less than the vertex count; a primitive without them gets `0, 1, 2, ...`. Values must be finite. |
+| materials | One sub-asset `material` per material, its payload an `ImportedMaterial`: base color, metallic and roughness factors, emissive factor, alpha mode and cutoff, double-sidedness, and the base color, metallic-roughness, normal (with its scale), occlusion (with its strength) and emissive textures with their texture coordinate set. A texture's image file is recorded as a reference; embedded images are not imported yet. |
+| `extensionsRequired` | Any required extension fails the import with `import.unsupported`; optional extensions are ignored. |
+
+**Source keys.** A mesh is named by its own name. A mesh without one is named by the name path of
+the first node, in node order, that uses it: the names of its named ancestors and its own, joined
+by `/`, so `mesh:Ship/Sail`. A material is named by its name. Unnamed objects fall back to their
+index among the unnamed objects of their type, and repeated names get `#1`, `#2`, ... (see
+[Source keys and reimport](#source-keys-and-reimport)). Reordering meshes, materials or nodes in a
+re-exported file therefore keeps every id; renaming a node changes the key of an unnamed mesh it
+names.
+
+**Payloads.** `ImportedMesh` and `ImportedMaterial` (`ImportedModel.h`) are reflected types,
+written with the binary archive under the formats `ith.imported_mesh` and `ith.imported_material`,
+version 1:
+
+```cpp
+ith::ImportedMesh mesh;
+const auto read = ith::serialization::readBinary(subAsset.payload, ith::kImportedMeshFormat, mesh);
+```
+
+A primitive holds its positions, normals and texture coordinates as flat float arrays, its
+indices as `uint32` and its material as the material's source key (`"material:Steel"`, empty for
+the default material). This is the importer's output, not the runtime mesh format, which cooking
+produces later.
+
+**Limits.** The JSON is read with the serialization module's limits (256 MiB, depth 64). Names
+(of meshes, materials and nodes), node name paths and file URIs are at most 4 KiB
+(`kGltfMaxNameSize`). What the import builds beyond the JSON counts against a budget: buffers
+from `data:` URIs, accessor data, output arrays, and every copy of a name, path or key (a material
+key in each primitive, an image path in each texture slot, node paths). The budget is 16 times the
+size of the source and its buffers, at least 64 MiB and at most 4 GiB; more fails with
+`import.too_large` before it is allocated, so a small file can't make the importer build gigabytes.
+The payloads written from that data are about as large again. Primitives that share an accessor
+decode it once; each still gets its own copy. Node paths are built once per node, so deep node
+trees take linear time.
+
+`dependencies()` and `import()` each parse the JSON: the database calls `dependencies()` on every
+import to build the cache key, and `import()` only on a cache miss.
+
+**Errors.** `import.malformed` names the JSON path of the problem, e.g.
+`accessors[3]: its elements reach past the end of buffer view 1`; `import.unsupported`,
+`import.invalid_uri` and `import.too_large` as above.
 
 ## Derived-data cache
 
@@ -197,21 +272,33 @@ fuzz target. Extensions are matched without ASCII case (`Rock.PNG` uses the `.pn
 - `asset_database` (built with the tools, sanitizer builds included): sidecar round trip,
   versions and every error; native headers and extensions; source keys; import and reimport with a
   small text importer (reorder, rename, add, remove, unnamed objects, settings, importer versions,
-  files moved or copied outside the editor, warnings, failures); scan problems; move, rename,
-  delete, links and UTF-8 paths; size limits; DDC keys, hits, misses, damaged and open entries;
-  XXH3 known answers. POSIX-only cases cover unreadable folders and names that are not UTF-8, and
+  files moved or copied outside the editor, warnings, failures, files read besides the source and
+  references); scan problems; move, rename, delete, links and UTF-8 paths; size limits; DDC keys,
+  hits, misses, damaged and open entries; XXH3 known answers. POSIX-only cases cover unreadable folders and names that are not UTF-8, and
   a Windows-only case a sidecar that can't be moved. Each test uses its own temporary project
   folder and deletes it.
 - `asset_sidecar_fuzz` (`tests/asset_database/SidecarFuzz.cpp`) fuzzes the sidecar and native
   header readers and `replaceHeaderId`, and checks that whatever reads writes back the same value.
   It runs in the Clang ASan build.
+- `asset_importers` (built with the tools): the glTF importer on embedded, external and GLB
+  buffers; interleaved, normalized, sparse and zero-filled accessors; generated indices; mesh and
+  material names, node paths and duplicate names; reimport through the database with meshes,
+  materials and nodes reordered and a node renamed; the DDC round trip and a changed external
+  buffer; malformed containers, documents, bounds, strides, overflows, indices, sparse data,
+  non-finite values, URIs that leave the folder and node cycles; the fuzz seeds.
+- `gltf_import_fuzz` (`tests/asset_importers/GltfFuzz.cpp`) fuzzes `dependencies()` and
+  `import()` with the input as every external buffer, and checks that whatever imports has valid
+  keys, references and payloads whose indices are in range. Seeds are in
+  `tests/asset_importers/fuzz_seeds/gltf`. It runs in the Clang ASan build.
 
 ## What is not there yet
 
 - The editor file watcher, the persisted database cache and the dependents index (ADR-0015
   rules 5 and 7); relinking orphans by content hash.
 - Applying overrides (rule 10), the cooker (rule 12) and the runtime asset manager.
-- Real importers: glTF (an own reader on the serialization module's JSON), images, audio.
+- The image and audio importers; embedded glTF images, skins, animations, morph targets, more
+  vertex attributes, line and point primitives, and glTF extensions (compressed geometry needs a
+  decoder library and its own audit).
 - Writing native assets: the `id` header in the serialization module's `readText` and `writeText`,
   and the envelope and migration helper that sidecars and native assets share, come with the first
   native format (ADR-0024).
