@@ -1,0 +1,17 @@
+{
+  "format": "test.text",
+  "version": 2,
+  "data": {
+    "slots": ["Fire", "Poison"],
+    "history": [
+      {
+        "kind": "Fire",
+        "abilities": ["Jump", "Climb"],
+        "altitude": "Peak",
+        "where": {"x": 1.5, "y": -0, "z": 1e-45},
+        "target": {"current": 12.5, "maxHealth": 100},
+        "amount": 0.1
+      }
+    ]
+  }
+}

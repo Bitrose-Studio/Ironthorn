@@ -1,0 +1,16 @@
+// a config-style comment
+{
+  "format": "test.text",
+  "version": 1,
+  "data": {
+    "value": {
+      "fixed": [1, -2, 2147483647],
+      "names": ["a", "café", ""],
+      "points": [{"x": 0, "y": 0, "z": 0}],
+      "maybe": null,
+      "maybePoint": {"x": 3.4028235e38},
+      "nested": [[1], [], [2, 3]],
+      "kinds": ["Physical"]
+    }
+  }
+}

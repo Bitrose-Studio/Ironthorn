@@ -93,6 +93,64 @@ ith_add_test_suite(reflection
         reflection/TypeRegistryTests.cpp
     LIBRARIES ith_test_reflected)
 
+# Reflected types for the serialization tests: a runtime module and an editor module, the only
+# kind that may use EditorOnly.
+add_library(ith_test_archive STATIC)
+target_include_directories(ith_test_archive PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/serialization")
+target_link_libraries(ith_test_archive
+    PUBLIC ith::build_options ith::reflection
+    PRIVATE ith::runtime_options)
+set_target_properties(ith_test_archive PROPERTIES
+    FOLDER "Ironthorn/Tests"
+    COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+ith_reflect_target(ith_test_archive
+    MODULE test_archive
+    KIND runtime
+    INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/serialization"
+    HEADERS serialization/ArchiveTypes.h)
+ith_reflect_target(ith_test_archive
+    MODULE test_archive_editor
+    KIND editor
+    INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/serialization"
+    HEADERS serialization/EditorArchiveTypes.h)
+
+ith_add_test_suite(serialization
+    SOURCES
+        serialization/BinaryArchiveTests.cpp
+        serialization/JsonTests.cpp
+        serialization/RoundTripTests.cpp
+        serialization/TextArchiveTests.cpp
+    LIBRARIES ith::serialization ith_test_reflected ith_test_archive)
+
+# libFuzzer targets for the text and binary readers, in Clang sanitizer builds only, with short
+# smoke runs in CTest like reflect_tool_fuzz, seeded with sample documents and blobs
+# (serialization/fuzz_seeds); the text target also gets a JSON dictionary.
+if(IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+        AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    foreach(reader text binary)
+        set(target ith_serialization_${reader}_fuzz)
+        if(reader STREQUAL "text")
+            add_executable(${target} serialization/TextReaderFuzz.cpp)
+            set(options "-dict=${CMAKE_CURRENT_SOURCE_DIR}/serialization/fuzz_seeds/json.dict")
+        else()
+            add_executable(${target} serialization/BinaryReaderFuzz.cpp)
+            set(options "")
+        endif()
+        target_link_libraries(${target} PRIVATE ith::serialization ith_test_reflected ith_test_archive)
+        target_compile_options(${target} PRIVATE -fsanitize=fuzzer)
+        target_link_options(${target} PRIVATE -fsanitize=fuzzer)
+        set_target_properties(${target} PROPERTIES
+            FOLDER "Ironthorn/Tests"
+            COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+        set(corpus "${CMAKE_CURRENT_BINARY_DIR}/serialization_${reader}_fuzz_corpus")
+        file(MAKE_DIRECTORY "${corpus}")
+        add_test(NAME serialization_${reader}_fuzz
+            COMMAND ${target} -runs=20000 -max_len=4096 -malloc_limit_mb=512 ${options}
+                "${corpus}" "${CMAKE_CURRENT_SOURCE_DIR}/serialization/fuzz_seeds/${reader}")
+        set_tests_properties(serialization_${reader}_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
+    endforeach()
+endif()
+
 # Component types for the ECS tests and benchmark, reflected like an engine module's.
 add_library(ith_test_ecs_components STATIC)
 target_include_directories(ith_test_ecs_components PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/ecs")
