@@ -322,6 +322,11 @@ TEST_SUITE("rhi.resources") {
                                             .format = Format::R8Unorm,
                                             .usage = TextureUsage::Sampled,
                                             .debugName = "2D with depth"})));
+        CHECK(refused(device.createTexture({.width = 4,
+                                            .height = 4,
+                                            .format = Format::B8G8R8A8Srgb,
+                                            .usage = TextureUsage::Sampled | TextureUsage::Storage,
+                                            .debugName = "sRGB storage"})));
         CHECK(refused(device.createSampler({.maxAnisotropy = 32.0f, .debugName = "Anisotropy"})));
         CHECK(refused(device.createSampler({.minLod = 2.0f, .maxLod = 1.0f, .debugName = "Lod"})));
         CHECK(refused(device.createSwapchain({.width = 0, .height = 8, .debugName = "Zero"})));

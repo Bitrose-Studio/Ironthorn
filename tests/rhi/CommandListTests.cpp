@@ -312,6 +312,31 @@ TEST_SUITE("rhi.command_list_checks") {
         endFrame(device);
     }
 
+    TEST_CASE("texture readback copies are checked like uploads, with source and destination swapped") {
+        NullGpu gpu;
+        Device device = makeDevice(gpu);
+        const BufferHandle readback = makeBuffer(device, BufferUsage::CopyDst, MemoryType::Readback, 1024);
+        const BufferHandle upload = makeBuffer(device, BufferUsage::CopySrc, MemoryType::Upload, 1024);
+        const TextureHandle source = makeTexture(device, TextureUsage::CopySrc, Format::R8G8B8A8Unorm, 4);
+        const TextureHandle uploadOnly = makeTexture(device, TextureUsage::CopyDst, Format::R8G8B8A8Unorm, 4);
+        beginFrame(device);
+        CommandList& list = device.openCommandList("Readback");
+        const ith::test::AssertCapture capture;
+        list.copyTextureToBuffer({.buffer = upload, .rowPitch = 256, .texture = source});       // buffer lacks CopyDst
+        list.copyTextureToBuffer({.buffer = readback, .rowPitch = 256, .texture = uploadOnly}); // texture lacks CopySrc
+        list.copyTextureToBuffer({.buffer = readback, .rowPitch = 16, .texture = source});      // pitch not 256-aligned
+        list.copyTextureToBuffer(
+            {.buffer = readback, .bufferOffset = 512, .rowPitch = 256, .texture = source});             // too long
+        list.copyTextureToBuffer({.buffer = readback, .rowPitch = 256, .texture = source, .layer = 1}); // no layer 1
+        CHECK(capture.count() == 5);
+        CHECK(gpu.commandCount() == 0);
+        list.copyTextureToBuffer({.buffer = readback, .rowPitch = 256, .texture = source});
+        CHECK(capture.count() == 5);
+        CHECK(gpu.commandCount() == 1);
+        REQUIRE(device.submit(list).hasValue());
+        endFrame(device);
+    }
+
     TEST_CASE("recording into a submitted list and submitting it twice are asserted") {
         NullGpu gpu;
         Device device = makeDevice(gpu);

@@ -116,21 +116,24 @@ struct DispatchIndirectArguments {
     std::uint32_t groupCountZ = 0;
 };
 
-// Row pitch and offset alignment of buffer data copied into a texture (the stricter Direct3D 12
-// rules, so the same upload code works on both APIs).
+// Row pitch and offset alignment of buffer data copied to or from a texture (the stricter
+// Direct3D 12 rules, so the same upload and readback code works on both APIs).
 inline constexpr std::uint32_t kTextureCopyRowAlignment = 256;
 inline constexpr std::uint32_t kTextureCopyOffsetAlignment = 512;
 
-// Copies buffer data into one mip level of one array layer of a texture.
+// Copies between buffer data and one whole mip level of one array layer of a texture, in either
+// direction (CommandList::copyBufferToTexture(), CommandList::copyTextureToBuffer()).
 struct BufferTextureCopy {
-    // A buffer with BufferUsage::CopySrc.
+    // A buffer with BufferUsage::CopySrc when it is the source, BufferUsage::CopyDst when it is
+    // the destination.
     BufferHandle buffer;
     // A multiple of kTextureCopyOffsetAlignment.
     std::uint64_t bufferOffset = 0;
     // Bytes from one row of texels to the next: at least width * texel size and a multiple of
     // kTextureCopyRowAlignment. Rows of a 3D texture's slices follow each other.
     std::uint32_t rowPitch = 0;
-    // A texture with TextureUsage::CopyDst, in TextureLayout::CopyDst.
+    // A texture with TextureUsage::CopyDst in TextureLayout::CopyDst when it is the destination,
+    // TextureUsage::CopySrc in TextureLayout::CopySrc when it is the source.
     TextureHandle texture;
     std::uint32_t mipLevel = 0;
     std::uint32_t layer = 0;
@@ -213,6 +216,10 @@ public:
                     std::uint64_t destinationOffset, std::uint64_t size);
     // Preconditions: not rendering; see BufferTextureCopy; the data lies inside the buffer.
     void copyBufferToTexture(const BufferTextureCopy& copy);
+    // Copies a texture's mip level and layer into the buffer, laid out as copyBufferToTexture()
+    // reads it, e.g. into a Readback buffer to check rendered pixels. Preconditions: as
+    // copyBufferToTexture(), with the roles of source and destination swapped.
+    void copyTextureToBuffer(const BufferTextureCopy& copy);
 
     // Opens and closes a named region for GPU debuggers and profilers. Markers nest, and every
     // marker is closed before the list is submitted.

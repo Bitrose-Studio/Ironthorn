@@ -175,6 +175,8 @@ public:
 
     void copyBufferToTexture(const BufferTextureCopy& /*copy*/) override { count(); }
 
+    void copyTextureToBuffer(const BufferTextureCopy& /*copy*/) override { count(); }
+
     void beginMarker(std::string_view /*name*/) override { count(); }
 
     void endMarker() override { count(); }

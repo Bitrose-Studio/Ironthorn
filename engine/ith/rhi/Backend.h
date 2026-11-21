@@ -32,6 +32,10 @@
 // - Device loss is reported as ErrorCode::DeviceLost, with the API's diagnostics (DRED,
 //   VK_EXT_device_fault) in the message. After that the device calls only destroy*() and the
 //   destructor.
+//
+// A backend module's own test hooks (e.g. removeD3D12DeviceForTesting()) reach their backend
+// through detail::backendOf() (Device.h) and cast it to their own class: no RTTI, so they check
+// Capabilities::backend first.
 
 #include "ith/foundation/Expected.h"
 #include "ith/rhi/Barrier.h"
@@ -129,6 +133,7 @@ public:
     virtual void copyBuffer(BufferHandle source, std::uint64_t sourceOffset, BufferHandle destination,
                             std::uint64_t destinationOffset, std::uint64_t size) = 0;
     virtual void copyBufferToTexture(const BufferTextureCopy& copy) = 0;
+    virtual void copyTextureToBuffer(const BufferTextureCopy& copy) = 0;
     virtual void beginMarker(std::string_view name) = 0;
     virtual void endMarker() = 0;
 };

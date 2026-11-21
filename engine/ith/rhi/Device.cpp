@@ -103,6 +103,10 @@ const char* checkTexture(const TextureDesc& desc, const Limits& limits) {
                         desc.dimension == TextureDimension::Texture3D)) {
         return "a depth texture can't be a render target, a storage texture or 3D";
     }
+    if (hasAny(desc.usage, TextureUsage::Storage) &&
+        (desc.format == Format::R8G8B8A8Srgb || desc.format == Format::B8G8R8A8Srgb)) {
+        return "an sRGB texture can't be a storage texture";
+    }
     return nullptr;
 }
 
@@ -226,6 +230,11 @@ Error unsupportedDeviceError(std::string_view adapterName, std::span<const std::
         message += missingFeatures[index];
     }
     return Error{.code = ErrorCode::UnsupportedDevice, .message = std::move(message)};
+}
+
+// NOLINTNEXTLINE(misc-const-correctness): the caller changes the device through its backend
+DeviceBackend* backendOf(Device& device) {
+    return device.m_state != nullptr ? &device.m_state->backend() : nullptr;
 }
 
 Device makeDevice(std::unique_ptr<DeviceBackend> backend) {

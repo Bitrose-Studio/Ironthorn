@@ -63,6 +63,9 @@ class DeviceBackend;
 class DeviceState;
 // Wraps a backend in a Device; called by the backends' factory functions (Backend.h).
 Device makeDevice(std::unique_ptr<DeviceBackend> backend);
+// The backend of a device, for a backend module's own test hooks (Backend.h); nullptr for a
+// moved-from device.
+DeviceBackend* backendOf(Device& device);
 } // namespace detail
 
 // Frames the CPU may record ahead of the GPU (ADR-0009 rule 14). Per-frame resources are reused
@@ -227,6 +230,7 @@ public:
 
 private:
     friend Device detail::makeDevice(std::unique_ptr<detail::DeviceBackend> backend);
+    friend detail::DeviceBackend* detail::backendOf(Device& device);
 
     explicit Device(std::unique_ptr<detail::DeviceState> state);
 

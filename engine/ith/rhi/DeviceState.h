@@ -263,6 +263,9 @@ public:
 
     [[nodiscard]] std::uint64_t frameNumber() const { return m_frameNumber.load(std::memory_order_acquire); }
 
+    // The backend, for detail::backendOf().
+    [[nodiscard]] DeviceBackend& backend() { return *m_backend; }
+
     // Asserts that the caller is the render thread: the thread that created the device.
     void assertRenderThread() const;
 

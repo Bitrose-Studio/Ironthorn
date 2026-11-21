@@ -60,7 +60,8 @@ enum class TextureUsage : std::uint8_t {
     None = 0,
     // Sampled in shaders through Device::sampledIndex().
     Sampled = 1u << 0,
-    // Read and written in shaders through Device::storageIndex() (mip 0).
+    // Read and written in shaders through Device::storageIndex() (mip 0). Not with an sRGB format:
+    // shaders can't write sRGB textures directly on every API.
     Storage = 1u << 1,
     // A color attachment of CommandList::beginRendering(). Not with a depth format.
     RenderTarget = 1u << 2,

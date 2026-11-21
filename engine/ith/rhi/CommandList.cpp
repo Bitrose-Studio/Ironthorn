@@ -329,40 +329,65 @@ void CommandList::copyBuffer(BufferHandle source, std::uint64_t sourceOffset, Bu
     m_backend->copyBuffer(source, sourceOffset, destination, destinationOffset, size);
 }
 
+namespace {
+
+// The checks of a copy between buffer data and a texture, in either direction; false when the
+// copy must be dropped.
+[[maybe_unused]] bool textureCopyValid(const detail::DeviceState& device, const BufferTextureCopy& copy,
+                                       bool toTexture) {
+    if (!check(device.buffers.isLive(copy.buffer) && device.textures.isLive(copy.texture),
+               "a texture copy with a stale or null handle")) {
+        return false;
+    }
+    const detail::BufferSlot& buffer = device.buffers.data(copy.buffer.index());
+    const detail::TextureSlot& texture = device.textures.data(copy.texture.index());
+    const std::uint32_t layers = texture.dimension == TextureDimension::Texture3D ? 1 : texture.layers;
+    const bool usages =
+        toTexture ? hasAny(buffer.usage, BufferUsage::CopySrc) && hasAny(texture.usage, TextureUsage::CopyDst)
+                  : hasAny(buffer.usage, BufferUsage::CopyDst) && hasAny(texture.usage, TextureUsage::CopySrc);
+    if (!check(usages, "a texture copy needs CopySrc on its source and CopyDst on its destination") ||
+        !check(copy.mipLevel < texture.mipLevels && copy.layer < layers,
+               "a texture copy names a mip level and layer of the texture")) {
+        return false;
+    }
+    const std::uint64_t rowBytes =
+        static_cast<std::uint64_t>(mipSize(texture.width, copy.mipLevel)) * formatTexelSize(texture.format);
+    const std::uint64_t rows =
+        static_cast<std::uint64_t>(mipSize(texture.height, copy.mipLevel)) *
+        (texture.dimension == TextureDimension::Texture3D ? mipSize(texture.depth, copy.mipLevel) : 1);
+    return check(copy.rowPitch >= rowBytes && copy.rowPitch % kTextureCopyRowAlignment == 0,
+                 "a texture copy's row pitch covers a row and is a multiple of kTextureCopyRowAlignment") &&
+           check(copy.bufferOffset % kTextureCopyOffsetAlignment == 0,
+                 "a texture copy's buffer offset is a multiple of kTextureCopyOffsetAlignment") &&
+           check(bufferRangeInside(buffer, copy.bufferOffset, copy.rowPitch * (rows - 1) + rowBytes),
+                 "a texture copy's data lies inside the buffer");
+}
+
+} // namespace
+
 void CommandList::copyBufferToTexture(const BufferTextureCopy& copy) {
     if (!recording()) {
         return;
     }
     if constexpr (detail::kCheckRecording) {
-        if (!check(!m_rendering, "copies are recorded outside rendering") ||
-            !check(m_device->buffers.isLive(copy.buffer) && m_device->textures.isLive(copy.texture),
-                   "copyBufferToTexture() with a stale or null handle")) {
-            return;
-        }
-        const detail::BufferSlot& buffer = m_device->buffers.data(copy.buffer.index());
-        const detail::TextureSlot& texture = m_device->textures.data(copy.texture.index());
-        const std::uint32_t layers = texture.dimension == TextureDimension::Texture3D ? 1 : texture.layers;
-        if (!check(hasAny(buffer.usage, BufferUsage::CopySrc) && hasAny(texture.usage, TextureUsage::CopyDst),
-                   "copyBufferToTexture() needs CopySrc on the buffer and CopyDst on the texture") ||
-            !check(copy.mipLevel < texture.mipLevels && copy.layer < layers,
-                   "copyBufferToTexture() names a mip level and layer of the texture")) {
-            return;
-        }
-        const std::uint64_t rowBytes =
-            static_cast<std::uint64_t>(mipSize(texture.width, copy.mipLevel)) * formatTexelSize(texture.format);
-        const std::uint64_t rows =
-            static_cast<std::uint64_t>(mipSize(texture.height, copy.mipLevel)) *
-            (texture.dimension == TextureDimension::Texture3D ? mipSize(texture.depth, copy.mipLevel) : 1);
-        if (!check(copy.rowPitch >= rowBytes && copy.rowPitch % kTextureCopyRowAlignment == 0,
-                   "a texture copy's row pitch covers a row and is a multiple of kTextureCopyRowAlignment") ||
-            !check(copy.bufferOffset % kTextureCopyOffsetAlignment == 0,
-                   "a texture copy's buffer offset is a multiple of kTextureCopyOffsetAlignment") ||
-            !check(bufferRangeInside(buffer, copy.bufferOffset, copy.rowPitch * (rows - 1) + rowBytes),
-                   "a texture copy's data lies inside the buffer")) {
+        if (!check(!m_rendering, "copies are recorded outside rendering") || !textureCopyValid(*m_device, copy, true)) {
             return;
         }
     }
     m_backend->copyBufferToTexture(copy);
+}
+
+void CommandList::copyTextureToBuffer(const BufferTextureCopy& copy) {
+    if (!recording()) {
+        return;
+    }
+    if constexpr (detail::kCheckRecording) {
+        if (!check(!m_rendering, "copies are recorded outside rendering") ||
+            !textureCopyValid(*m_device, copy, false)) {
+            return;
+        }
+    }
+    m_backend->copyTextureToBuffer(copy);
 }
 
 void CommandList::beginMarker(std::string_view name) {
