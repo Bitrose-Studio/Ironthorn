@@ -163,6 +163,92 @@ if(IRONTHORN_BUILD_TOOLS)
             COMMENT "Copying the shader compiler runtime next to ${target}"
             VERBATIM)
     endfunction()
+
+    if(WIN32)
+        set(ith_slangc "${slang_SOURCE_DIR}/bin/slangc.exe")
+        set(ith_dxc_directory "${dxc_SOURCE_DIR}/bin/x64")
+    else()
+        set(ith_slangc "${slang_SOURCE_DIR}/bin/slangc")
+        set(ith_dxc_directory "${dxc_SOURCE_DIR}/lib")
+    endif()
+    if(NOT EXISTS "${ith_slangc}")
+        message(FATAL_ERROR "The Slang release has no ${ith_slangc}; correct cmake/IronthornDependencies.cmake.")
+    endif()
+
+    # ith_embed_shaders(<target> SOURCE <file.slang> ENTRY_POINTS <name>:<vertex|pixel|compute>... [DXIL])
+    #
+    # Compiles entry points of a self-contained Slang source at build time with the pinned slangc,
+    # with the shader_compiler module's settings (ADR-0011: SPIR-V 1.6 checked by the SPIR-V
+    # validator and keeping the entry point's name, with DXIL also signed DXIL Shader Model 6.6
+    # from the pinned DXC; column-major matrices), into C++ headers in the build tree that
+    # <target>'s sources include. For entry point `name` they are <name>.spirv.h and, with DXIL,
+    # <name>.dxil.h, defining `const unsigned char k<Name>Spirv[]` and its size
+    # `const size_t k<Name>Spirv_sizeInBytes` (and k<Name>Dxil...), where <Name> is the name with an
+    # upper-case first letter. Include them inside a namespace that says `using std::size_t;`,
+    # since the headers name size_t unqualified. Each target gets its own directory, so two targets
+    # may embed entry points of the same name.
+    #
+    # The SPIR-V compilation defines ITH_SPIRV=1, as the module does, so that one source can reach
+    # the RHI's bindless buffers through the Vulkan descriptor set and, for DXIL, through
+    # ResourceDescriptorHeap.
+    #
+    # For samples and tests that need fixed shaders without linking the tools-only compiler. Games
+    # load cooked shaders instead (ADR-0011 rule 9; ADR-0023, embedded shaders are compiled at build
+    # time with slangc). The options are the engine's shader compile options, listed once in
+    # docs/development/shaders.md and used by ShaderCompiler::compile() too: a change here changes
+    # that list and the module in the same commit.
+    function(ith_embed_shaders target)
+        cmake_parse_arguments(PARSE_ARGV 1 arg "DXIL" "SOURCE" "ENTRY_POINTS")
+        cmake_path(ABSOLUTE_PATH arg_SOURCE BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" OUTPUT_VARIABLE source)
+        set(directory "${CMAKE_CURRENT_BINARY_DIR}/embedded_shaders/${target}")
+        # slangc does not create it, and only Ninja creates output directories for custom commands.
+        file(MAKE_DIRECTORY "${directory}")
+        set(outputs "")
+        foreach(entry_point IN LISTS arg_ENTRY_POINTS)
+            if(NOT entry_point MATCHES "^([A-Za-z_][A-Za-z0-9_]*):(vertex|pixel|compute)$")
+                message(FATAL_ERROR "ith_embed_shaders: '${entry_point}' is not <name>:<vertex|pixel|compute>")
+            endif()
+            set(name "${CMAKE_MATCH_1}")
+            set(stage "${CMAKE_MATCH_2}")
+            if(stage STREQUAL "pixel")
+                set(stage fragment)
+            endif()
+            string(SUBSTRING "${name}" 0 1 first)
+            string(SUBSTRING "${name}" 1 -1 rest)
+            string(TOUPPER "${first}" first)
+            set(common "${source}" -entry ${name} -stage ${stage} -matrix-layout-column-major -source-embed-style u8)
+
+            set(spirv "${directory}/${name}.spirv.h")
+            add_custom_command(
+                OUTPUT "${spirv}"
+                COMMAND "${ith_slangc}" ${common} -target spirv -profile spirv_1_6 -D ITH_SPIRV=1
+                    -fvk-use-entrypoint-name -validate-with-downstream-compiler
+                    -source-embed-name k${first}${rest}Spirv -o "${spirv}"
+                    -depfile "${spirv}.d"
+                DEPENDS "${source}" "${ith_slangc}"
+                DEPFILE "${spirv}.d"
+                COMMENT "Compiling ${arg_SOURCE}:${name} to SPIR-V"
+                VERBATIM)
+            list(APPEND outputs "${spirv}")
+
+            if(arg_DXIL)
+                # -dxc-path: without it, slangc may load another DXC, e.g. one from PATH.
+                set(dxil "${directory}/${name}.dxil.h")
+                add_custom_command(
+                    OUTPUT "${dxil}"
+                    COMMAND "${ith_slangc}" ${common} -target dxil -profile sm_6_6 -dxc-path "${ith_dxc_directory}"
+                        -source-embed-name k${first}${rest}Dxil -o "${dxil}"
+                        -depfile "${dxil}.d"
+                    DEPENDS "${source}" "${ith_slangc}" ${ITH_SHADER_COMPILER_RUNTIME_FILES}
+                    DEPFILE "${dxil}.d"
+                    COMMENT "Compiling ${arg_SOURCE}:${name} to DXIL"
+                    VERBATIM)
+                list(APPEND outputs "${dxil}")
+            endif()
+        endforeach()
+        target_sources(${target} PRIVATE ${outputs})
+        target_include_directories(${target} PRIVATE "${directory}")
+    endfunction()
 endif()
 
 # --- SDL3: windows, events and input devices (zlib) --------------------------------------
