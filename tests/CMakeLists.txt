@@ -6,8 +6,8 @@ add_library(ith_test_support STATIC
 add_library(ith::test_support ALIAS ith_test_support)
 target_include_directories(ith_test_support PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/support")
 target_link_libraries(ith_test_support PUBLIC ith::build_options ith::foundation doctest::doctest)
-# Tests are built without exceptions like the engine. REQUIRE still works: a failed REQUIRE
-# ends the test executable instead of only the test case.
+# Tests are built without exceptions like the engine. doctest can't leave a test case then: a
+# failed REQUIRE or FAIL is recorded like a CHECK and the test case continues (TestMain.cpp).
 target_compile_definitions(ith_test_support PUBLIC DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS)
 set_target_properties(ith_test_support PROPERTIES
     FOLDER "Ironthorn/Tests"
