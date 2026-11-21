@@ -4,6 +4,7 @@
 
 add_subdirectory(ith/foundation)
 add_subdirectory(ith/reflection)
+add_subdirectory(ith/ecs)
 
 # Tools-only modules: linked by the editor and the cooker, never by a game (ADR-0004, ADR-0011).
 if(IRONTHORN_BUILD_TOOLS)

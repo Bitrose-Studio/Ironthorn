@@ -62,3 +62,8 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           TSAN_OPTIONS: halt_on_error=1
         run: ctest --preset ${{ matrix.preset }}
+      # ADR-0014 rule 19: the ECS benchmark runs in CI and prints its numbers. It never fails on
+      # them: shared runners are too noisy for a timing gate.
+      - name: Benchmarks
+        if: matrix.preset == 'linux-clang-release'
+        run: ctest --test-dir build/${{ matrix.configure }} -C Release -L benchmark --verbose

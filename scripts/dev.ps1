@@ -42,7 +42,8 @@ param(
     # test: CTest name regex (-R). tidy: regex matched against source file paths.
     [string]$Filter = '',
 
-    # test: skip tests with this CTest label (-LE), e.g. 'gpu' on machines without a GPU.
+    # test: also skip tests with this CTest label, e.g. 'gpu' on machines without a GPU. Tests
+    # labelled 'benchmark' are always skipped; run them with ctest -L benchmark.
     [string]$ExcludeLabel = '',
 
     # configure: extra CMake arguments.
@@ -142,9 +143,11 @@ function Invoke-Test([string]$PresetName, [string]$Configuration) {
     if ($Filter) {
         $testArguments += @('-R', $Filter)
     }
+    [string]$excluded = 'benchmark'
     if ($ExcludeLabel) {
-        $testArguments += @('-LE', $ExcludeLabel)
+        $excluded = "benchmark|$ExcludeLabel"
     }
+    $testArguments += @('-LE', $excluded)
     Invoke-Checked ctest $testArguments
 }
 

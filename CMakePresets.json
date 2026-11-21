@@ -72,7 +72,8 @@
             "name": "test-base",
             "hidden": true,
             "output": { "outputOnFailure": true },
-            "execution": { "noTestsAction": "error", "jobs": 8 }
+            "execution": { "noTestsAction": "error", "jobs": 8 },
+            "filter": { "exclude": { "label": "benchmark" } }
         },
         { "name": "windows-debug", "inherits": "test-base", "configurePreset": "windows", "configuration": "Debug" },
         { "name": "windows-dev", "inherits": "test-base", "configurePreset": "windows", "configuration": "RelWithDebInfo" },

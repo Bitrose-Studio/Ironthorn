@@ -84,3 +84,35 @@ ith_add_test_suite(reflection
         reflection/TypeOfTests.cpp
         reflection/TypeRegistryTests.cpp
     LIBRARIES ith_test_reflected)
+
+# Component types for the ECS tests and benchmark, reflected like an engine module's.
+add_library(ith_test_ecs_components STATIC)
+target_include_directories(ith_test_ecs_components PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/ecs")
+target_link_libraries(ith_test_ecs_components
+    PUBLIC ith::build_options ith::ecs
+    PRIVATE ith::runtime_options)
+set_target_properties(ith_test_ecs_components PROPERTIES
+    FOLDER "Ironthorn/Tests"
+    COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+ith_reflect_target(ith_test_ecs_components
+    MODULE test_ecs
+    KIND runtime
+    INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/ecs"
+    HEADERS ecs/EcsComponents.h)
+
+ith_add_test_suite(ecs
+    SOURCES
+        ecs/ConcurrencyTests.cpp
+        ecs/ModelTests.cpp
+        ecs/WorldTests.cpp
+    LIBRARIES ith_test_ecs_components Threads::Threads)
+
+# The ECS benchmark (docs/development/ecs.md). Its test only prints numbers and never fails on
+# them; the "benchmark" label keeps it out of normal test runs, which exclude that label.
+add_executable(ith_ecs_benchmark ecs/EcsBenchmark.cpp)
+target_link_libraries(ith_ecs_benchmark PRIVATE ith_test_ecs_components)
+set_target_properties(ith_ecs_benchmark PROPERTIES
+    FOLDER "Ironthorn/Benchmarks"
+    COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+add_test(NAME ecs_benchmark COMMAND ith_ecs_benchmark)
+set_tests_properties(ecs_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
