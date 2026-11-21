@@ -33,7 +33,15 @@ jobs:
       - name: Bootstrap pinned tools
         shell: pwsh
         run: ./scripts/bootstrap.ps1
-      - name: Verify (format, MSVC Debug/dev/Release, clang-cl, clang-tidy)
+      # The Direct3D 12 debug layer needs the "Graphics Tools" optional feature. verify runs the
+      # gpu-labelled rhi_d3d12 tests on WARP with validation on (ADR-0009 rule 18).
+      - name: Install Graphics Tools (Direct3D 12 debug layer)
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          Add-WindowsCapability -Online -Name "Tools.Graphics.DirectX~~~~0.0.1.0"
+          if (-not (Test-Path "$env:WINDIR\System32\d3d12SDKLayers.dll")) { throw 'Graphics Tools did not install' }
+      - name: Verify (format, MSVC Debug/dev/Release, clang-cl, clang-tidy, GPU tests on WARP)
         shell: pwsh
         run: ./scripts/dev.ps1 verify
 
