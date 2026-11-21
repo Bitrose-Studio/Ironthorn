@@ -1,6 +1,7 @@
 # ADR-0013: Input: events, state, routing and consumption
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0027](0027-input-rules-completed.md)
 - **Date:** 2026-11-20
 - **Related:** [ADR-0003](0003-clean-room.md) (clean room), [ADR-0004](0004-modules-and-layering.md)
   (layers), [ADR-0008](0008-editor-familiar-to-unreal-developers.md) (remappable bindings, Play In
