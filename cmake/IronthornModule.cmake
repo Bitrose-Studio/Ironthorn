@@ -37,6 +37,9 @@ set(ITH_APPLICATION_TARGETS editor player server tools)
 # REFLECT runs the reflection generator over the module's headers (the .h files in SOURCES)
 # and compiles the result into the module, telling the generator the module's KIND; it adds a
 # dependency on the reflection module.
+#
+# A module whose SOURCES has no .cpp file is a header-only INTERFACE library; it can't use REFLECT
+# or PRIVATE_LIBRARIES.
 function(ith_add_module name)
     cmake_parse_arguments(PARSE_ARGV 1 arg "REFLECT" "LAYER;KIND" "SOURCES;DEPENDS;PUBLIC_LIBRARIES;PRIVATE_LIBRARIES")
 
@@ -60,10 +63,27 @@ function(ith_add_module name)
     endif()
 
     set(target ith_${name})
-    add_library(${target} STATIC ${arg_SOURCES})
+    # A module of headers only (declarations and inline code, no .cpp) is an INTERFACE library:
+    # a static library without objects can't be linked on every platform.
+    set(header_only TRUE)
+    foreach(source IN LISTS arg_SOURCES)
+        if(source MATCHES "\\.cpp$")
+            set(header_only FALSE)
+        endif()
+    endforeach()
+    if(header_only AND (arg_REFLECT OR arg_PRIVATE_LIBRARIES))
+        message(FATAL_ERROR "Module '${name}': a header-only module can't use REFLECT or PRIVATE_LIBRARIES")
+    endif()
+    if(header_only)
+        add_library(${target} INTERFACE ${arg_SOURCES})
+        set(public INTERFACE)
+    else()
+        add_library(${target} STATIC ${arg_SOURCES})
+        set(public PUBLIC)
+    endif()
     add_library(ith::${name} ALIAS ${target})
 
-    target_include_directories(${target} PUBLIC
+    target_include_directories(${target} ${public}
         "${PROJECT_SOURCE_DIR}/engine"
         "${PROJECT_BINARY_DIR}/generated")
 
@@ -72,9 +92,10 @@ function(ith_add_module name)
         list(APPEND module_targets ith::${dependency})
     endforeach()
 
-    target_link_libraries(${target}
-        PUBLIC ith::build_options ${module_targets} ${arg_PUBLIC_LIBRARIES}
-        PRIVATE ith::runtime_options ${arg_PRIVATE_LIBRARIES})
+    target_link_libraries(${target} ${public} ith::build_options ${module_targets} ${arg_PUBLIC_LIBRARIES})
+    if(NOT header_only)
+        target_link_libraries(${target} PRIVATE ith::runtime_options ${arg_PRIVATE_LIBRARIES})
+    endif()
 
     set_target_properties(${target} PROPERTIES
         FOLDER "Ironthorn/Engine"
