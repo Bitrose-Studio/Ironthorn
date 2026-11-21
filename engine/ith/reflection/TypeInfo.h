@@ -146,6 +146,10 @@ struct TypeInfo {
     ReflectionFlags flags = ReflectionFlags::None;
     std::size_t size = 0;
     std::size_t alignment = 0;
+    // True when values can be copied with memcpy and need no destructor call
+    // (std::is_trivially_copyable), so type-erased storage can move them without calling `move`
+    // and `destroy`.
+    bool triviallyCopyable = false;
 
     // Default-constructs a value in uninitialized, suitably aligned memory.
     void (*construct)(void* memory) = nullptr;

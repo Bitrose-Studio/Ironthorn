@@ -158,7 +158,8 @@ for (const ith::FieldInfo& field : health.fields) {
 const ith::TypeInfo* byName = registry.find("game::Health");
 ```
 
-- `TypeInfo` has the id, name, kind, role, size, alignment, flags and attributes, and function
+- `TypeInfo` has the id, name, kind, role, size, alignment, whether the type is trivially
+  copyable (so storage may move it with `memcpy`), flags and attributes, and function
   pointers to construct, copy, move and destroy a value and compare two values. Structs compare
   their reflected fields only.
 - Containers expose their element type (`element()`) and element access (`container`).

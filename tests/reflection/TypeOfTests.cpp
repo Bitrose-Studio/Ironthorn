@@ -58,6 +58,17 @@ TEST_SUITE("reflection.type_of") {
         CHECK(ith::typeOf<float>().id == ith::fnv1a64("float"));
     }
 
+    TEST_CASE("records say whether a type is trivially copyable") {
+        CHECK(ith::typeOf<float>().triviallyCopyable);
+        CHECK(ith::typeOf<ith::Uuid>().triviallyCopyable);
+        CHECK_FALSE(ith::typeOf<std::string>().triviallyCopyable);
+        CHECK(ith::typeOf<ith::test::Health>().triviallyCopyable);
+        CHECK(ith::typeOf<ith::test::DamageKind>().triviallyCopyable);
+        CHECK_FALSE(ith::typeOf<ith::test::AllLeaves>().triviallyCopyable);
+        CHECK(ith::typeOf<std::array<float, 3>>().triviallyCopyable);
+        CHECK_FALSE(ith::typeOf<std::vector<float>>().triviallyCopyable);
+    }
+
     TEST_CASE("leaf value functions construct, copy, move, compare and destroy") {
         const ith::TypeInfo& type = ith::typeOf<std::string>();
         alignas(std::string) std::array<std::byte, sizeof(std::string)> a{};
