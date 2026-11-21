@@ -137,8 +137,24 @@ jobs:
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
           SDL_VIDEO_DRIVER: x11
         run: |
+          set -o pipefail
           xvfb-run -a build/${{ matrix.configure }}/bin/RelWithDebInfo/window_player --backend vulkan --adapter software --frames 60 |
-            tee /dev/stderr | grep -q "rendering with Vulkan"
+            tee /dev/stderr > window_player.log
+          # Not `| grep -q`: with pipefail, tee would fail on the pipe grep closed after its match.
+          grep -q "rendering with Vulkan" window_player.log
+      # The 10,000 instanced cubes on the same window, through the bindless model; the step checks
+      # that it rendered with Vulkan and printed its frame timings.
+      - name: Scene player on Vulkan (X11)
+        if: matrix.preset == 'linux-clang-dev' || matrix.preset == 'linux-gcc-dev'
+        env:
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
+          SDL_VIDEO_DRIVER: x11
+        run: |
+          set -o pipefail
+          xvfb-run -a build/${{ matrix.configure }}/bin/RelWithDebInfo/scene_player --backend vulkan --adapter software --frames 30 |
+            tee /dev/stderr > scene_player.log
+          grep -q "rendering with Vulkan" scene_player.log
+          grep -q "frames of the 10,000 instanced cubes" scene_player.log
       # ADR-0014 rule 19: the ECS benchmark runs in CI and prints its numbers. It never fails on
       # them: shared runners are too noisy for a timing gate.
       - name: Benchmarks
