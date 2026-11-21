@@ -45,3 +45,23 @@ TEST_CASE("Mutex: MutexLock serializes increments from several threads") {
     }
     CHECK(counter.value() == kThreads * kIncrements);
 }
+
+TEST_CASE("Mutex: heldMutexCount counts the locks the calling thread holds") {
+    ith::Mutex first;
+    ith::Mutex second;
+    CHECK(ith::heldMutexCount() == 0);
+    {
+        ith::MutexLock outer(first);
+        ith::MutexLock inner(second);
+#ifdef ITH_ENABLE_ASSERTS
+        CHECK(ith::heldMutexCount() == 2);
+        // Another thread holds nothing.
+        int otherThreadCount = -1;
+        std::thread([&otherThreadCount] { otherThreadCount = ith::heldMutexCount(); }).join();
+        CHECK(otherThreadCount == 0);
+#else
+        CHECK(ith::heldMutexCount() == 0);
+#endif
+    }
+    CHECK(ith::heldMutexCount() == 0);
+}
