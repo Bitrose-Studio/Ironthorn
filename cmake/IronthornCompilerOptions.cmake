@@ -100,6 +100,14 @@ if(IRONTHORN_ENABLE_SANITIZERS OR IRONTHORN_ENABLE_TSAN)
     # Sanitizer runtimes must see every translation unit, third-party code included.
     add_compile_options(-fsanitize=${ith_sanitizers} -fno-omit-frame-pointer -fno-sanitize-recover=all)
     add_link_options(-fsanitize=${ith_sanitizers})
+    # UBSan's vptr check reads the type information of polymorphic objects. Engine modules are
+    # built without RTTI (ADR-0001), so it can't check engine types anyway, and in test code built
+    # with RTTI it makes every engine class used there need type information that no module
+    # emits, which fails the link. It is turned off for every target, so this can't come back.
+    if(NOT IRONTHORN_ENABLE_TSAN)
+        add_compile_options(-fno-sanitize=vptr)
+        add_link_options(-fno-sanitize=vptr)
+    endif()
     # Clang's ASan builds also carry libFuzzer's coverage instrumentation, so the fuzz targets
     # (tests/CMakeLists.txt) get coverage feedback from the engine and third-party code they
     # call, not only from their own source file. Ordinary executables link without libFuzzer.

@@ -114,9 +114,14 @@ libFuzzer target for the generator, and run it briefly as the `reflect_tool_fuzz
 `ith_serialization_text_fuzz` and `ith_serialization_binary_fuzz` for the serialization readers
 (the `serialization_text_fuzz` and `serialization_binary_fuzz` tests), and `ith_rhi_vulkan_spirv_fuzz` for
 the Vulkan backend's SPIR-V check (the `rhi_vulkan_spirv_fuzz` test), and `ith_asset_sidecar_fuzz`
-for the asset database's sidecar and header readers (the `asset_sidecar_fuzz` test). Clang ASan builds compile
+for the asset database's sidecar and header readers (the `asset_sidecar_fuzz` test), and `ith_gltf_import_fuzz`
+for the glTF importer (the `gltf_import_fuzz` test). Clang ASan builds compile
 all code with libFuzzer's coverage instrumentation (`-fsanitize=fuzzer-no-link`), so the fuzz
 targets get coverage feedback from the libraries they call; other executables don't link libFuzzer.
+
+The ASan + UBSan builds turn off UBSan's `vptr` check (`-fno-sanitize=vptr`). It needs the type
+information of every polymorphic class it checks, which engine modules, built without RTTI, never
+emit; in tests, which keep RTTI, it would make classes such as an importer fail to link.
 
 The `linux-tsan` test preset sets `TSAN_OPTIONS` with `tests/tsan-suppressions.txt`, which holds
 the reports TSan makes about system libraries the engine can't change, each with its reason.
