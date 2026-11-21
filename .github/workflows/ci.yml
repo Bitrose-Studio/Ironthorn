@@ -19,8 +19,10 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
-      - name: Install Ninja
-        run: choco install ninja --no-progress -y
+      # The pinned CMake, Ninja, clang-format and clang-tidy, the same as on developer machines.
+      - name: Bootstrap pinned tools
+        shell: pwsh
+        run: ./scripts/bootstrap.ps1
       - name: Verify (format, MSVC Debug/dev/Release, clang-cl, clang-tidy)
         shell: pwsh
         run: ./scripts/dev.ps1 verify

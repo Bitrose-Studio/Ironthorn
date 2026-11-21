@@ -124,7 +124,8 @@ int main(int argc, char** argv) {
     }
     std::error_code error;
     fs::create_directories(arguments->output.parent_path(), error);
-    std::ofstream file(arguments->output, std::ios::binary | std::ios::trunc);
+    // MSVC declares the std::ios flags as int, which bugprone-signed-bitwise reports.
+    std::ofstream file(arguments->output, std::ios::binary | std::ios::trunc); // NOLINT(bugprone-signed-bitwise)
     file << *generated;
     file.close();
     if (!file) {

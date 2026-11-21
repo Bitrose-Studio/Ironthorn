@@ -30,6 +30,7 @@ Checks: >
   -readability-magic-numbers,
   -readability-math-missing-parentheses,
   -readability-redundant-casting,
+  -readability-trailing-comma,
   -readability-uppercase-literal-suffix,
   -readability-use-anyofallof
 
@@ -55,6 +56,8 @@ Checks: >
 #   readability-math-missing-parentheses   standard precedence is readable
 #   readability-redundant-casting          reported inside the standard library for every hasher that
 #                                          returns size_t (std::unordered_map<Uuid, T> triggers it)
+#   readability-trailing-comma             layout is clang-format's job; a trailing comma changes how
+#                                          it lays out a braced list
 #   readability-uppercase-literal-suffix   we write 1.0f and 10ull
 #   readability-use-anyofallof             a short loop is as clear as the algorithm
 
@@ -98,4 +101,6 @@ CheckOptions:
   - { key: cppcoreguidelines-special-member-functions.AllowMissingMoveFunctionsWhenCopyIsDeleted, value: 'true' }
   - { key: misc-const-correctness.AnalyzeValues, value: 'true' }
   - { key: performance-unnecessary-value-param.AllowedTypes, value: 'std::function' }
+  # `1u << 4` and `seed >> 4` are fine: a positive literal shift count is not a signedness bug.
+  - { key: bugprone-signed-bitwise.IgnorePositiveIntegerLiterals, value: 'true' }
 ...

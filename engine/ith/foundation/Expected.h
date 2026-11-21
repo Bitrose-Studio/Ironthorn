@@ -83,17 +83,17 @@ public:
     template <typename U = T>
         requires std::is_constructible_v<T, U&&> && (!std::is_same_v<std::remove_cvref_t<U>, Expected>) &&
                  (!std::is_same_v<std::remove_cvref_t<U>, Unexpected<E>>)
-    Expected(U&& value) // NOLINT(google-explicit-constructor): implicit like std::expected
+    Expected(U&& value) // NOLINT(misc-explicit-constructor): implicit like std::expected
         : m_storage(std::in_place_index<0>, std::forward<U>(value)) {}
 
     template <typename G>
         requires std::is_constructible_v<E, const G&>
-    Expected(const Unexpected<G>& error) // NOLINT(google-explicit-constructor)
+    Expected(const Unexpected<G>& error) // NOLINT(misc-explicit-constructor)
         : m_storage(std::in_place_index<1>, detail::ErrorBox<E>{E(error.error())}) {}
 
     template <typename G>
         requires std::is_constructible_v<E, G&&>
-    Expected(Unexpected<G>&& error) // NOLINT(google-explicit-constructor)
+    Expected(Unexpected<G>&& error) // NOLINT(misc-explicit-constructor)
         : m_storage(std::in_place_index<1>, detail::ErrorBox<E>{E(std::move(error).error())}) {}
 
     bool hasValue() const { return m_storage.index() == 0; }
@@ -167,12 +167,12 @@ public:
 
     template <typename G>
         requires std::is_constructible_v<E, const G&>
-    Expected(const Unexpected<G>& error) // NOLINT(google-explicit-constructor)
+    Expected(const Unexpected<G>& error) // NOLINT(misc-explicit-constructor)
         : m_error(std::in_place_index<1>, E(error.error())) {}
 
     template <typename G>
         requires std::is_constructible_v<E, G&&>
-    Expected(Unexpected<G>&& error) // NOLINT(google-explicit-constructor)
+    Expected(Unexpected<G>&& error) // NOLINT(misc-explicit-constructor)
         : m_error(std::in_place_index<1>, E(std::move(error).error())) {}
 
     bool hasValue() const { return m_error.index() == 0; }

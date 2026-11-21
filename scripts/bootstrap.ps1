@@ -3,9 +3,9 @@
     Downloads the pinned Windows build tools into .tools/.
 
 .DESCRIPTION
-    Ironthorn needs CMake and Ninja to build. This script fetches pinned, checksum-verified
-    portable builds into the repository-local .tools/ directory so nothing is installed
-    system-wide. Visual Studio 2022 with the "Desktop development with C++" workload must
+    Ironthorn needs CMake and Ninja to build, and clang-format and clang-tidy to lint. This
+    script fetches pinned, checksum-verified portable builds into the repository-local
+    .tools/ directory so nothing is installed system-wide. Visual Studio 2022 with the "Desktop development with C++" workload must
     already be installed.
 
     Linux and macOS developers should install cmake and ninja from their package manager
@@ -45,6 +45,25 @@ $archiveTools = @(
         Url             = 'https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip'
         Sha256          = '07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65'
         StripComponents = 0
+    },
+    # clang-format and clang-tidy are pinned so every machine and CI lint with the same
+    # version; the compiler (clang-cl) still comes from Visual Studio. These are the
+    # standalone LLVM builds published on PyPI. A wheel is a zip file, so no Python is
+    # needed: stripping two levels leaves bin/ (and lib/clang/<major>/include for
+    # clang-tidy's builtin headers) in the install directory.
+    @{
+        Name            = 'clang-format'
+        Version         = '23.1.4'
+        Url             = 'https://files.pythonhosted.org/packages/82/c2/a32b7ed0d037d3fc497f494808d3926f050fa3c7145a2205ee51086d5c90/clang_format-23.1.4-py2.py3-none-win_amd64.whl'
+        Sha256          = 'bd372a6c247c22b5d7a5a748aa66b88476aec946bd8e644f8a68b990c90714a8'
+        StripComponents = 2
+    },
+    @{
+        Name            = 'clang-tidy'
+        Version         = '23.1.4'
+        Url             = 'https://files.pythonhosted.org/packages/c0/49/b2adbdedbe430d0cce9b354a679d57e28692ce2fb59a575486784d438125/clang_tidy-23.1.4-py2.py3-none-win_amd64.whl'
+        Sha256          = '8107e05930f53dc477dbb5fb8108d7c10464176fc95d3e58f4ee7317887aed59'
+        StripComponents = 2
     }
 )
 

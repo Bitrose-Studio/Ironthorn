@@ -109,7 +109,7 @@ function Import-BuildEnvironment {
     }
 }
 
-# LLVM (clang-cl, clang-tidy, clang-format) from Visual Studio's "C++ Clang tools" component.
+# LLVM (clang-cl) from Visual Studio's "C++ Clang tools" component.
 function Get-BundledLlvmDir {
     return Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin'
 }
@@ -148,16 +148,14 @@ function Invoke-Test([string]$PresetName, [string]$Configuration) {
     Invoke-Checked ctest $testArguments
 }
 
-function Get-LlvmTool([string]$Name) {
-    $bundled = Join-Path (Get-BundledLlvmDir) "$Name.exe"
-    if (Test-Path $bundled) {
-        return $bundled
+# clang-format or clang-tidy pinned by bootstrap.ps1. Never the Visual Studio copy: its version
+# differs between machines and CI, and so do its formatting and checks.
+function Get-LintTool([string]$Name) {
+    $path = Join-Path $toolsDir "$Name\bin\$Name.exe"
+    if (-not (Test-Path $path)) {
+        throw "$Name was not found in .tools/. Run scripts/bootstrap.ps1 first."
     }
-    $onPath = Get-Command $Name -ErrorAction SilentlyContinue
-    if (-not $onPath) {
-        throw "$Name was not found. Install the 'C++ Clang tools for Windows' Visual Studio component."
-    }
-    return $onPath.Source
+    return $path
 }
 
 function Get-SourceFiles([string[]]$Directories) {
@@ -174,7 +172,7 @@ function Get-SourceFiles([string[]]$Directories) {
 }
 
 function Invoke-Format([switch]$CheckOnly) {
-    $clangFormat = Get-LlvmTool 'clang-format'
+    $clangFormat = Get-LintTool 'clang-format'
     [string[]]$files = @(Get-SourceFiles $sourceDirectories)
     [string[]]$options = @('--style=file')
     $options += $(if ($CheckOnly) { @('--dry-run', '--Werror') } else { @('-i') })
@@ -186,7 +184,7 @@ function Invoke-Format([switch]$CheckOnly) {
 }
 
 function Invoke-Tidy {
-    $clangTidy = Get-LlvmTool 'clang-tidy'
+    $clangTidy = Get-LintTool 'clang-tidy'
     $buildDir = Get-BuildDir 'windows-clang'
     if (-not (Test-Path (Join-Path $buildDir 'compile_commands.json'))) {
         Invoke-Configure 'windows-clang'
@@ -195,9 +193,14 @@ function Invoke-Tidy {
     if ($Filter) {
         $files = @($files | Where-Object { $_ -match $Filter })
     }
+    # clang-tidy prints a progress line per compile command on stderr, even with --quiet. Keep
+    # stderr from stopping the script and drop those lines; diagnostics still show.
+    $ErrorActionPreference = 'Continue'
     $failed = $false
     foreach ($file in $files) {
-        & $clangTidy -p $buildDir --quiet $file
+        & $clangTidy -p $buildDir --quiet $file 2>&1 |
+            ForEach-Object { "$_" } |
+            Where-Object { $_ -notmatch '^\[\d+/\d+\] \(\d+/\d+\) Processing file ' }
         if ($LASTEXITCODE -ne 0) {
             $failed = $true
         }

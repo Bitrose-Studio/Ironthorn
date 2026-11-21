@@ -5,10 +5,10 @@
 Requirements:
 
 - Visual Studio 2022 with the **Desktop development with C++** workload.
-- The **C++ Clang tools for Windows** component (clang-cl, clang-format, clang-tidy).
+- The **C++ Clang tools for Windows** component (clang-cl, for the `windows-clang` preset).
 
 ```powershell
-./scripts/bootstrap.ps1          # once: pinned CMake and Ninja into .tools/
+./scripts/bootstrap.ps1          # once: pinned CMake, Ninja, clang-format and clang-tidy into .tools/
 ./scripts/dev.ps1 build          # MSVC, development configuration (RelWithDebInfo)
 ./scripts/dev.ps1 test
 ./scripts/dev.ps1 verify         # the pre-commit gate (see below)
@@ -22,6 +22,29 @@ Useful options:
 - `-Filter <ctest regex>`
 
 `dev.ps1` loads the MSVC environment by itself.
+
+### Pinned tools
+
+`bootstrap.ps1` downloads these into `.tools/`, each pinned by URL and SHA-256. Run it again
+after pulling a change to the pins; it skips tools that are already at the pinned version.
+
+| Tool | Version | Source |
+|---|---|---|
+| CMake | 4.4.4 | Kitware release archive |
+| Ninja | 1.13.2 | ninja-build release archive |
+| clang-format | 23.1.4 | `clang-format` wheel on PyPI (a zip; no Python needed) |
+| clang-tidy | 23.1.4 | `clang-tidy` wheel on PyPI, with Clang's builtin headers |
+
+`dev.ps1 format`, `format-check` and `tidy` use only the pinned clang-format and clang-tidy,
+never the copies that come with Visual Studio. Their versions differ between machines and CI,
+and a different version formats some code differently and runs different checks. The compiler
+is not pinned: clang-cl comes from Visual Studio, because it has to match Visual Studio's
+standard library. The pinned clang-tidy reads the `windows-clang` build's
+`compile_commands.json` and parses the code with its own, newer front end.
+
+To upgrade clang-format and clang-tidy, change both to the same version in `bootstrap.ps1`
+(hashes from `scripts/hash-url.ps1`), run `dev.ps1 format` and `dev.ps1 tidy`, and commit the
+reformatting separately from the tool change.
 
 ## Linux
 
@@ -86,7 +109,8 @@ reflection generator ([reflection](reflection.md)), which uses only the standard
 - clang-tidy
 
 Run it before every commit ([ADR-0002](../decisions/0002-git-workflow-and-versioning.md)). CI
-runs the same gate on Windows, plus Linux Clang, GCC, ASan + UBSan and TSan builds.
+runs the same gate on Windows, with the same pinned tools, plus Linux Clang, GCC, ASan + UBSan
+and TSan builds. Formatting and clang-tidy run only in the Windows job.
 
 ## Tests
 
