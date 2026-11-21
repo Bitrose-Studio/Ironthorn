@@ -15,7 +15,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0008](0008-editor-familiar-to-unreal-developers.md) | An editor familiar to Unreal Engine developers | Accepted |
 | [0009](0009-rhi.md) | Rendering hardware interface over Vulkan and Direct3D 12 | Accepted, amended by [0021](0021-rhi-device-structure-and-backend-modules.md) |
 | [0010](0010-serialization.md) | Serialization formats and versioning | Accepted, amended by [0020](0020-serialization-rules-completed.md) |
-| [0011](0011-shader-language-and-pipeline.md) | Shader language and pipeline | Accepted |
+| [0011](0011-shader-language-and-pipeline.md) | Shader language and pipeline | Accepted, amended by [0023](0023-build-time-shaders-for-samples-and-tests.md) |
 | [0012](0012-windowing-and-event-loop.md) | Windowing and the platform event loop | Accepted |
 | [0013](0013-input.md) | Input: events, state, routing and consumption | Accepted |
 | [0014](0014-ecs-storage-and-world.md) | ECS storage and the world | Accepted |
@@ -27,6 +27,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0020](0020-serialization-rules-completed.md) | Serialization: rules completed after the first implementation | Accepted |
 | [0021](0021-rhi-device-structure-and-backend-modules.md) | RHI: device structure and backend modules | Accepted |
 | [0022](0022-gpu-minimum-features-completed.md) | GPU minimum features completed for the RHI (amends 0005) | Accepted |
+| [0023](0023-build-time-shaders-for-samples-and-tests.md) | Build-time shaders for samples and tests (amends 0011) | Accepted |
 
 ## Planned
 

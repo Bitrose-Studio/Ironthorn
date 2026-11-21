@@ -1,6 +1,7 @@
 # ADR-0011: Shader language and pipeline
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0023](0023-build-time-shaders-for-samples-and-tests.md)
 - **Date:** 2026-11-20
 - **Related:** [ADR-0001](0001-cpp-language-and-safety-rules.md) (no exceptions, no RTTI),
   [ADR-0004](0004-modules-and-layering.md) (tools stay out of the runtime),
