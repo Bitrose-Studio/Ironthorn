@@ -97,7 +97,8 @@ device->destroy(*swapchain); // before the window
   its accesses where it wrote (a depth buffer reused every frame: `DepthStencil` and
   `DepthStencilWrite`).
   Vulkan's synchronization validation reports a write-after-write hazard without the access;
-  Direct3D 12 drops it.
+  Direct3D 12 drops it. The [render graph](render-graph.md) derives these barriers for its passes;
+  code outside a graph, like the frame above, writes them by hand.
 - **Frames.** At most `kFramesInFlight` (2) frames are in flight: `beginFrame()` waits for the
   frame two back. Command lists come from the frame's pool, may be recorded on several threads
   at once (one thread per list), and are submitted or discarded before `endFrame()`. A list
@@ -371,11 +372,12 @@ there is none, with validation on where the layer is installed. Environment vari
 ### Scenes
 
 `tests/scene_player` (CTest name `scene_player`, label `gpu`, built with the tools) renders the
-scenes of the `scene_player` sample offscreen on each backend the machine has, with the same
+scenes of the `scene_player` sample offscreen, through a render graph like the sample, on each
+backend the machine has, with the same
 environment variables as above, and checks the pixels against the geometry, without reference
 images: the triangle's corners, centroid, vertex colors and covered area; a near cube hiding a
 larger far one drawn after it (reversed depth); and the 10,000-cube field's sky and its nearest
-cubes' colors. Direct3D 12 runs with GPU-based validation. Where both backends run, it also
+cubes' colors. Direct3D 12 runs with GPU-based validation (what validation can see: [Samples](#samples)). Where both backends run, it also
 checks that they render the same images (at most 1% of texels differ by more than 2 levels, 5%
 for the field).
 
@@ -411,8 +413,13 @@ depth buffer and one directional light. `--no-vsync` makes the printed frame tim
 frame takes; GPU time isn't measured until the RHI has timestamp queries.
 
 The scenes' code (`Scenes.h`, `Scenes.cpp`) is compiled into the sample and into its GPU test.
-`depthBarrier()` readies the reused depth buffer each frame, after the earlier frames' depth writes
-(see [the rule for barriers out of `Undefined`](#rules)). The Slang shaders (`Triangle.slang`,
+The sample and the test draw each scene in one pass of a [render graph](render-graph.md), which
+imports the swapchain image (or the test's target), takes the depth buffer from its pool and
+derives every barrier, including the one that discards the reused depth buffer each frame after
+the earlier frames' depth writes (see [the rule for barriers out of `Undefined`](#rules)). Each frame
+is its own submission, and synchronization validation checks attachments, copies and layout
+transitions within a submission only, not bindless shader reads nor hazards between submissions:
+the barriers across frames are checked by the render graph's own tests. The Slang shaders (`Triangle.slang`,
 `Cubes.slang`) are compiled at build time by the pinned `slangc` with `ith_embed_shaders()` and
 embedded in each program, as
 [ADR-0023](../decisions/0023-build-time-shaders-for-samples-and-tests.md) (embedded shaders are

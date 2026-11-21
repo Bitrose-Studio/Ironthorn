@@ -299,8 +299,8 @@ import to build the cache key, and `import()` only on a cache miss.
 - The image and audio importers; embedded glTF images, skins, animations, morph targets, more
   vertex attributes, line and point primitives, and glTF extensions (compressed geometry needs a
   decoder library and its own audit).
-- Writing native assets: the `id` header in the serialization module's `readText` and `writeText`,
-  and the envelope and migration helper that sidecars and native assets share, come with the first
-  native format (ADR-0024).
+- One envelope for every reader: `readText` and `writeText` read and write the `id` of asset
+  documents (the input action and context assets use it), but the sidecar and native header
+  readers still parse their own envelope, and the envelope has no fuzz target of its own (ADR-0024).
 - Durable writes (flushing files and folders to the disk) need a file-system module in the
   platform layer; the `platform` module is a client module, which tools modules can't use.

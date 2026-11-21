@@ -92,6 +92,32 @@ A document looks like this:
   the whole object: `Transient` and unreflected members get their default values, and a vector
   or optional holds exactly what the document lists, not its default contents.
 
+### Asset documents
+
+A native asset is a document with its asset id between `version` and `data`
+([ADR-0024](../decisions/0024-asset-document-envelope-and-extension.md)):
+
+```cpp
+const ith::Uuid id = ...; // the asset's id
+const auto text = ith::serialization::writeText(ith::kInputContextFormat, context, &id);
+
+ith::Uuid readId;
+const auto read = ith::serialization::readText(*text, ith::kInputContextFormat, context, {.id = &readId});
+```
+
+- Whether a document must have an id is the reader's choice. With `TextReadOptions::id` set, a
+  document without an `id`, or with one that isn't a UUID other than nil, is refused; without it,
+  a document that has an `id` is refused. Both are `serialization.not_a_document`, whatever the
+  unknown-field mode says. Writing a nil id is `serialization.invalid_id`.
+- Migrations see `data` only; they never change `format`, `version` or `id`.
+
+### Documents keyed by names
+
+Some documents are not a reflected type: configuration keyed by names the engine doesn't know in
+advance, such as the input bindings (`ith.input_bindings`). `readDocument` checks the envelope like
+`readText`, runs the migrations and returns the `data` tree as a `Value`; `writeDocument` writes a
+tree as a document, with an id for an asset document.
+
 ### Migrations
 
 When a type changes in a way old files can't express (a field is renamed without `FormerName`,

@@ -17,7 +17,7 @@ arrive ([ADR-0017](../decisions/0017-runtime-and-editor-separation.md)). Only `p
 produces the events, is `client`.
 
 There are no actions, mappings, dead zones or rebinding here: that is the action and mapping
-plugin, built on this module.
+plugin, the `input_actions` module ([guide](input-actions.md)), built on this module.
 
 ## Use
 
@@ -191,6 +191,7 @@ Tests build `ith::Event` values with designated initializers and pass them to
 
 ## Not here yet
 
-- The action and mapping plugin (actions, contexts, modifiers, triggers, rebinding storage).
+- The action and mapping plugin is the `input_actions` module ([guide](input-actions.md)); its
+  editor parts and interactive key capture come later.
 - Input recording and replay, and the editor's Play In Editor consumer.
 - Gyro, accelerometer, touchpad, touch and pen.
