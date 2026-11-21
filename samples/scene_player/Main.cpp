@@ -1,5 +1,6 @@
 // scene_player: a player application that draws a scene through the RHI's bindless model
-// (ADR-0009) in a window, and prints its frame timings when it stops (Scenes.h).
+// (ADR-0009) in a render graph pass (ADR-0028), in a window, and prints its frame timings when it
+// stops (Scenes.h).
 //
 //   scene_player                  10,000 instanced cubes, until the window is closed
 //   scene_player --scene S        draws scene S: cubes (the default) or triangle
@@ -16,6 +17,8 @@
 
 #include "ith/foundation/Version.h"
 #include "ith/platform/Platform.h"
+#include "ith/render_graph/RenderGraph.h"
+#include "ith/render_graph/ResourcePool.h"
 #include "ith/rhi/CommandList.h"
 #include "ith/rhi/Device.h"
 #include "ith/rhi_select/CreateDevice.h"
@@ -91,10 +94,6 @@ struct Renderer {
     SceneKind kind = SceneKind::Cubes;
     scene_player::Triangle triangle;
     scene_player::Cubes cubes;
-    // The cubes' depth buffer, sized to the swapchain at the first frame and after resizes.
-    ith::rhi::TextureHandle depth;
-    std::uint32_t depthWidth = 0;
-    std::uint32_t depthHeight = 0;
 };
 
 const char* backendName(ith::rhi::Backend backend) {
@@ -162,35 +161,17 @@ std::optional<Renderer> createRenderer(const ith::Window& window, std::optional<
     return renderer;
 }
 
-// Gives the cubes a depth buffer of the frame's size. False after printing why it failed.
-bool fitDepth(Renderer& renderer, const ith::rhi::Frame& frame) {
-    if (!renderer.depth.isNull() && renderer.depthWidth == frame.width && renderer.depthHeight == frame.height) {
-        return true;
-    }
-    renderer.device.destroy(renderer.depth); // deferred: earlier frames may still use it
-    renderer.depth = {};
-    ith::Expected<ith::rhi::TextureHandle, ith::rhi::Error> depth =
-        renderer.device.createTexture({.width = frame.width,
-                                       .height = frame.height,
-                                       .format = scene_player::kDepthFormat,
-                                       .usage = ith::rhi::TextureUsage::DepthStencil,
-                                       .debugName = "Depth"});
-    if (!depth) {
-        report(depth.error());
-        return false;
-    }
-    renderer.depth = *depth;
-    renderer.depthWidth = frame.width;
-    renderer.depthHeight = frame.height;
-    return true;
-}
-
-// Draws one frame of the scene. Returns false when the frame failed (device loss) or the depth
-// buffer couldn't be created, after printing why. Draws nothing while the window is minimized; otherwise adds the time spent recording and
+// Draws one frame of the scene through the render graph, which imports the swapchain image,
+// takes the cubes' depth buffer from the pool (sized to the frame, so a resize gets a new one and
+// the old one goes a few frames later) and derives every barrier. Returns false when the frame
+// failed (device loss, or no memory for the depth buffer), after printing why. Draws nothing
+// while the window is minimized; otherwise adds the time spent building, recording and
 // submitting to `record`.
-bool render(Renderer& renderer, double seconds, Clock::duration& record) {
+bool render(Renderer& renderer, ith::rg::RenderGraph& graph, ith::rg::ResourcePool& pool, double seconds,
+            Clock::duration& record) {
     using namespace ith::rhi;
     using ith::Expected;
+    namespace rg = ith::rg;
     Expected<std::optional<Frame>, Error> frame = renderer.device.beginFrame(renderer.swapchain);
     if (!frame) {
         report(frame.error());
@@ -203,40 +184,45 @@ bool render(Renderer& renderer, double seconds, Clock::duration& record) {
     }
     const Clock::time_point start = Clock::now();
     const Frame& current = **frame;
-    // Without a depth buffer the frame is only cleared and presented, and the loop stops.
     const bool cubes = renderer.kind == SceneKind::Cubes;
-    const bool depthReady = !cubes || fitDepth(renderer, current);
+    const float aspect = static_cast<float>(current.width) / static_cast<float>(current.height);
+    const scene_player::Matrix viewProjection =
+        scene_player::viewProjection(scene_player::fieldCamera(seconds), aspect);
 
-    CommandList& list = renderer.device.openCommandList(cubes ? "Cubes" : "Triangle");
-    const std::array barriers{TextureBarrier{.texture = current.backbuffer,
-                                             .stagesAfter = PipelineStage::ColorOutput,
-                                             .accessAfter = Access::RenderTargetWrite,
-                                             .layoutBefore = TextureLayout::Undefined,
-                                             .layoutAfter = TextureLayout::RenderTarget},
-                              scene_player::depthBarrier(renderer.depth)};
-    const bool withDepth = cubes && depthReady;
-    list.barrier(Barriers{.textures = std::span(barriers).first(withDepth ? 2 : 1)});
-    const std::array colors{ColorAttachment{.texture = current.backbuffer, .clearColor = kClearColor}};
-    if (withDepth) {
-        list.beginRendering({.colors = colors, .depth = {.texture = renderer.depth, .store = StoreOp::DontCare}});
-        const float aspect = static_cast<float>(current.width) / static_cast<float>(current.height);
-        scene_player::draw(list, renderer.device, renderer.cubes,
-                           scene_player::viewProjection(scene_player::fieldCamera(seconds), aspect));
-    } else {
-        list.beginRendering({.colors = colors});
-        if (!cubes) {
-            scene_player::draw(list, renderer.device, renderer.triangle);
+    graph.reset();
+    const rg::Texture backbuffer = graph.importBackbuffer(current);
+    const rg::Texture depth = cubes ? graph.createTexture({.width = current.width,
+                                                           .height = current.height,
+                                                           .format = scene_player::kDepthFormat,
+                                                           .debugName = "Depth"})
+                                    : rg::Texture{};
+    graph.addPass(
+        cubes ? "Cubes" : "Triangle", rg::PassType::Raster,
+        [&](rg::PassBuilder& pass) {
+            pass.renderTarget(backbuffer, LoadOp::Clear, kClearColor);
+            if (cubes) {
+                pass.depth(depth);
+            }
+        },
+        [&renderer, cubes, viewProjection](rg::PassContext& context) {
+            if (cubes) {
+                scene_player::draw(context.list(), context.device(), renderer.cubes, viewProjection);
+            } else {
+                scene_player::draw(context.list(), context.device(), renderer.triangle);
+            }
+        });
+    graph.compile();
+    if (Expected<void, Error> executed = graph.execute(pool); !executed) {
+        // The backbuffer isn't in Present after a failed execute: unless the device is lost, a
+        // graph that only imports it moves it there, so the frame ends with a valid present.
+        if (!renderer.device.isLost()) {
+            graph.reset();
+            static_cast<void>(graph.importBackbuffer(current));
+            graph.compile();
+            static_cast<void>(graph.execute(pool));
         }
-    }
-    list.endRendering();
-    list.barrier(TextureBarrier{.texture = current.backbuffer,
-                                .stagesBefore = PipelineStage::ColorOutput,
-                                .accessBefore = Access::RenderTargetWrite,
-                                .layoutBefore = TextureLayout::RenderTarget,
-                                .layoutAfter = TextureLayout::Present});
-    if (Expected<void, Error> submitted = renderer.device.submit(list); !submitted) {
         static_cast<void>(renderer.device.endFrame());
-        report(submitted.error());
+        report(executed.error());
         return false;
     }
     record = Clock::now() - start;
@@ -244,7 +230,7 @@ bool render(Renderer& renderer, double seconds, Clock::duration& record) {
         report(ended.error());
         return false;
     }
-    return depthReady;
+    return true;
 }
 
 // Keeps the swapchain's size in step with the window.
@@ -366,6 +352,13 @@ int main(int argc, char** argv) { // NOLINT(misc-const-correctness): the signatu
 
         std::optional<Renderer> renderer =
             createRenderer(*window, options->backend, options->adapter, options->scene, options->vsync);
+        // The frame's render graph, and the pool of its transient resources, which goes before the
+        // device.
+        ith::rg::RenderGraph graph({.name = "Frame"});
+        std::optional<ith::rg::ResourcePool> pool;
+        if (renderer) {
+            pool.emplace(renderer->device);
+        }
         const Clock::time_point start = Clock::now();
         Clock::time_point frameStart = start;
         Timings timings;
@@ -388,7 +381,7 @@ int main(int argc, char** argv) { // NOLINT(misc-const-correctness): the signatu
             }
             const std::chrono::duration<double> elapsed = Clock::now() - start;
             Clock::duration record{};
-            if (!render(*renderer, elapsed.count(), record)) {
+            if (!render(*renderer, graph, *pool, elapsed.count(), record)) {
                 status = 1;
                 break;
             }
@@ -403,9 +396,10 @@ int main(int argc, char** argv) { // NOLINT(misc-const-correctness): the signatu
             // The swapchain goes before the window (Device.h); a lost device only needs destroying.
             static_cast<void>(renderer->device.waitIdle());
             printTimings(*renderer, timings);
+            graph.reset();
+            pool.reset();
             scene_player::destroy(renderer->device, renderer->triangle);
             scene_player::destroy(renderer->device, renderer->cubes);
-            renderer->device.destroy(renderer->depth);
             renderer->device.destroy(renderer->swapchain);
         }
         std::printf("scene player: %llu frames\n", static_cast<unsigned long long>(frames));

@@ -1,5 +1,6 @@
 // scene_player's scenes (samples/scene_player/Scenes.h) rendered offscreen on every GPU backend this
-// machine has, read back and checked against what the geometry predicts: no reference images.
+// machine has, through a render graph as the sample does, read back and checked against what the
+// geometry predicts: no reference images.
 //
 // - Direct3D 12 (Windows): WARP, or the fastest hardware GPU with ITH_RHI_TEST_ADAPTER=hardware;
 //   with the debug layer and GPU-based validation outside Shipping (ITH_RHI_TEST_VALIDATION=off
@@ -10,9 +11,13 @@
 //   itself skipped, unless ITH_RHI_TEST_REQUIRE_VULKAN=1.
 //
 // Validation errors are asserted by the backends, so a scene that trips validation fails here.
+// Synchronization validation sees attachments, copies and layout transitions within one
+// submission, not shader reads through bindless descriptors nor hazards between submissions.
 // The suite exists only with the tools (IRONTHORN_BUILD_TOOLS), whose slangc compiles the scenes'
 // shaders.
 
+#include "ith/render_graph/RenderGraph.h"
+#include "ith/render_graph/ResourcePool.h"
 #include "ith/rhi/CommandList.h"
 #include "ith/rhi/Device.h"
 #include "ith/rhi_select/CreateDevice.h"
@@ -149,48 +154,52 @@ bool similar(const std::array<int, 4>& actual, const std::array<int, 4>& expecte
     return true;
 }
 
-// Renders `frames` frames into the same width x height target, with the same kDepthFormat depth
-// buffer cleared to 0 when `withDepth`, and reads the last frame back; std::nullopt after
-// recording a failure. Each frame begins from the previous one's use of both textures, which the
-// barriers out of Undefined name (Barrier.h), so validation checks reuse across frames.
+// Renders `frames` frames into the same width x height target, through a render graph like the
+// sample's, with a transient kDepthFormat depth buffer cleared to 0 when `withDepth`, and reads
+// the last frame back; std::nullopt after recording a failure. The target is imported with the
+// state it ended the previous frame in, and the depth buffer comes from the pool, so each frame's
+// barriers out of Undefined name the previous frame's use (Barrier.h). Each frame is its own
+// submission, and synchronization validation doesn't check hazards between submissions, so those
+// barriers are checked by the render graph's own tests (tests/render_graph); validation here checks
+// what each frame does within its submission.
 template <typename Draw>
 std::optional<Image> render(Device& device, std::uint32_t width, std::uint32_t height, bool withDepth, Draw&& draw,
                             std::uint32_t frames = 1) {
+    namespace rg = ith::rg;
     Image image{.width = width, .height = height, .rowPitch = width * 4};
     REQUIRE(image.rowPitch % kTextureCopyRowAlignment == 0);
-    Expected<TextureHandle, Error> target =
-        device.createTexture({.width = width,
-                              .height = height,
-                              .format = kColorFormat,
-                              .usage = TextureUsage::RenderTarget | TextureUsage::CopySrc,
-                              .debugName = "Scene target"});
-    Expected<TextureHandle, Error> depth = device.createTexture({.width = width,
-                                                                 .height = height,
-                                                                 .format = scene_player::kDepthFormat,
-                                                                 .usage = TextureUsage::DepthStencil,
-                                                                 .debugName = "Scene depth"});
-    Expected<BufferHandle, Error> readback = device.createBuffer({.size = std::uint64_t{image.rowPitch} * height,
-                                                                  .usage = BufferUsage::CopyDst,
-                                                                  .memory = MemoryType::Readback,
-                                                                  .debugName = "Scene readback"});
+    const TextureDesc targetDesc{.width = width,
+                                 .height = height,
+                                 .format = kColorFormat,
+                                 .usage = TextureUsage::RenderTarget | TextureUsage::CopySrc,
+                                 .debugName = "Scene target"};
+    const BufferDesc readbackDesc{.size = std::uint64_t{image.rowPitch} * height,
+                                  .usage = BufferUsage::CopyDst,
+                                  .memory = MemoryType::Readback,
+                                  .debugName = "Scene readback"};
+    Expected<TextureHandle, Error> target = device.createTexture(targetDesc);
+    Expected<BufferHandle, Error> readback = device.createBuffer(readbackDesc);
+    rg::ResourcePool pool(device);
+    rg::RenderGraph graph({.name = "Scene"});
     // Destroys what was created, on every path out.
     const auto release = [&] {
+        graph.reset();
+        pool.clear();
         if (target) {
             device.destroy(*target);
-        }
-        if (depth) {
-            device.destroy(*depth);
         }
         if (readback) {
             device.destroy(*readback);
         }
     };
-    if (!target || !depth || !readback) {
-        FAIL("creating the target, depth buffer or readback buffer failed");
+    if (!target || !readback) {
+        FAIL("creating the target or readback buffer failed");
         release();
         return std::nullopt;
     }
 
+    rg::ImportedState targetState;
+    rg::ImportedState readbackState;
     for (std::uint32_t frameIndex = 0; frameIndex < frames; ++frameIndex) {
         Expected<std::optional<Frame>, Error> frame = device.beginFrame();
         if (!frame || !frame->has_value()) {
@@ -198,35 +207,43 @@ std::optional<Image> render(Device& device, std::uint32_t width, std::uint32_t h
             release();
             return std::nullopt;
         }
-        const bool last = frameIndex + 1 == frames;
-        CommandList& list = device.openCommandList("Scene");
-        // The target was last read by the previous frame's copy, the depth buffer written.
-        const std::array barriers{TextureBarrier{.texture = *target,
-                                                 .stagesBefore = PipelineStage::Copy,
-                                                 .stagesAfter = PipelineStage::ColorOutput,
-                                                 .accessAfter = Access::RenderTargetWrite,
-                                                 .layoutBefore = TextureLayout::Undefined,
-                                                 .layoutAfter = TextureLayout::RenderTarget},
-                                  scene_player::depthBarrier(*depth)};
-        list.barrier(Barriers{.textures = std::span(barriers).first(withDepth ? 2 : 1)});
-        const std::array colors{ColorAttachment{.texture = *target, .clearColor = kClearColor}};
-        list.beginRendering({.colors = colors, .depth = {.texture = withDepth ? *depth : TextureHandle{}}});
-        draw(list);
-        list.endRendering();
-        list.barrier(TextureBarrier{.texture = *target,
-                                    .stagesBefore = PipelineStage::ColorOutput,
-                                    .accessBefore = Access::RenderTargetWrite,
-                                    .stagesAfter = PipelineStage::Copy,
-                                    .accessAfter = Access::CopyRead,
-                                    .layoutBefore = TextureLayout::RenderTarget,
-                                    .layoutAfter = TextureLayout::CopySrc});
-        if (last) {
-            list.copyTextureToBuffer({.buffer = *readback, .rowPitch = image.rowPitch, .texture = *target});
+        graph.reset();
+        const rg::Texture color =
+            graph.importTexture({.texture = *target, .desc = targetDesc, .state = &targetState, .writable = true});
+        const rg::Texture depth = withDepth ? graph.createTexture({.width = width,
+                                                                   .height = height,
+                                                                   .format = scene_player::kDepthFormat,
+                                                                   .debugName = "Scene depth"})
+                                            : rg::Texture{};
+        graph.addPass(
+            "Scene", rg::PassType::Raster,
+            [&](rg::PassBuilder& pass) {
+                pass.renderTarget(color, LoadOp::Clear, kClearColor);
+                if (withDepth) {
+                    pass.depth(depth);
+                }
+            },
+            [&draw](rg::PassContext& context) { draw(context.list()); });
+        if (frameIndex + 1 == frames) {
+            const rg::Buffer readbackBuffer = graph.importBuffer(
+                {.buffer = *readback, .desc = readbackDesc, .state = &readbackState, .writable = true});
+            graph.addPass(
+                "Readback", rg::PassType::Copy,
+                [&](rg::PassBuilder& pass) {
+                    pass.read(color, rg::TextureUse::CopySrc);
+                    pass.write(readbackBuffer, rg::BufferUse::CopyDst);
+                },
+                [color, readbackBuffer, rowPitch = image.rowPitch](rg::PassContext& context) {
+                    context.list().copyTextureToBuffer({.buffer = context.buffer(readbackBuffer),
+                                                        .rowPitch = rowPitch,
+                                                        .texture = context.texture(color)});
+                });
         }
-        const Expected<void, Error> submitted = device.submit(list);
+        graph.compile();
+        const Expected<void, Error> executed = graph.execute(pool);
         const Expected<void, Error> ended = device.endFrame();
-        if (!submitted || !ended) {
-            FAIL("rendering failed: " << (!submitted ? submitted.error().toString() : ended.error().toString()));
+        if (!executed || !ended) {
+            FAIL("rendering failed: " << (!executed ? executed.error().toString() : ended.error().toString()));
             release();
             return std::nullopt;
         }
@@ -471,9 +488,10 @@ TEST_SUITE("scene_player") {
         }
     }
 
-    // The sample's frame loop reuses one depth buffer, discarded by scene_player::depthBarrier()
-    // after the earlier frames' writes: validation (GPU-based on Direct3D 12, synchronization on
-    // Vulkan) checks that reuse, and the last frame must still be right.
+    // The sample's frame loop reuses one pooled depth buffer, which the render graph discards each
+    // frame after the earlier frames' writes. Each frame is its own submission, which synchronization
+    // validation doesn't order against the others, so the barrier itself is checked by the render
+    // graph's tests; here validation checks each frame, and the last frame must still be right.
     TEST_CASE("three frames into the same target and depth buffer pass validation on each backend") {
         for (const Backend backend : {Backend::D3D12, Backend::Vulkan}) {
             CAPTURE(static_cast<int>(backend));

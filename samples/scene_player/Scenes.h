@@ -12,12 +12,13 @@
 // The shaders are compiled from Triangle.slang and Cubes.slang at build time and embedded in the
 // program (ith_embed_shaders, ADR-0023); a game loads cooked shaders instead (ADR-0011 rule 9). Vertex,
 // index and instance data stay in Upload memory, which the GPU reads directly: simple, and small
-// enough here not to matter.
+// enough here not to matter. The sample and the test draw the scenes in a render graph pass
+// (ADR-0028), which derives every barrier; nothing here records one.
 //
-// Every function is called on the thread that owns the device's frames (the render thread).
+// Creating and destroying are called on the thread that owns the device's frames (the render
+// thread); draw() records into a list on any thread, as a render graph pass's execute callable.
 
 #include "ith/foundation/Expected.h"
-#include "ith/rhi/Barrier.h"
 #include "ith/rhi/CommandList.h"
 #include "ith/rhi/Device.h"
 #include "ith/rhi/Error.h"
@@ -117,10 +118,5 @@ void draw(ith::rhi::CommandList& list, const ith::rhi::Device& device, const Cub
 
 // Destroys the cubes' objects (deferred; null handles are skipped).
 void destroy(ith::rhi::Device& device, const Cubes& cubes);
-
-// The barrier that readies a kDepthFormat depth buffer for the cubes, before rendering, in every
-// frame: it discards the contents, after the depth writes of earlier frames that used the buffer
-// (TextureBarrier, Barrier.h).
-[[nodiscard]] ith::rhi::TextureBarrier depthBarrier(ith::rhi::TextureHandle depth);
 
 } // namespace scene_player

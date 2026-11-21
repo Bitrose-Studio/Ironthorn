@@ -325,14 +325,4 @@ void destroy(Device& device, const Cubes& cubes) {
     device.destroy(cubes.instances);
 }
 
-TextureBarrier depthBarrier(TextureHandle depth) {
-    return {.texture = depth,
-            .stagesBefore = PipelineStage::DepthStencil,
-            .accessBefore = Access::DepthStencilWrite,
-            .stagesAfter = PipelineStage::DepthStencil,
-            .accessAfter = Access::DepthStencilWrite,
-            .layoutBefore = TextureLayout::Undefined,
-            .layoutAfter = TextureLayout::DepthStencilWrite};
-}
-
 } // namespace scene_player

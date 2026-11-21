@@ -174,7 +174,7 @@ endif()
 if(TARGET scene_player)
     ith_add_test_suite(scene_player
         SOURCES scene_player/SceneTests.cpp "${PROJECT_SOURCE_DIR}/samples/scene_player/Scenes.cpp"
-        LIBRARIES ith::rhi ith::rhi_select
+        LIBRARIES ith::rhi ith::rhi_select ith::render_graph
         LABELS gpu)
     target_include_directories(ith_scene_player_tests PRIVATE "${PROJECT_SOURCE_DIR}/samples/scene_player")
     ith_scene_player_shaders(ith_scene_player_tests)
