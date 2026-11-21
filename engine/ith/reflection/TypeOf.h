@@ -171,6 +171,8 @@ struct TypeOfImpl;
 template <typename T>
 concept HasTypeOfImpl = requires { TypeOfImpl<T>::get(); };
 
+// clang-format versions disagree on how to lay out this macro, so it is left as written.
+// clang-format off
 #define ITH_DETAIL_LEAF_TYPE(cppType, typeKind, typeName)                                                              \
     template <>                                                                                                        \
     struct TypeOfImpl<cppType> {                                                                                       \
@@ -179,6 +181,7 @@ concept HasTypeOfImpl = requires { TypeOfImpl<T>::get(); };
             return kInfo;                                                                                              \
         }                                                                                                              \
     }
+// clang-format on
 
 ITH_DETAIL_LEAF_TYPE(bool, Bool, "bool");
 ITH_DETAIL_LEAF_TYPE(std::int8_t, SignedInteger, "int8");
