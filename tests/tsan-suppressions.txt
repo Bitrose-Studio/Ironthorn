@@ -10,3 +10,11 @@
 # this repository. The report only appears where a D-Bus session bus is running (CI runners,
 # desktops), not in a bare container.
 deadlock:libdbus-1.so
+
+# The Khronos validation layer (libVkLayer_khronos_validation.so), which the Vulkan tests load from
+# the pinned LunarG SDK. It is not built with TSan, so TSan can't see the atomic reference counts
+# and lock-free maps that order its state objects between threads, and reports a race when one
+# thread frees a layer state object (vkBindImageMemory inside vmaCreateImage) that another thread
+# used earlier (vkDestroyImage). Both accesses are inside the layer, on different Vulkan objects
+# that the RHI may use from different threads. The layer can't be instrumented or changed here.
+race:libVkLayer_khronos_validation.so
