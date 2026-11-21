@@ -14,11 +14,13 @@
 #         -DMODULE_TABLE="foundation:foundation:runtime=|ecs:core:runtime=foundation"
 #         -DAPPLICATION_TABLE="minimal_server:server:samples/minimal_server/Main.cpp=ecs"
 #         -DLAYERS="foundation,platform,core,..."
+#         [-DUNAVAILABLE_MODULES="rhi_d3d12,..."]
 #         -P CheckModuleLayering.cmake
 #
 # MODULE_TABLE entries are <module>:<layer>:<kind>=<dependencies>; APPLICATION_TABLE (optional)
 # entries are <application>:<target>:<sources>=<modules>, with the sources relative to
-# REPOSITORY_DIR and separated by commas.
+# REPOSITORY_DIR and separated by commas. UNAVAILABLE_MODULES (optional) lists modules that exist
+# only on other platforms, which a module or application may include behind a platform check.
 
 cmake_minimum_required(VERSION 3.28)
 
@@ -30,6 +32,7 @@ set(ENGINE_DIR "${REPOSITORY_DIR}/engine/ith")
 string(REPLACE "," ";" layers "${LAYERS}")
 string(REPLACE "|" ";" entries "${MODULE_TABLE}")
 string(REPLACE "|" ";" application_entries "${APPLICATION_TABLE}")
+string(REPLACE "," ";" unavailable_modules "${UNAVAILABLE_MODULES}")
 
 # The kinds each module kind may depend on, and each application target may link.
 set(allowed_kinds_runtime runtime)
@@ -112,14 +115,16 @@ endfunction()
 
 # Adds a violation for each "ith/<module>/" include in the source files after `allowed` (absolute
 # paths) that names a module outside `allowed`. `owner` names the module or application in the
-# message.
+# message. Includes of an unavailable module (UNAVAILABLE_MODULES: one that exists only on other
+# platforms, like rhi_d3d12 outside Windows) are allowed: they sit behind a platform check, and the
+# builds that declare the module check them.
 function(check_includes owner allowed)
     foreach(source IN LISTS ARGN)
         file(STRINGS "${source}" includes REGEX "^[ \t]*#[ \t]*include[ \t]*\"ith/")
         foreach(line IN LISTS includes)
             if(line MATCHES "\"ith/([a-z0-9_]+)/")
                 set(included "${CMAKE_MATCH_1}")
-                if(NOT included IN_LIST allowed)
+                if(NOT included IN_LIST allowed AND NOT included IN_LIST unavailable_modules)
                     file(RELATIVE_PATH relative "${REPOSITORY_DIR}" "${source}")
                     list(APPEND violations "${relative} includes module '${included}', which ${owner} does not depend on")
                 endif()

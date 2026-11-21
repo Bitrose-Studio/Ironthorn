@@ -59,6 +59,32 @@ if(IRONTHORN_BUILD_CLIENT)
         LIBRARIES ith::rhi Threads::Threads)
 endif()
 
+# Backend selection, on every platform that builds client modules, without a GPU.
+if(IRONTHORN_BUILD_CLIENT)
+    ith_add_test_suite(rhi_select
+        SOURCES rhi_select/CreateDeviceTests.cpp
+        LIBRARIES ith::rhi_select)
+endif()
+
+# The Direct3D 12 backend on a GPU (Windows only): WARP by default, so it runs on hosted CI
+# runners, or the fastest hardware GPU with ITH_RHI_TEST_ADAPTER=hardware. With the tools built,
+# its shaders are compiled from Slang at run time and the pipeline tests run too.
+if(TARGET ith_rhi_d3d12)
+    set(ith_rhi_d3d12_test_libraries ith::rhi_d3d12 ith::rhi_select Threads::Threads)
+    if(IRONTHORN_BUILD_TOOLS)
+        list(APPEND ith_rhi_d3d12_test_libraries ith::shader_compiler)
+    endif()
+    ith_add_test_suite(rhi_d3d12
+        SOURCES rhi_d3d12/D3D12DeviceTests.cpp
+        LIBRARIES ${ith_rhi_d3d12_test_libraries}
+        LABELS gpu)
+    ith_use_d3d12_agility_sdk(ith_rhi_d3d12_tests)
+    if(IRONTHORN_BUILD_TOOLS)
+        target_compile_definitions(ith_rhi_d3d12_tests PRIVATE ITH_TEST_HAS_SHADER_COMPILER=1)
+        ith_copy_shader_compiler_runtime(ith_rhi_d3d12_tests)
+    endif()
+endif()
+
 # The reflection generator, run in-process on fixture headers.
 ith_add_test_suite(reflect_tool
     SOURCES reflect_tool/ScannerTests.cpp
@@ -200,7 +226,7 @@ set_tests_properties(ecs_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
 # check on a made-up module table (fixture sources in tests/layering) and passes when the
 # expected violation is reported.
 function(ith_add_layering_failure_test name)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "MODULES;APPLICATIONS;EXPECT" "")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "MODULES;APPLICATIONS;UNAVAILABLE;EXPECT" "")
     string(REPLACE ";" "," layers "${ITH_LAYERS}")
     add_test(NAME module_layering_refuses_${name}
         COMMAND ${CMAKE_COMMAND}
@@ -208,6 +234,7 @@ function(ith_add_layering_failure_test name)
             "-DMODULE_TABLE=${arg_MODULES}"
             "-DAPPLICATION_TABLE=${arg_APPLICATIONS}"
             "-DLAYERS=${layers}"
+            "-DUNAVAILABLE_MODULES=${arg_UNAVAILABLE}"
             -P "${PROJECT_SOURCE_DIR}/cmake/CheckModuleLayering.cmake")
     set_tests_properties(module_layering_refuses_${name} PROPERTIES
         LABELS "lint"
@@ -258,3 +285,10 @@ ith_add_layering_failure_test(application_unknown_module
     MODULES "net:core:runtime="
     APPLICATIONS "game_server:server:=net,physics"
     EXPECT "application game_server links unknown module 'physics'")
+# Only modules declared unavailable on this platform (rhi_d3d12 outside Windows) may be included
+# without being declared; any other undeclared module is refused.
+ith_add_layering_failure_test(include_of_undeclared_module
+    MODULES "net:core:runtime="
+    UNAVAILABLE "rhi_d3d12"
+    APPLICATIONS "game_server:server:tests/layering/ServerIncludesRenderer.cpp=net"
+    EXPECT "tests/layering/ServerIncludesRenderer.cpp includes module 'renderer', which application game_server does not depend on")

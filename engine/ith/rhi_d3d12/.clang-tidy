@@ -1,0 +1,10 @@
+---
+# The repository's checks, minus two that fight the Direct3D 12 and DXGI C interfaces:
+#   bugprone-invalid-enum-default-initialization  their structs are meant to be zero-initialized
+#                                                 (Desc{}), and many of their enums have no zero value
+#   bugprone-signed-bitwise                       their flag constants are signed (enums and macros)
+InheritParentConfig: true
+Checks: >
+  -bugprone-invalid-enum-default-initialization,
+  -bugprone-signed-bitwise
+...

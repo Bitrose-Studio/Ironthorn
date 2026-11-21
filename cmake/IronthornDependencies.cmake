@@ -7,12 +7,19 @@
 
 include(FetchContent)
 
-# ith_declare_dependency(<name> URL <url> SHA256 <hash> [SOURCE_SUBDIR <dir>])
+# ith_declare_dependency(<name> URL <url> SHA256 <hash> [SOURCE_SUBDIR <dir>] [DOWNLOAD_NAME <file>])
+#
+# DOWNLOAD_NAME names the downloaded file. CMake unpacks an archive only when its name ends in a
+# known archive extension, so a zip archive under another name (a NuGet .nupkg) is downloaded as
+# <something>.zip.
 function(ith_declare_dependency name)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "URL;SHA256;SOURCE_SUBDIR" "")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "URL;SHA256;SOURCE_SUBDIR;DOWNLOAD_NAME" "")
     set(extra_arguments "")
     if(arg_SOURCE_SUBDIR)
         list(APPEND extra_arguments SOURCE_SUBDIR "${arg_SOURCE_SUBDIR}")
+    endif()
+    if(arg_DOWNLOAD_NAME)
+        list(APPEND extra_arguments DOWNLOAD_NAME "${arg_DOWNLOAD_NAME}")
     endif()
     FetchContent_Declare(${name}
         URL "${arg_URL}"
@@ -191,4 +198,91 @@ if(IRONTHORN_BUILD_CLIENT)
     ith_dependency_option(SDL_JOYSTICK ON)
     ith_dependency_option(SDL_HIDAPI ON)
     FetchContent_MakeAvailable(sdl3)
+endif()
+
+# --- Direct3D 12: DirectX-Headers (MIT), D3D12 Memory Allocator (MIT), Agility SDK ---------
+# Windows only, for the rhi_d3d12 client module (ADR-0009). DirectX-Headers and the Agility SDK
+# have the same version and are always upgraded together: the headers declare exactly the API
+# of the D3D12Core.dll the game ships. Both are private to rhi_d3d12.
+#
+# The Agility SDK is Microsoft's NuGet package of the Direct3D 12 runtime. Only its
+# D3D12Core.dll and, outside Shipping, d3d12SDKLayers.dll (the debug layer) are used; its
+# license allows them to be redistributed with an application, for use on Windows only
+# (docs/development/third-party.md). ith_use_d3d12_agility_sdk() puts them next to an executable.
+if(WIN32 AND IRONTHORN_BUILD_CLIENT)
+    set(ith_d3d12_version 1.620.2)
+    # D3D12SDKVersion, which an executable exports to load this D3D12Core.dll: the minor version.
+    string(REGEX REPLACE "^1\\.([0-9]+)\\..*$" "\\1" ITH_D3D12_SDK_VERSION "${ith_d3d12_version}")
+
+    ith_declare_dependency(directx_headers
+        URL https://github.com/microsoft/DirectX-Headers/archive/refs/tags/v${ith_d3d12_version}.tar.gz
+        SHA256 2b916ef1be5db35313f56d60499274fed39db37b54a1f0befa8aa49041c14855)
+    ith_dependency_option(DXHEADERS_BUILD_TEST OFF)
+    ith_dependency_option(DXHEADERS_BUILD_GOOGLE_TEST OFF)
+    ith_dependency_option(DXHEADERS_INSTALL OFF)
+
+    # D3D12MA is one source file, built here: its own CMake project looks DirectX-Headers up with
+    # find_package and installs an export set that needs DirectX-Headers installed too. Its
+    # include directory has no CMakeLists.txt, so as SOURCE_SUBDIR it makes FetchContent only
+    # unpack the archive.
+    ith_declare_dependency(d3d12ma
+        URL https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator/archive/refs/tags/v3.3.0.tar.gz
+        SHA256 04e3ef68cf2608c14c74a0b0190fb3c5e3cbb62e22fb8282ea62a9411d054133
+        SOURCE_SUBDIR include)
+
+    # The package has no CMakeLists.txt, so FetchContent only unpacks it.
+    ith_declare_dependency(d3d12_agility_sdk
+        URL https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.d3d12/${ith_d3d12_version}/microsoft.direct3d.d3d12.${ith_d3d12_version}.nupkg
+        SHA256 70489669c2bbeaf318b62d72b0ac3e753d521387bfc848c9763791c4e920bfcc
+        DOWNLOAD_NAME microsoft.direct3d.d3d12.${ith_d3d12_version}.zip)
+
+    FetchContent_MakeAvailable(directx_headers d3d12ma d3d12_agility_sdk)
+
+    # Against DirectX-Headers instead of the Windows SDK's Direct3D 12 headers, and without
+    # exceptions or RTTI like the engine (D3D12MA documents that it uses neither).
+    add_library(ith_d3d12ma STATIC "${d3d12ma_SOURCE_DIR}/src/D3D12MemAlloc.cpp")
+    add_library(ith::d3d12ma ALIAS ith_d3d12ma)
+    target_include_directories(ith_d3d12ma SYSTEM PUBLIC "${d3d12ma_SOURCE_DIR}/include")
+    target_compile_definitions(ith_d3d12ma PUBLIC D3D12MA_USING_DIRECTX_HEADERS PRIVATE _HAS_EXCEPTIONS=0)
+    target_compile_options(ith_d3d12ma PRIVATE /EHs-c- /GR-)
+    target_link_libraries(ith_d3d12ma PUBLIC Microsoft::DirectX-Headers d3d12 dxgi)
+    set_target_properties(ith_d3d12ma PROPERTIES FOLDER "ThirdParty")
+
+    # The target architecture of the compiler (x64, ARM64), not of the machine that builds.
+    if(CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "x64")
+        set(ith_d3d12_bin "${d3d12_agility_sdk_SOURCE_DIR}/build/native/bin/x64")
+    elseif(CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "ARM64")
+        set(ith_d3d12_bin "${d3d12_agility_sdk_SOURCE_DIR}/build/native/bin/arm64")
+    else()
+        message(FATAL_ERROR "The Direct3D 12 Agility SDK has no runtime for ${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}.")
+    endif()
+    foreach(file D3D12Core.dll d3d12SDKLayers.dll)
+        if(NOT EXISTS "${ith_d3d12_bin}/${file}")
+            message(FATAL_ERROR "The Agility SDK package has no ${file}; correct cmake/IronthornDependencies.cmake.")
+        endif()
+    endforeach()
+
+    # ith_use_d3d12_agility_sdk(<target>)
+    #
+    # Makes the executable <target> run on the Agility SDK's Direct3D 12 runtime instead of the
+    # one in Windows (ADR-0009): it compiles in the exports D3D12SDKVersion and D3D12SDKPath
+    # (engine/ith/rhi_d3d12/AgilitySdkExports.cpp; Windows reads them from the executable, never
+    # from a library), and copies D3D12Core.dll, plus d3d12SDKLayers.dll outside Release
+    # (Shipping), to <executable directory>/D3D12/ after every link. ith_add_application calls it
+    # for player and editor applications that link rhi_select; test executables that create
+    # Direct3D 12 devices call it themselves.
+    function(ith_use_d3d12_agility_sdk target)
+        target_sources(${target} PRIVATE "${PROJECT_SOURCE_DIR}/engine/ith/rhi_d3d12/AgilitySdkExports.cpp")
+        target_compile_definitions(${target} PRIVATE ITH_D3D12_SDK_VERSION=${ITH_D3D12_SDK_VERSION})
+        set(directory "$<TARGET_FILE_DIR:${target}>/D3D12")
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${directory}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ith_d3d12_bin}/D3D12Core.dll"
+                "$<$<NOT:$<CONFIG:Release>>:${ith_d3d12_bin}/d3d12SDKLayers.dll>"
+                "${directory}"
+            COMMENT "Copying the Direct3D 12 Agility SDK runtime next to ${target}"
+            COMMAND_EXPAND_LISTS
+            VERBATIM)
+    endfunction()
 endif()

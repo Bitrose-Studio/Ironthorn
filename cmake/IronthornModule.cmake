@@ -151,7 +151,9 @@ endfunction()
 # left out of the default build of the Release configuration (the "all" target of Ninja
 # Multi-Config, the solution or project build of Visual Studio and Xcode). A test that runs an
 # editor or tools application must therefore not run in Release, e.g. by registering it with
-# add_test(... CONFIGURATIONS Debug RelWithDebInfo).
+# add_test(... CONFIGURATIONS Debug RelWithDebInfo). On Windows, player and editor applications
+# whose MODULES include rhi_select run on the Direct3D 12 Agility SDK (ith_use_d3d12_agility_sdk in
+# IronthornDependencies.cmake).
 function(ith_add_application name)
     cmake_parse_arguments(PARSE_ARGV 1 arg "" "KIND" "SOURCES;MODULES")
 
@@ -174,6 +176,12 @@ function(ith_add_application name)
     set_target_properties(${name} PROPERTIES
         FOLDER "Ironthorn/Applications"
         COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    # Players and editors that create RHI devices run on the Direct3D 12 Agility SDK on Windows
+    # (ADR-0009).
+    if((arg_KIND STREQUAL "player" OR arg_KIND STREQUAL "editor") AND "rhi_select" IN_LIST arg_MODULES
+            AND COMMAND ith_use_d3d12_agility_sdk)
+        ith_use_d3d12_agility_sdk(${name})
+    endif()
     if(arg_KIND STREQUAL "editor" OR arg_KIND STREQUAL "tools")
         # Only Ninja Multi-Config accepts a per-configuration EXCLUDE_FROM_ALL; Visual Studio and
         # Xcode have their own per-configuration property.
@@ -221,6 +229,7 @@ endfunction()
 function(ith_add_layering_test)
     get_property(modules GLOBAL PROPERTY ITH_MODULES)
     get_property(applications GLOBAL PROPERTY ITH_APPLICATIONS)
+    get_property(unavailable GLOBAL PROPERTY ITH_UNAVAILABLE_MODULES)
 
     set(table "")
     foreach(module IN LISTS modules)
@@ -232,6 +241,7 @@ function(ith_add_layering_test)
     endforeach()
     string(REPLACE ";" "|" table "${table}")
     string(REPLACE ";" "|" applications "${applications}")
+    string(REPLACE ";" "," unavailable "${unavailable}")
     string(REPLACE ";" "," layers "${ITH_LAYERS}")
 
     add_test(NAME module_layering
@@ -240,6 +250,7 @@ function(ith_add_layering_test)
             "-DMODULE_TABLE=${table}"
             "-DAPPLICATION_TABLE=${applications}"
             "-DLAYERS=${layers}"
+            "-DUNAVAILABLE_MODULES=${unavailable}"
             -P "${PROJECT_SOURCE_DIR}/cmake/CheckModuleLayering.cmake")
     set_tests_properties(module_layering PROPERTIES LABELS "lint")
 endfunction()
