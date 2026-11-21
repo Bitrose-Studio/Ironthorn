@@ -182,7 +182,8 @@ const ith::TypeInfo* byName = registry.find("game::Health");
   review it and copy it over `tests/reflect_tool/golden/Basic.reflect.cpp.golden`.
 - `reflection` builds a test module of reflected types through the same build step as engine
   modules and checks the records, the registry and a round-trip of every type through a
-  field-wise copy. The round-trip through the text and binary archives
-  ([ADR-0010](../decisions/0010-serialization.md)) replaces that copy when serialization lands.
+  field-wise copy. `serialization` round-trips every reflected type through the text and binary
+  archives ([ADR-0010](../decisions/0010-serialization.md), [guide](serialization.md)), the P1
+  exit criterion.
 - In Clang sanitizer builds, `reflect_tool_fuzz` runs a short libFuzzer session over the
   generator (`tests/reflect_tool/ScannerFuzz.cpp`), seeded with the fixture headers.
