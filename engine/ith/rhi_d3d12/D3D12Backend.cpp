@@ -730,8 +730,10 @@ D3D12_CPU_DESCRIPTOR_HANDLE D3D12Backend::depthStencilView(std::uint32_t texture
 Expected<std::byte*, Error> D3D12Backend::createBuffer(std::uint32_t slot, const BufferDesc& desc,
                                                        const detail::BufferDescriptors& descriptors) {
     // Shaders see buffers as raw (ByteAddressBuffer) views of 4-byte words, so the size is
-    // rounded up to whole words.
-    const std::uint64_t width = (desc.size + 3) / 4 * 4;
+    // rounded up to whole words, unless that would pass the largest buffer size (desc.size is
+    // within it, so the sum can't overflow).
+    const std::uint64_t rounded = desc.size + (4 - desc.size % 4) % 4;
+    const std::uint64_t width = rounded <= m_capabilities.limits.maxBufferSize ? rounded : desc.size;
     D3D12_RESOURCE_DESC1 resourceDesc{};
     resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
     resourceDesc.Width = width;
