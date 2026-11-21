@@ -9,7 +9,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0002](0002-git-workflow-and-versioning.md) | Git workflow and versioning | Accepted |
 | [0003](0003-clean-room.md) | Clean-room implementation of ideas from other engines | Accepted |
 | [0004](0004-modules-and-layering.md) | Engine modules and layering | Accepted |
-| [0005](0005-reference-hardware.md) | Reference hardware for scalability tiers | Accepted |
+| [0005](0005-reference-hardware.md) | Reference hardware for scalability tiers | Accepted, amended by [0022](0022-gpu-minimum-features-completed.md) |
 | [0006](0006-math-and-coordinate-conventions.md) | Math library and coordinate conventions | Accepted |
 | [0007](0007-logging-and-profiling.md) | Logging and profiling | Accepted |
 | [0008](0008-editor-familiar-to-unreal-developers.md) | An editor familiar to Unreal Engine developers | Accepted |
@@ -26,6 +26,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0019](0019-reflection-rules-corrected.md) | Reflection: rules corrected after the first implementation | Accepted |
 | [0020](0020-serialization-rules-completed.md) | Serialization: rules completed after the first implementation | Accepted |
 | [0021](0021-rhi-device-structure-and-backend-modules.md) | RHI: device structure and backend modules | Accepted |
+| [0022](0022-gpu-minimum-features-completed.md) | GPU minimum features completed for the RHI (amends 0005) | Accepted |
 
 ## Planned
 

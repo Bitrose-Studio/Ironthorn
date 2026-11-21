@@ -1,6 +1,7 @@
 # ADR-0005: Reference hardware for scalability tiers
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0022](0022-gpu-minimum-features-completed.md)
 - **Date:** 2026-11-20
 - **Related:** [architecture: Scalability](../architecture.md#scalability), ADR-0004
 
