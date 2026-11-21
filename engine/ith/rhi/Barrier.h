@@ -5,7 +5,8 @@
 // The RHI does not track resource state. A barrier names the work before it and the work after
 // it as pipeline stages and accesses, and for textures the layout before and after, which maps
 // directly onto Direct3D 12 enhanced barriers and Vulkan synchronization2. The render graph
-// computes them; until it exists, passes declare them by hand:
+// (ith/render_graph, ADR-0028) computes them for its passes; code outside a graph declares them
+// by hand:
 //
 //   const ith::rhi::TextureBarrier toTarget{
 //       .texture = frame.backbuffer,

@@ -183,6 +183,59 @@ if(TARGET scene_player)
     endif()
 endif()
 
+# The render graph (ADR-0028): compile tests through the text dump, without a device; execute
+# tests on the null backend (groups, serial and parallel recording, the pool across frames,
+# imports, clobbering, out of memory); and the validation errors.
+if(IRONTHORN_BUILD_CLIENT)
+    ith_add_test_suite(render_graph
+        SOURCES
+            render_graph/CompileTests.cpp
+            render_graph/ExecuteTests.cpp
+            render_graph/RenderGraphTestSupport.h
+            render_graph/ValidationTests.cpp
+        LIBRARIES ith::render_graph Threads::Threads)
+
+    # No allocation when declaring and compiling a steady frame: an executable of its own, because
+    # AllocationTests.cpp replaces the global allocation functions with counting ones. Sanitizer
+    # builds replace them too, so it isn't built there.
+    if(NOT IRONTHORN_ENABLE_SANITIZERS AND NOT IRONTHORN_ENABLE_TSAN)
+        ith_add_test_suite(render_graph_allocation
+            SOURCES render_graph/AllocationTests.cpp
+            LIBRARIES ith::render_graph)
+    endif()
+
+    # The render graph benchmark (docs/development/render-graph.md): declare, compile and execute
+    # times of 100 passes and 200 resources. Like ecs_benchmark it only prints numbers.
+    add_executable(ith_render_graph_benchmark render_graph/RenderGraphBenchmark.cpp)
+    target_link_libraries(ith_render_graph_benchmark PRIVATE ith::render_graph)
+    set_target_properties(ith_render_graph_benchmark PROPERTIES
+        FOLDER "Ironthorn/Benchmarks"
+        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    add_test(NAME render_graph_benchmark COMMAND ith_render_graph_benchmark)
+    set_tests_properties(render_graph_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
+endif()
+
+# The render graph on every GPU backend the machine has, with validation (synchronization
+# validation on Vulkan, GPU-based validation on Direct3D 12): depth and HDR color, a tonemap, a
+# history texture over three frames, transient reuse, clobbering, parallel recording and a resize
+# that evicts pool entries. Its shaders come from slangc at build time, so it exists only with the
+# tools, like scene_player's test.
+if(IRONTHORN_BUILD_CLIENT AND ITH_BUILD_SHADER_COMPILER)
+    ith_add_test_suite(render_graph_gpu
+        SOURCES render_graph_gpu/RenderGraphGpuTests.cpp
+        LIBRARIES ith::render_graph ith::rhi_select Threads::Threads
+        LABELS gpu)
+    set(ith_render_graph_dxil "")
+    if(TARGET ith_rhi_d3d12)
+        set(ith_render_graph_dxil DXIL)
+        target_compile_definitions(ith_render_graph_gpu_tests PRIVATE ITH_RENDER_GRAPH_TEST_HAS_DXIL=1)
+        ith_use_d3d12_agility_sdk(ith_render_graph_gpu_tests)
+    endif()
+    ith_embed_shaders(ith_render_graph_gpu_tests SOURCE render_graph_gpu/RenderGraphTest.slang
+        ENTRY_POINTS fullscreenVertex:vertex fillPixel:pixel combinePixel:pixel tonemapPixel:pixel
+        ${ith_render_graph_dxil})
+endif()
+
 # A libFuzzer target for the Vulkan backend's SPIR-V binding check, in Clang sanitizer builds
 # only, with a short smoke run in CTest like the others, seeded with SPIR-V the shader compiler
 # wrote (rhi_vulkan/fuzz_seeds).
