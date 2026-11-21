@@ -1,7 +1,7 @@
 #pragma once
 
-// The platform layer: initialization, windows, the per-frame event pump and the clipboard
-// (ADR-0012).
+// The platform layer: initialization, windows, the per-frame event pump with device input
+// (keyboard, text, mouse, gamepads), gamepad output and the clipboard (ADR-0012, ADR-0013).
 //
 //   ith::Expected<ith::Platform> platform = ith::Platform::create();
 //   if (!platform) {
@@ -28,8 +28,8 @@
 
 #include "ith/foundation/Compiler.h"
 #include "ith/foundation/Expected.h"
-#include "ith/platform/Event.h"
 #include "ith/platform/Window.h"
+#include "ith/platform_events/Event.h"
 
 #include <cstdint>
 #include <span>
@@ -53,7 +53,8 @@ struct PlatformDesc {
 // destroyed or assigned to.
 class Platform {
 public:
-    // Initializes the windowing library on the calling thread, which becomes the main thread.
+    // Initializes the windowing library (video and gamepads) on the calling thread, which becomes
+    // the main thread.
     // Fails with "platform.init_failed" and the library's message when no usable video driver
     // is available (no display, an unknown driver name).
     //
@@ -79,9 +80,15 @@ public:
     // Drains the operating system's event queue and returns this frame's events in the order
     // they happened. Call it once per frame, at its start. The span points into this Platform:
     // it is valid until the next call or until the Platform is destroyed or moved.
+    // Gamepad events arrive only while one of the application's windows has focus.
     //
     // Precondition (asserted): called on the main thread.
     std::span<const Event> pumpEvents() ITH_LIFETIMEBOUND;
+
+    // When the last pumpEvents() finished collecting events, in std::chrono::steady_clock
+    // nanoseconds: the frame's input time, later than every timestamp of its events. 0 before the
+    // first pump.
+    std::uint64_t pumpTimeNs() const { return m_pumpTimeNs; }
 
     // The name of the video driver in use, e.g. "windows", "wayland", "x11" or "offscreen".
     //
@@ -101,6 +108,29 @@ public:
     // clipboard holds C strings, so the text would be cut there).
     Expected<void> setClipboardText(std::string_view text);
 
+    // The name of a physical key in the user's keyboard layout, for showing bindings: "Z" for
+    // Key::W on AZERTY, "Left Shift" for Key::LeftShift. Empty for Key::None and keys the layout
+    // doesn't have. English for keys that print nothing; the UI may translate those by Key.
+    //
+    // Precondition (asserted): called on the main thread.
+    std::string keyDisplayName(Key key) const;
+
+    // Gamepad output (ADR-0013 rule 6). `gamepad` is the device id of a GamepadConnected event.
+    // Each fails with "platform.gamepad_not_found" when no connected gamepad has that id, and with
+    // "platform.gamepad_output_failed" and the library's message when the gamepad can't do it
+    // (no motors, no trigger motors, no LED).
+    //
+    // Preconditions (asserted): called on the main thread; strengths are within 0..1.
+
+    // Rumbles the low-frequency (left, heavy) and high-frequency (right, light) motors for
+    // `durationMs`, replacing any rumble in progress; strengths 0 stop it.
+    Expected<void> rumbleGamepad(DeviceId gamepad, float lowFrequency, float highFrequency, std::uint32_t durationMs);
+    // Rumbles the trigger motors (Xbox One and Series) for `durationMs`, replacing any trigger
+    // rumble in progress.
+    Expected<void> rumbleGamepadTriggers(DeviceId gamepad, float left, float right, std::uint32_t durationMs);
+    // Sets the light bar or LED colour (PlayStation 4 and 5, some others).
+    Expected<void> setGamepadLed(DeviceId gamepad, std::uint8_t red, std::uint8_t green, std::uint8_t blue);
+
 private:
     Platform() = default;
 
@@ -110,7 +140,13 @@ private:
     bool m_owner = false;
     // Added to the library's event timestamps to put them on std::chrono::steady_clock.
     std::int64_t m_clockOffsetNs = 0;
+    // When the last pump finished, std::chrono::steady_clock nanoseconds.
+    std::uint64_t m_pumpTimeNs = 0;
+    // The modifiers of the latest key event pumped, for the mouse events after it.
+    KeyModifiers m_modifiers = KeyModifiers::None;
     std::vector<Event> m_events;
+    // The text of this frame's events, which their `text` views point into.
+    std::string m_text;
 };
 
 } // namespace ith

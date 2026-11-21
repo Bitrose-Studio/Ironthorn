@@ -7,6 +7,8 @@
 // thread is the main thread and how many windows are alive. Both are atomic because the asserts
 // may read them from any thread.
 
+#include "ith/foundation/Expected.h"
+
 #include <atomic>
 #include <cstdint>
 #include <thread>
@@ -36,5 +38,8 @@ inline bool platformExists() {
 inline bool isMainThread() {
     return platformState().mainThread.load(std::memory_order_relaxed) == std::this_thread::get_id();
 }
+
+// An error with `code` whose message is `what`, a colon and the windowing library's last error.
+Unexpected<Error> sdlError(const char* code, const char* what);
 
 } // namespace ith::detail

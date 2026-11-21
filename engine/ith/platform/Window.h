@@ -8,8 +8,9 @@
 // scales windows (macOS, Wayland with scaling); on Windows they are the same, and the display
 // scale says how much larger the UI should be drawn.
 
-#include "ith/platform/Event.h"
+#include "ith/foundation/Expected.h"
 #include "ith/platform/NativeWindowHandle.h"
+#include "ith/platform_events/Event.h"
 
 #include <cstdint>
 #include <string_view>
@@ -31,6 +32,16 @@ struct WindowSize {
     std::int32_t height = 0;
 
     friend bool operator==(const WindowSize&, const WindowSize&) = default;
+};
+
+// A text field's place in a window, for the IME (Window::setTextInputArea). Window pixels.
+struct TextInputArea {
+    std::int32_t x = 0;
+    std::int32_t y = 0;
+    std::int32_t width = 0;
+    std::int32_t height = 0;
+    // The text cursor's offset from the field's left edge.
+    std::int32_t cursor = 0;
 };
 
 // Owns an operating system window and closes it when destroyed. Move-only; a moved-from Window
@@ -63,6 +74,31 @@ public:
     // The operating system's handles for this window; std::monostate when the video driver has
     // none (the "offscreen" driver). See NativeWindowHandle.h for how long each handle lives.
     NativeWindowHandle nativeHandle() const;
+
+    // Relative mouse mode (ADR-0013 rule 5): while on and the window has focus, the cursor is
+    // hidden and locked to the window, and MouseMoved reports the mouse's unaccelerated motion.
+    // The input module decides when it should be on (mouse capture); the application applies
+    // it: `window.setRelativeMouseMode(input.mouseCaptured(window.id()))`. Setting the current
+    // mode again does nothing. Fails with "platform.relative_mouse_failed" and the library's
+    // message when the video driver can't do it.
+    Expected<void> setRelativeMouseMode(bool enabled);
+    bool relativeMouseMode() const;
+
+    // Text input (ADR-0013 rule 4): while on, the window receives TextInput and TextEditing
+    // events and the IME may open; on touch platforms the on-screen keyboard shows. Turn it on
+    // only while a text field has focus, because it lets the IME take key presses. Starting it
+    // again, or stopping it when it is off, does nothing. Fails with "platform.text_input_failed"
+    // and the library's message.
+    Expected<void> startTextInput();
+    void stopTextInput();
+    bool textInputActive() const;
+
+    // Tells the IME where the focused text field is, so its candidate window appears next to it:
+    // the field's rectangle in window pixels and the cursor's offset from the field's left edge
+    // in pixels. Fails with "platform.text_input_failed" and the library's message.
+    //
+    // Precondition (asserted): `area` has a non-negative width and height.
+    Expected<void> setTextInputArea(const TextInputArea& area);
 
 private:
     friend class Platform;

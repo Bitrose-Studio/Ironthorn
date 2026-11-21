@@ -98,4 +98,72 @@ NativeWindowHandle Window::nativeHandle() const {
     return {};
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const): changes the window's state
+Expected<void> Window::setRelativeMouseMode(bool enabled) {
+    SDL_Window* window = sdlWindow(m_id);
+    if (window == nullptr) {
+        return makeError("platform.relative_mouse_failed", "the window no longer exists");
+    }
+    if (SDL_GetWindowRelativeMouseMode(window) == enabled) {
+        return {};
+    }
+    if (!SDL_SetWindowRelativeMouseMode(window, enabled)) {
+        return detail::sdlError("platform.relative_mouse_failed", "relative mouse mode could not be changed");
+    }
+    return {};
+}
+
+bool Window::relativeMouseMode() const {
+    SDL_Window* window = sdlWindow(m_id);
+    return window != nullptr && SDL_GetWindowRelativeMouseMode(window);
+}
+
+// NOLINTNEXTLINE(readability-make-member-function-const): changes the window's state
+Expected<void> Window::startTextInput() {
+    SDL_Window* window = sdlWindow(m_id);
+    if (window == nullptr) {
+        return makeError("platform.text_input_failed", "the window no longer exists");
+    }
+    if (SDL_TextInputActive(window)) {
+        return {};
+    }
+    if (!SDL_StartTextInput(window)) {
+        return detail::sdlError("platform.text_input_failed", "text input could not be started");
+    }
+    return {};
+}
+
+// NOLINTNEXTLINE(readability-make-member-function-const): changes the window's state
+void Window::stopTextInput() {
+    SDL_Window* window = sdlWindow(m_id);
+    if (window != nullptr && SDL_TextInputActive(window)) {
+        SDL_StopTextInput(window);
+    }
+}
+
+bool Window::textInputActive() const {
+    SDL_Window* window = sdlWindow(m_id);
+    return window != nullptr && SDL_TextInputActive(window);
+}
+
+// NOLINTNEXTLINE(readability-make-member-function-const): changes the window's state
+Expected<void> Window::setTextInputArea(const TextInputArea& area) {
+    ITH_ASSERT_MSG(area.width >= 0 && area.height >= 0, "a text input area needs a non-negative size");
+    SDL_Window* window = sdlWindow(m_id);
+    if (window == nullptr) {
+        return makeError("platform.text_input_failed", "the window no longer exists");
+    }
+    // The engine works in pixels; the library wants window coordinates.
+    const float density = SDL_GetWindowPixelDensity(window);
+    const auto toWindow = [&](std::int32_t pixels) {
+        return density > 0.0f ? static_cast<int>(static_cast<float>(pixels) / density) : pixels;
+    };
+    const SDL_Rect rect{
+        .x = toWindow(area.x), .y = toWindow(area.y), .w = toWindow(area.width), .h = toWindow(area.height)};
+    if (!SDL_SetTextInputArea(window, &rect, toWindow(area.cursor))) {
+        return detail::sdlError("platform.text_input_failed", "the text input area could not be set");
+    }
+    return {};
+}
+
 } // namespace ith

@@ -281,6 +281,316 @@ TEST_CASE("Self-move-assignment keeps a window open") {
     CHECK(window.size() == ith::WindowSize{.width = 320, .height = 200});
 }
 
+TEST_CASE("Keyboard events carry the physical key, the layout key, modifiers and repeats") {
+    ith::Platform platform = createHeadless();
+    const ith::Window window = createWindow(platform);
+    static_cast<void>(pump(platform));
+
+    const auto pushKey = [&](bool down, SDL_Scancode scancode, SDL_Keycode keycode, SDL_Keymod mod, bool repeat) {
+        SDL_Event event{};
+        event.key.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+        event.key.windowID = window.id();
+        event.key.which = 5;
+        event.key.scancode = scancode;
+        event.key.key = keycode;
+        event.key.mod = mod;
+        event.key.down = down;
+        event.key.repeat = repeat;
+        REQUIRE(SDL_PushEvent(&event));
+    };
+    // The key left of S on AZERTY prints 'q'; its physical key is still Key::A.
+    pushKey(true, SDL_SCANCODE_A, SDLK_Q, SDL_KMOD_LSHIFT | SDL_KMOD_RCTRL, false);
+    pushKey(true, SDL_SCANCODE_A, SDLK_Q, SDL_KMOD_NONE, true);
+    pushKey(false, SDL_SCANCODE_A, SDLK_Q, SDL_KMOD_NUM, false);
+    pushKey(true, SDL_SCANCODE_RETURN, SDLK_RETURN, SDL_KMOD_NONE, false);
+    pushKey(true, SDL_SCANCODE_F5, SDLK_F5, SDL_KMOD_NONE, false);
+    // Keys the engine doesn't name (media keys) are dropped.
+    pushKey(true, SDL_SCANCODE_MEDIA_PLAY, SDLK_MEDIA_PLAY, SDL_KMOD_NONE, false);
+
+    const std::vector<ith::Event> events = pump(platform);
+    REQUIRE(events.size() == 5);
+    CHECK(events[0].type == ith::EventType::KeyDown);
+    CHECK(events[0].window == window.id());
+    CHECK(events[0].device == 5);
+    CHECK(events[0].key == ith::Key::A);
+    CHECK(events[0].layoutKey == U'q');
+    CHECK(events[0].modifiers == (ith::KeyModifiers::Shift | ith::KeyModifiers::Control));
+    CHECK_FALSE(events[0].repeat);
+    CHECK(events[1].repeat);
+    CHECK(events[2].type == ith::EventType::KeyUp);
+    CHECK(events[2].modifiers == ith::KeyModifiers::NumLock);
+    CHECK(events[3].key == ith::Key::Enter);
+    CHECK(events[3].layoutKey == 0);
+    CHECK(events[4].key == ith::Key::F5);
+    CHECK(events[4].layoutKey == 0);
+}
+
+TEST_CASE("Key display names come from the keyboard layout") {
+    ith::Platform platform = createHeadless();
+    // The offscreen driver uses SDL's default US layout.
+    CHECK(platform.keyDisplayName(ith::Key::W) == "W");
+    CHECK_FALSE(platform.keyDisplayName(ith::Key::LeftShift).empty());
+    CHECK(platform.keyDisplayName(ith::Key::None).empty());
+}
+
+TEST_CASE("Mouse events carry buttons, positions in pixels, motion and fractional wheel steps") {
+    ith::Platform platform = createHeadless();
+    const ith::Window window = createWindow(platform, {.width = 400, .height = 300});
+    static_cast<void>(pump(platform));
+    const float density = static_cast<float>(window.pixelSize().width) / static_cast<float>(window.size().width);
+
+    SDL_Event button{};
+    button.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+    button.button.windowID = window.id();
+    button.button.button = SDL_BUTTON_X1;
+    button.button.down = true;
+    button.button.clicks = 2;
+    button.button.x = 10.0f;
+    button.button.y = 20.0f;
+    REQUIRE(SDL_PushEvent(&button));
+    button.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
+    button.button.button = SDL_BUTTON_RIGHT;
+    button.button.down = false;
+    REQUIRE(SDL_PushEvent(&button));
+
+    SDL_Event motion{};
+    motion.motion.type = SDL_EVENT_MOUSE_MOTION;
+    motion.motion.windowID = window.id();
+    motion.motion.x = 30.0f;
+    motion.motion.y = 40.0f;
+    motion.motion.xrel = 2.5f;
+    motion.motion.yrel = -1.0f;
+    REQUIRE(SDL_PushEvent(&motion));
+
+    SDL_Event wheel{};
+    wheel.wheel.type = SDL_EVENT_MOUSE_WHEEL;
+    wheel.wheel.windowID = window.id();
+    wheel.wheel.x = 0.0f;
+    wheel.wheel.y = 0.25f;
+    REQUIRE(SDL_PushEvent(&wheel));
+    // A flipped wheel (natural scrolling) is reported in the same direction as a normal one.
+    wheel.wheel.y = -0.5f;
+    wheel.wheel.direction = SDL_MOUSEWHEEL_FLIPPED;
+    REQUIRE(SDL_PushEvent(&wheel));
+
+    const std::vector<ith::Event> events = pump(platform);
+    REQUIRE(events.size() == 5);
+    CHECK(events[0].type == ith::EventType::MouseButtonDown);
+    CHECK(events[0].mouseButton == ith::MouseButton::Back);
+    CHECK(events[0].clicks == 2);
+    CHECK(events[0].x == doctest::Approx(10.0f * density));
+    CHECK(events[0].y == doctest::Approx(20.0f * density));
+    CHECK(events[1].type == ith::EventType::MouseButtonUp);
+    CHECK(events[1].mouseButton == ith::MouseButton::Right);
+    CHECK(events[1].clicks == 0);
+    CHECK(events[2].type == ith::EventType::MouseMoved);
+    CHECK(events[2].x == doctest::Approx(30.0f * density));
+    CHECK(events[2].deltaX == doctest::Approx(2.5f * density));
+    CHECK(events[2].deltaY == doctest::Approx(-1.0f * density));
+    CHECK(events[3].type == ith::EventType::MouseWheel);
+    CHECK(events[3].deltaY == 0.25f);
+    CHECK_FALSE(events[3].wheelFlipped);
+    CHECK(events[4].deltaY == 0.5f);
+    CHECK(events[4].wheelFlipped);
+}
+
+TEST_CASE("Mouse events carry the modifiers of the key events before them in the queue") {
+    ith::Platform platform = createHeadless();
+    const ith::Window window = createWindow(platform);
+    static_cast<void>(pump(platform));
+
+    const auto pushCtrl = [&](bool down) {
+        SDL_Event key{};
+        key.key.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+        key.key.windowID = window.id();
+        key.key.scancode = SDL_SCANCODE_LCTRL;
+        key.key.key = SDLK_LCTRL;
+        key.key.mod = down ? SDL_KMOD_LCTRL : SDL_KMOD_NONE;
+        key.key.down = down;
+        REQUIRE(SDL_PushEvent(&key));
+    };
+    const auto pushClick = [&] {
+        SDL_Event button{};
+        button.button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+        button.button.windowID = window.id();
+        button.button.button = SDL_BUTTON_LEFT;
+        button.button.down = true;
+        REQUIRE(SDL_PushEvent(&button));
+    };
+    pushCtrl(true);
+    pushClick();
+    pushCtrl(false);
+    pushClick();
+
+    const std::vector<ith::Event> events = pump(platform);
+    REQUIRE(events.size() == 4);
+    CHECK(events[1].modifiers == ith::KeyModifiers::Control);
+    CHECK(events[3].modifiers == ith::KeyModifiers::None);
+}
+
+TEST_CASE("Text and IME composition events carry their UTF-8 text") {
+    ith::Platform platform = createHeadless();
+    const ith::Window window = createWindow(platform);
+    static_cast<void>(pump(platform));
+
+    // Long enough to make the platform's text storage grow while the frame is gathered.
+    const std::string longText(200, 'x');
+    SDL_Event text{};
+    text.text.type = SDL_EVENT_TEXT_INPUT;
+    text.text.windowID = window.id();
+    text.text.text = "\xC3\xA9t\xC3\xA9";
+    REQUIRE(SDL_PushEvent(&text));
+    SDL_Event editing{};
+    editing.edit.type = SDL_EVENT_TEXT_EDITING;
+    editing.edit.windowID = window.id();
+    editing.edit.text = "\xE3\x81\x8B";
+    editing.edit.start = 1;
+    editing.edit.length = -1;
+    REQUIRE(SDL_PushEvent(&editing));
+    text.text.text = longText.c_str();
+    REQUIRE(SDL_PushEvent(&text));
+
+    const std::vector<ith::Event> events = pump(platform);
+    REQUIRE(events.size() == 3);
+    CHECK(events[0].type == ith::EventType::TextInput);
+    CHECK(events[0].window == window.id());
+    CHECK(events[0].text == "\xC3\xA9t\xC3\xA9");
+    CHECK(events[1].type == ith::EventType::TextEditing);
+    CHECK(events[1].text == "\xE3\x81\x8B");
+    CHECK(events[1].textCursor == 1);
+    CHECK(events[1].textSelectionLength == -1);
+    CHECK(events[2].text == longText);
+}
+
+TEST_CASE("Windows switch text input and relative mouse mode") {
+    ith::Platform platform = createHeadless();
+    ith::Window window = createWindow(platform);
+
+    CHECK_FALSE(window.textInputActive());
+    REQUIRE(window.startTextInput().hasValue());
+    CHECK(window.textInputActive());
+    REQUIRE(window.startTextInput().hasValue()); // again: nothing changes
+    CHECK(window.setTextInputArea({.x = 10, .y = 20, .width = 200, .height = 30, .cursor = 5}).hasValue());
+    window.stopTextInput();
+    CHECK_FALSE(window.textInputActive());
+    window.stopTextInput();
+
+    // The offscreen driver may not support relative mode; either way the result is consistent.
+    const ith::Expected<void> relative = window.setRelativeMouseMode(true);
+    if (relative) {
+        CHECK(window.relativeMouseMode());
+        REQUIRE(window.setRelativeMouseMode(false).hasValue());
+    } else {
+        CHECK(relative.error().code == "platform.relative_mouse_failed");
+    }
+    CHECK_FALSE(window.relativeMouseMode());
+}
+
+namespace {
+
+// What a virtual gamepad's output callbacks received.
+struct VirtualPadOutput {
+    Uint16 low = 0;
+    Uint16 high = 0;
+    Uint16 leftTrigger = 0;
+    Uint16 rightTrigger = 0;
+    Uint8 red = 0;
+    Uint8 green = 0;
+    Uint8 blue = 0;
+};
+
+SDL_JoystickID attachVirtualPad(VirtualPadOutput& output) {
+    SDL_VirtualJoystickDesc desc;
+    SDL_INIT_INTERFACE(&desc);
+    desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+    desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+    desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+    desc.name = "Ironthorn Test Pad";
+    desc.userdata = &output;
+    desc.Rumble = [](void* userdata, Uint16 low, Uint16 high) {
+        auto* out = static_cast<VirtualPadOutput*>(userdata);
+        out->low = low;
+        out->high = high;
+        return true;
+    };
+    desc.RumbleTriggers = [](void* userdata, Uint16 left, Uint16 right) {
+        auto* out = static_cast<VirtualPadOutput*>(userdata);
+        out->leftTrigger = left;
+        out->rightTrigger = right;
+        return true;
+    };
+    desc.SetLED = [](void* userdata, Uint8 red, Uint8 green, Uint8 blue) {
+        auto* out = static_cast<VirtualPadOutput*>(userdata);
+        out->red = red;
+        out->green = green;
+        out->blue = blue;
+        return true;
+    };
+    const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
+    REQUIRE_MESSAGE(id != 0, SDL_GetError());
+    return id;
+}
+
+} // namespace
+
+TEST_CASE("Gamepads connect, report buttons and axes, take output and disconnect") {
+    // No window exists, so SDL delivers gamepad events without focus.
+    ith::Platform platform = createHeadless();
+    static_cast<void>(pump(platform));
+    VirtualPadOutput output;
+    const SDL_JoystickID id = attachVirtualPad(output);
+
+    std::vector<ith::Event> events = pump(platform);
+    const auto connected = std::ranges::find(events, ith::EventType::GamepadConnected, &ith::Event::type);
+    REQUIRE(connected != events.end());
+    CHECK(connected->device == id);
+    CHECK(connected->text == "Ironthorn Test Pad");
+    CHECK(connected->timestampNs > 0);
+    CHECK(connected->gamepadGuid != ith::GamepadGuid{});
+
+    SDL_Joystick* joystick = SDL_GetJoystickFromID(id);
+    REQUIRE(joystick != nullptr);
+    REQUIRE(SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_SOUTH, true));
+    REQUIRE(SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTY, SDL_JOYSTICK_AXIS_MIN));
+    REQUIRE(SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, SDL_JOYSTICK_AXIS_MAX));
+    events = pump(platform);
+    const auto down = std::ranges::find(events, ith::EventType::GamepadButtonDown, &ith::Event::type);
+    REQUIRE(down != events.end());
+    CHECK(down->device == id);
+    CHECK(down->gamepadButton == ith::GamepadButton::FaceSouth);
+    const auto axisValue = [&](ith::GamepadAxis axis) -> std::optional<float> {
+        for (const ith::Event& event : events) {
+            if (event.type == ith::EventType::GamepadAxisMoved && event.gamepadAxis == axis) {
+                return event.axisValue;
+            }
+        }
+        return std::nullopt;
+    };
+    // Stick up is positive; the full range is clamped to -1..1, triggers to 0..1.
+    CHECK(axisValue(ith::GamepadAxis::LeftStickY) == 1.0f);
+    CHECK(axisValue(ith::GamepadAxis::RightTrigger) == 1.0f);
+
+    REQUIRE(platform.rumbleGamepad(id, 1.0f, 0.5f, 100).hasValue());
+    CHECK(output.low == 65535);
+    CHECK(output.high == 32768);
+    REQUIRE(platform.rumbleGamepadTriggers(id, 0.0f, 1.0f, 100).hasValue());
+    CHECK(output.rightTrigger == 65535);
+    REQUIRE(platform.setGamepadLed(id, 255, 128, 0).hasValue());
+    CHECK(output.red == 255);
+    CHECK(output.green == 128);
+
+    REQUIRE(SDL_DetachVirtualJoystick(id));
+    events = pump(platform);
+    const auto disconnected = std::ranges::find(events, ith::EventType::GamepadDisconnected, &ith::Event::type);
+    REQUIRE(disconnected != events.end());
+    CHECK(disconnected->device == id);
+
+    const ith::Expected<void> gone = platform.rumbleGamepad(id, 1.0f, 1.0f, 100);
+    REQUIRE_FALSE(gone.hasValue());
+    CHECK(gone.error().code == "platform.gamepad_not_found");
+    CHECK(platform.setGamepadLed(12345, 1, 2, 3).error().code == "platform.gamepad_not_found");
+}
+
 #ifdef ITH_ENABLE_ASSERTS
 TEST_CASE("Platform asserts its preconditions") {
     ith::Platform platform = createHeadless();

@@ -5,6 +5,7 @@
 # ith_add_module itself.
 
 add_subdirectory(ith/foundation)
+add_subdirectory(ith/platform_events)
 add_subdirectory(ith/platform)
 add_subdirectory(ith/jobs)
 add_subdirectory(ith/rhi)

@@ -18,3 +18,10 @@ deadlock:libdbus-1.so
 # used earlier (vkDestroyImage). Both accesses are inside the layer, on different Vulkan objects
 # that the RHI may use from different threads. The layer can't be instrumented or changed here.
 race:libVkLayer_khronos_validation.so
+
+# SDL's bundled HIDAPI, libusb backend (src/hidapi/libusb/hid.c), which SDL_INIT_GAMEPAD starts on
+# Linux. Its event thread loops on a plain int, shutdown_event_thread, that stop_event_thread sets
+# from SDL_Quit before joining the thread; the flag is not atomic, so TSan reports a race. The
+# join orders everything after it, and the flag only ends the loop. Third-party code from the
+# pinned SDL release (ADR-0012); it can't be changed here.
+race:stop_event_thread
