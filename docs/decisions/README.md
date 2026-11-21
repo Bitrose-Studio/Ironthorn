@@ -19,15 +19,16 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0012](0012-windowing-and-event-loop.md) | Windowing and the platform event loop | Accepted |
 | [0013](0013-input.md) | Input: events, state, routing and consumption | Accepted |
 | [0014](0014-ecs-storage-and-world.md) | ECS storage and the world | Accepted |
-| [0015](0015-asset-identity-and-reimport.md) | Asset identity and non-destructive reimport | Accepted |
+| [0015](0015-asset-identity-and-reimport.md) | Asset identity and non-destructive reimport | Accepted, amended by [0024](0024-asset-document-envelope-and-extension.md) |
 | [0016](0016-gameplay-model-on-the-ecs.md) | Gameplay model on the ECS | Accepted |
 | [0017](0017-runtime-and-editor-separation.md) | Runtime and editor separation | Accepted |
 | [0018](0018-reflection.md) | Reflection | Accepted, amended by [0019](0019-reflection-rules-corrected.md) |
 | [0019](0019-reflection-rules-corrected.md) | Reflection: rules corrected after the first implementation | Accepted |
-| [0020](0020-serialization-rules-completed.md) | Serialization: rules completed after the first implementation | Accepted |
+| [0020](0020-serialization-rules-completed.md) | Serialization: rules completed after the first implementation | Accepted, amended by [0024](0024-asset-document-envelope-and-extension.md) |
 | [0021](0021-rhi-device-structure-and-backend-modules.md) | RHI: device structure and backend modules | Accepted |
 | [0022](0022-gpu-minimum-features-completed.md) | GPU minimum features completed for the RHI (amends 0005) | Accepted |
 | [0023](0023-build-time-shaders-for-samples-and-tests.md) | Build-time shaders for samples and tests (amends 0011) | Accepted |
+| [0024](0024-asset-document-envelope-and-extension.md) | Asset documents: the envelope id and native asset extensions (amends 0015, 0020) | Accepted |
 
 ## Planned
 
