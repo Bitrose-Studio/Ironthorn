@@ -18,6 +18,8 @@ Every dependency is fetched at configure time as an archive pinned by URL and SH
 | [DirectX-Headers](https://github.com/microsoft/DirectX-Headers) | 1.620.2 | MIT | Direct3D 12 API declarations and GUIDs in the `rhi_d3d12` client module (Windows) | yes (compiled in) |
 | [D3D12 Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator) | 3.3.0 | MIT | GPU memory allocation in the `rhi_d3d12` client module (Windows) | yes |
 | [DirectX 12 Agility SDK](https://aka.ms/directx12agility) (NuGet `Microsoft.Direct3D.D3D12`) | 1.620.2 | Microsoft DirectX license terms (`LICENSE.txt` in the package): the redistributables `D3D12Core.dll` and `d3d12SDKLayers.dll` may be shipped with an application, solely for use on Windows, under the terms' distribution requirements | the Direct3D 12 runtime that players and editors load on Windows | `D3D12Core.dll` yes; `d3d12SDKLayers.dll` no (not in Shipping builds) |
+| [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | 1.4.363 (SDK 1.4.363.0) | Apache-2.0 OR MIT | Vulkan API declarations (C API only) in the `rhi_vulkan` client module | yes (compiled in) |
+| [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | 3.5.0 | MIT | GPU memory allocation in the `rhi_vulkan` client module | yes |
 
 Slang and DXC are tools: only the `shader_compiler` module links them, and only when
 `IRONTHORN_BUILD_TOOLS` is on (the default). Their release archives are downloaded at configure
@@ -54,3 +56,21 @@ license is not an open-source license: it allows use "solely for use on Windows"
 distribution only with significant added functionality, under terms that protect Microsoft at
 least as much as the license, and with an indemnity. **The redistribution terms must be checked
 before the first release** (ADR-0009). Its version always matches DirectX-Headers.
+
+The Vulkan dependencies are fetched with `IRONTHORN_BUILD_CLIENT` on, and only the `rhi_vulkan`
+module uses them. Only Vulkan-Headers' C API is used (`vulkan_core.h` and the window-system
+headers), without Vulkan-Hpp. VMA is one header, whose implementation `rhi_vulkan` compiles in one
+of its own source files, without exceptions or RTTI. No Vulkan library is linked: `rhi_vulkan`
+opens the system's Vulkan loader at run time. Games ship both MIT license texts (Vulkan-Headers
+is also offered under Apache-2.0) in their third-party notices.
+
+## Test tooling (not built, not shipped)
+
+These are installed on developer machines and CI runners, not fetched by CMake. The GPU tests
+use them when they are present.
+
+| Tool | Version | License | Used for | Shipped in games |
+|---|---|---|---|---|
+| [Mesa lavapipe](https://docs.mesa3d.org/drivers/llvmpipe.html) (Ubuntu `mesa-vulkan-drivers`) | the ubuntu-24.04 package (25.2.8 at the time of writing) | MIT (uses LLVM, Apache-2.0 WITH LLVM-exception) | CPU Vulkan driver for the `gpu`-labelled tests on Linux CI | no |
+| [Khronos validation layer](https://github.com/KhronosGroup/Vulkan-ValidationLayers) (from the [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home) Linux tarball) | 1.4.363.1, pinned by SHA-256 in CI | Apache-2.0 | API and synchronization validation in Vulkan tests (CI and developer machines) | no |
+| Vulkan loader (system: Ubuntu `libvulkan1`, driver-installed `vulkan-1.dll`) | system | Apache-2.0 | loaded at run time by `rhi_vulkan`; never linked or redistributed | no (the player's system provides it) |

@@ -14,9 +14,8 @@ What exists today:
   frames and swapchains like a real backend and drops the commands. It serves the tests, and the
   editor or player running without a GPU;
 - the **Direct3D 12 backend** (`rhi_d3d12`, Windows only; see [Direct3D 12](#direct3d-12));
+- the **Vulkan backend** (`rhi_vulkan`, Windows and Linux; see [Vulkan](#vulkan));
 - the **selection module** (`rhi_select`), whose `createDevice()` picks the backend.
-
-The Vulkan backend comes next.
 
 ## A frame
 
@@ -138,16 +137,16 @@ Mesh-shader pipelines and draws come with the renderer's mesh path (ADR-0021).
 
 - **GPU timing zones** (ADR-0009 rule 15) come with the profiler integration.
 - **Bindless shader checks** (rule 16): the RHI rejects shaders with more than 128 bytes of
-  constants, but can't yet see whether a shader declares resources outside the bindless model.
-  That needs the shader metadata of ADR-0011 rule 6, which the shader pipeline doesn't produce
-  yet.
-- **Validation layers** (rule 18): the Direct3D 12 backend loads the debug layer; Vulkan's
-  validation layers come with its backend. Shipping (Release) builds compile the Direct3D 12 debug
-  layer out and don't ship `d3d12SDKLayers.dll`.
-- **The Vulkan backend** (`rhi_vulkan`).
-- **Mesh shaders and ray tracing** commands, with the renderer paths that use them.
-- **D3D12MA's CPU allocations** go to the C runtime: its allocation callbacks aren't routed to an
-  engine allocator yet (ADR-0009 rule 3), because the engine has no general-purpose allocator.
+  constants. Whether a shader declares resources outside the bindless model is checked by the
+  backends (Direct3D 12 against its root signature, Vulkan by reading the SPIR-V's bindings), not
+  yet from the shader metadata of ADR-0011 rule 6, which the shader pipeline doesn't produce yet.
+- **Mesh shaders and ray tracing** commands, with the renderer paths that use them. Vulkan reports
+  the capabilities but doesn't enable their extensions until then.
+- **D3D12MA's and VMA's CPU allocations** go to the C runtime: their allocation callbacks aren't
+  routed to an engine allocator yet (ADR-0009 rule 3), because the engine has no general-purpose
+  allocator.
+- **Read-only depth attachments on Vulkan**: `beginRendering()` uses a depth texture in the
+  `DepthStencilWrite` layout.
 - **`LoadOp::DontCare`** is treated as `Load` on Direct3D 12: the contents are kept, which the
   load operation allows. A render target or depth buffer whose barrier comes from `Undefined`
   is discarded by that barrier.
@@ -168,7 +167,8 @@ The Direct3D 12 and Vulkan backends are separate modules, `rhi_d3d12` and `rhi_v
 keep their vendor libraries private. The renderer and the editor depend on `rhi` only.
 Applications call `createDevice()` (`ith/rhi_select/CreateDevice.h`), the one place that knows
 the backends: Direct3D 12 by default on Windows, otherwise Vulkan, `Backend::Null` for no GPU,
-and `rhi.backend_unavailable` for a backend this program doesn't have (Vulkan, for now).
+and `rhi.backend_unavailable` for a backend this program doesn't have (Direct3D 12 outside
+Windows) or that can't start. Vulkan can be chosen on Windows too.
 
 ## Direct3D 12
 
@@ -238,7 +238,94 @@ Tools** (Settings > System > Optional features, or
 Without it, a device that asks for validation fails with `rhi.backend_unavailable`. The debug
 layer's warnings and errors go to stderr; errors and corruption are asserted.
 
-### Testing on a GPU
+## Vulkan
+
+`rhi_vulkan` (`engine/ith/rhi_vulkan`) implements the backend on Vulkan 1.3 with the C API of
+[Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) and the
+[Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator), at the
+versions in `cmake/IronthornDependencies.cmake`. `createVulkanDevice()`
+(`ith/rhi_vulkan/VulkanDevice.h`) creates the device, on Windows and Linux.
+
+- **Loader.** Nothing links Vulkan: the backend opens the system's loader (`vulkan-1.dll`,
+  `libvulkan.so.1`) when a device is created and fetches the functions it calls through
+  `vkGetInstanceProcAddr` and `vkGetDeviceProcAddr` (`VulkanLoader.h`). Without the loader, or
+  without a driver, `createVulkanDevice()` fails with `rhi.backend_unavailable`.
+- **Adapters.** `AdapterPreference::HighPerformance` takes the first device, discrete GPUs before
+  integrated and virtual ones, that meets the minimum; `Software` takes a CPU implementation
+  such as lavapipe.
+- **Minimum features** (ADR-0005, amended by
+  [ADR-0022](../decisions/0022-gpu-minimum-features-completed.md)): Vulkan 1.3, dynamic rendering,
+  synchronization2, maintenance4, timeline semaphores, buffer device address, `drawIndirectCount`,
+  multi-draw indirect, independent blending, cube map arrays, robust buffer access (also with
+  update-after-bind descriptors), subgroup ballot and arithmetic in compute, and descriptor
+  indexing (runtime arrays, partially bound and update-after-bind descriptors, non-uniform
+  indexing) with 262,144 resource descriptors and 2,048 samplers per stage and in all pools. A
+  device without one fails with `rhi.unsupported_device`, naming each.
+- **Out-of-bounds buffer accesses** stay inside the buffer (robust buffer access): they can't
+  touch other memory, but a read past the end may return zero or another value from the same
+  buffer, and a write may land elsewhere in it. Shaders must not rely on the value.
+- **Binding.** One descriptor set, at set 0, bound to every command list. Its runtime arrays share
+  the device's bindless indices, as Direct3D 12's single heap does:
+
+  | Binding | Type | Holds | Slang |
+  |---|---|---|---|
+  | 0 | storage buffers | read and write indices of buffers | `[[vk::binding(0, 0)]] RWByteAddressBuffer buffers[];` (or `ByteAddressBuffer`) |
+  | 1 | sampled images | sampled indices | `[[vk::binding(1, 0)]] Texture2D textures[];` |
+  | 2 | storage images | storage indices | `[[vk::binding(2, 0)]] RWTexture2D<float4> images[];` |
+  | 3 | samplers | sampler indices | `[[vk::binding(3, 0)]] SamplerState samplers[];` |
+
+  One pipeline layout serves every pipeline: the set and 128 bytes of push constants for every
+  stage. A shader declares its constants as `[[vk::push_constant]] ConstantBuffer<T>` (the
+  attribute is ignored for DXIL, where the same block is the constant buffer at `b0, space0`);
+  both APIs see it at offset 0. A shader that binds anything else (another set or binding, or a
+  uniform buffer) fails with `rhi.invalid_shader`. Sampled descriptors are written for
+  `ShaderRead` (and `DepthStencilRead`) layouts, storage descriptors for `General` and
+  `ShaderWrite`. Read and write indices of a buffer are both storage-buffer descriptors: Vulkan
+  has no read-only descriptor of its own, so a shader that declares a read index as
+  `RWByteAddressBuffer` can write through it. Declare read indices as `ByteAddressBuffer`.
+- **Memory.** VMA allocates every buffer and texture. Upload and Readback buffers are host-coherent
+  and stay mapped. Every command list ends with a barrier that makes its writes visible to the
+  CPU, so a Readback buffer can be read once the frame that wrote it is done.
+- **Barriers** map one to one onto synchronization2. `RenderTarget` and `DepthStencilWrite` are
+  `VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL`, `ShaderRead` and `DepthStencilRead`
+  `VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL`, `General` and `ShaderWrite` `VK_IMAGE_LAYOUT_GENERAL`.
+- **Commands.** One graphics queue and one timeline semaphore carry the timeline. Each pooled
+  command list has its own command pool, reset when the list is begun. The viewport's height is
+  negative, so clip space is the same as on Direct3D 12 (ADR-0006). Markers are debug-utils
+  labels.
+- **Shaders** must be SPIR-V; anything else fails with `rhi.invalid_shader`. The backend takes
+  trusted SPIR-V from the engine's shader compiler, which validates it, and runs no SPIR-V
+  validator itself: it only reads the module's resource variables (`SpirvCheck.h`) and refuses
+  any outside the bindless set, by set, binding, type and array length. A fuzz target
+  (`ith_rhi_vulkan_spirv_fuzz`, Clang sanitizer builds) runs that reader on arbitrary bytes. The shader compiler
+  keeps entry-point names in SPIR-V, so `ShaderDesc::entryPoint` names the same function on both
+  APIs.
+- **Swapchains** are created from Win32, X11 (Xlib) and Wayland windows, with three images where the
+  surface allows. Where the window system fixes the image size (Win32, X11), the images take the
+  window's size, so pass the window's pixel size to `resizeSwapchain()`. Without `vsync` the
+  swapchain presents immediately or in mailbox mode where the surface allows. An acquired image
+  is waited for by a small submission that signals a second timeline semaphore, which the frame's
+  later submissions wait for.
+- **Device loss.** `VK_ERROR_DEVICE_LOST` from any call makes the device lost; where the driver has
+  `VK_EXT_device_fault`, the error carries its description, faulting addresses and vendor
+  reports. If signaling the timeline at the end of a frame fails, the device is treated as lost,
+  as on Direct3D 12. Waits for the GPU run in steps of a second that look for loss; acquiring a
+  swapchain image gives up with `rhi.backend_failure` after ten of them. Waits for an idle queue
+  (before a swapchain is recreated or destroyed, and after a loss) have no limit: Vulkan has no
+  bounded form of them, and a hung GPU ends them as a device loss. A failed presentation makes the
+  next `beginFrame()` recreate the swapchain. For
+  tests, `failNextVulkanSubmitForTesting()` makes the next queue submission fail with
+  `VK_ERROR_DEVICE_LOST`.
+- **Validation** (`DeviceDesc::validation`, on by default in Debug) enables the Khronos validation
+  layer when it is installed, with synchronization validation turned on through
+  `VK_EXT_layer_settings`. Its warnings and errors go to stderr with their message id (a VUID, or
+  `SYNC-HAZARD-...`); validation errors are asserted. Without the layer the device runs without
+  validation and says so on stderr. Shipping builds never load the layer. The layer comes with the
+  [Vulkan SDK](https://vulkan.lunarg.com/sdk/home).
+
+## Testing on a GPU
+
+### Direct3D 12
 
 `tests/rhi_d3d12` (CTest name `rhi_d3d12`, label `gpu`, Windows only) runs devices, resources,
 deferred destruction, clears read back from a render target, discarded render targets (also
@@ -253,7 +340,25 @@ environment variables change that:
 - `ITH_RHI_TEST_VALIDATION=off` runs it without the debug layer, on a machine without Graphics
   Tools.
 
-`tests/rhi_select` checks backend selection without a GPU, on every platform.
+### Vulkan
+
+`tests/rhi_vulkan` (CTest name `rhi_vulkan`, label `gpu`, Windows and Linux) runs the same
+cases on Vulkan, with the barriers synchronization validation asks for, plus a check that
+synchronization validation reports a missing barrier, simulated device loss in `submit()` and at
+the end of a frame, and a pipeline refused for binding outside the bindless set. The swapchain
+case runs on Windows only. It picks the fastest hardware GPU, or a software one (lavapipe) when
+there is none, with validation on where the layer is installed. Environment variables:
+
+- `ITH_RHI_TEST_ADAPTER=hardware` or `=software` uses only that kind of device;
+- `ITH_RHI_TEST_VALIDATION=off` runs it without the validation layer;
+- `ITH_RHI_TEST_REQUIRE_VULKAN=1` turns "no Vulkan loader, driver or device" from a skip into a
+  failure, and requires the validation layer (unless validation is off), for machines that must
+  run the suite.
+
+### Backend selection
+
+`tests/rhi_select` checks backend selection on every platform; its Vulkan case accepts a device or
+`rhi.backend_unavailable`/`rhi.unsupported_device`.
 
 ## Testing on the null backend
 

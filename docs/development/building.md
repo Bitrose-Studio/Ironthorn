@@ -76,6 +76,22 @@ cmake --build --preset linux-clang-dev
 ctest --preset linux-clang-dev
 ```
 
+The `rhi_vulkan` tests (label `gpu`) need a Vulkan driver and the loader; without them they
+report themselves skipped. Mesa's lavapipe runs them on the CPU:
+
+```sh
+sudo apt-get install mesa-vulkan-drivers libvulkan1 vulkan-tools
+```
+
+The validation layer, which the tests turn on with synchronization validation in Debug builds,
+comes from the [LunarG Vulkan SDK](https://vulkan.lunarg.com/sdk/home) (1.4.363.1, as in CI);
+Ubuntu 24.04's `vulkan-validationlayers` is too old. Environment variables:
+
+- `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json` uses only lavapipe, as CI does;
+- `VK_ADD_LAYER_PATH=<sdk>/share/vulkan/explicit_layer.d` finds the SDK's validation layer;
+- `ITH_RHI_TEST_ADAPTER=software` (or `hardware`) picks the kind of device;
+- `ITH_RHI_TEST_REQUIRE_VULKAN=1` makes a missing device or layer a failure instead of a skip.
+
 Sanitizer builds:
 
 ```sh
@@ -94,7 +110,8 @@ kernels with high ASLR entropy; lower it before configuring and building, as CI 
 `sudo sysctl vm.mmap_rnd_bits=28`. Clang sanitizer builds also build `ith_reflect_fuzz`, a
 libFuzzer target for the generator, and run it briefly as the `reflect_tool_fuzz` test, and
 `ith_serialization_text_fuzz` and `ith_serialization_binary_fuzz` for the serialization readers
-(the `serialization_text_fuzz` and `serialization_binary_fuzz` tests). Clang ASan builds compile
+(the `serialization_text_fuzz` and `serialization_binary_fuzz` tests), and `ith_rhi_vulkan_spirv_fuzz` for
+the Vulkan backend's SPIR-V check (the `rhi_vulkan_spirv_fuzz` test). Clang ASan builds compile
 all code with libFuzzer's coverage instrumentation (`-fsanitize=fuzzer-no-link`), so the fuzz
 targets get coverage feedback from the libraries they call; other executables don't link libFuzzer.
 
@@ -209,4 +226,5 @@ leg gets the display packages. Formatting and clang-tidy run only in the Windows
   for 10 frames on SDL's headless `offscreen` video driver.
 - Tests that need a GPU carry the `gpu` label. Skip them with `-ExcludeLabel gpu`
   (`ctest -LE gpu` on Linux). On Windows they run the Direct3D 12 backend on WARP, which every
-  Windows machine has, so verify and CI run them ([RHI guide](rhi.md#testing-on-a-gpu)).
+  Windows machine has, so verify and CI run them. The Vulkan tests run on the machine's GPU, or
+  report themselves skipped where no Vulkan driver is installed ([RHI guide](rhi.md#testing-on-a-gpu)).
