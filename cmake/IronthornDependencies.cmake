@@ -200,6 +200,34 @@ if(IRONTHORN_BUILD_CLIENT)
     FetchContent_MakeAvailable(sdl3)
 endif()
 
+# --- Vulkan: Vulkan-Headers (Apache-2.0 OR MIT), Vulkan Memory Allocator (MIT) ----------
+# For the rhi_vulkan client module (ADR-0009), on Windows and Linux. Only Vulkan's C API is used,
+# without prototypes: rhi_vulkan opens the system's Vulkan loader at run time and fetches its
+# functions itself, so no Vulkan library is linked. VMA is one header; rhi_vulkan compiles its
+# implementation in one of its own source files, with the engine's flags (no exceptions, no
+# RTTI). VMA's include directory has no CMakeLists.txt, so as SOURCE_SUBDIR it makes FetchContent
+# only unpack the archive. Both are private to rhi_vulkan.
+if(IRONTHORN_BUILD_CLIENT)
+    ith_declare_dependency(vulkan_headers
+        URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.4.363.0.tar.gz
+        SHA256 4a078be12bef21cfebc09d878b77a63cff9d68f899254a0b00d0e37ef73e7f7e)
+    ith_dependency_option(VULKAN_HEADERS_ENABLE_TESTS OFF)
+    ith_dependency_option(VULKAN_HEADERS_ENABLE_INSTALL OFF)
+    ith_dependency_option(VULKAN_HEADERS_ENABLE_MODULE OFF)
+
+    ith_declare_dependency(vma
+        URL https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/archive/refs/tags/v3.5.0.tar.gz
+        SHA256 c5f3db848fca9cb9726b41f256cc3007773321fa92a86d1e0902e66474e8a9e3
+        SOURCE_SUBDIR include)
+
+    FetchContent_MakeAvailable(vulkan_headers vma)
+
+    add_library(ith_vma INTERFACE)
+    add_library(ith::vma ALIAS ith_vma)
+    target_include_directories(ith_vma SYSTEM INTERFACE "${vma_SOURCE_DIR}/include")
+    target_link_libraries(ith_vma INTERFACE Vulkan::Headers)
+endif()
+
 # --- Direct3D 12: DirectX-Headers (MIT), D3D12 Memory Allocator (MIT), Agility SDK ---------
 # Windows only, for the rhi_d3d12 client module (ADR-0009). DirectX-Headers and the Agility SDK
 # have the same version and are always upgraded together: the headers declare exactly the API
