@@ -38,6 +38,14 @@ if(IRONTHORN_BUILD_TOOLS)
     ith_copy_shader_compiler_runtime(ith_shader_compiler_tests)
 endif()
 
+# The platform layer on SDL's headless "offscreen" driver. The tests also call SDL directly, to
+# list its compiled-in video drivers and to push events the offscreen driver can't produce.
+if(IRONTHORN_BUILD_CLIENT)
+    ith_add_test_suite(platform
+        SOURCES platform/PlatformTests.cpp
+        LIBRARIES ith::platform SDL3::SDL3-static Threads::Threads)
+endif()
+
 # The reflection generator, run in-process on fixture headers.
 ith_add_test_suite(reflect_tool
     SOURCES reflect_tool/ScannerTests.cpp

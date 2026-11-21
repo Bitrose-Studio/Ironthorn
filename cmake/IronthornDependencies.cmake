@@ -137,3 +137,38 @@ if(IRONTHORN_BUILD_TOOLS)
             VERBATIM)
     endfunction()
 endif()
+
+# --- SDL3: windows, events and input devices (zlib) --------------------------------------
+# Static and private to the platform module (ADR-0012); its headers appear only in platform
+# source files. Built from the maintainers' release archive with the engine's toolchain flags,
+# so sanitizer builds instrument it too. Audio, rendering, GPU, camera, tray, haptics, sensors
+# and OpenGL are off: audio has its own library, the RHI renders, and gamepad rumble and sensors
+# don't need SDL's haptic and sensor subsystems. On Linux, X11 and Wayland support are compiled
+# in only when their development packages are installed (docs/development/building.md).
+if(IRONTHORN_BUILD_CLIENT)
+    ith_declare_dependency(sdl3
+        URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.20/SDL3-3.4.20.tar.gz
+        SHA256 f3bb06f55bed9557227a700af2ea62e49497ebdf58037732a731a5fb3ef8581f)
+    ith_dependency_option(SDL_SHARED OFF)
+    ith_dependency_option(SDL_STATIC ON)
+    ith_dependency_option(SDL_TEST_LIBRARY OFF)
+    ith_dependency_option(SDL_TESTS OFF)
+    ith_dependency_option(SDL_EXAMPLES OFF)
+    ith_dependency_option(SDL_INSTALL OFF)
+    ith_dependency_option(SDL_UNINSTALL OFF)
+    ith_dependency_option(SDL_AUDIO OFF)
+    ith_dependency_option(SDL_RENDER OFF)
+    ith_dependency_option(SDL_GPU OFF)
+    ith_dependency_option(SDL_CAMERA OFF)
+    ith_dependency_option(SDL_TRAY OFF)
+    ith_dependency_option(SDL_HAPTIC OFF)
+    ith_dependency_option(SDL_SENSOR OFF)
+    ith_dependency_option(SDL_OPENGL OFF)
+    ith_dependency_option(SDL_OPENGLES OFF)
+    ith_dependency_option(SDL_VULKAN ON)
+    ith_dependency_option(SDL_DIALOG ON)
+    ith_dependency_option(SDL_POWER ON)
+    ith_dependency_option(SDL_JOYSTICK ON)
+    ith_dependency_option(SDL_HIDAPI ON)
+    FetchContent_MakeAvailable(sdl3)
+endif()

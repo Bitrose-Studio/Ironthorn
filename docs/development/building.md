@@ -48,7 +48,24 @@ reformatting separately from the tool change.
 
 ## Linux
 
-Requirements: Clang 18+ (or GCC 13+), CMake 3.28+, Ninja.
+Requirements: Clang 18+ (or GCC 13+), CMake 3.28+, Ninja, and, for the client modules (on by
+default), the display development packages below.
+
+SDL, which the `platform` module builds from source, compiles in its X11 and Wayland video
+drivers, IME, gamepad hotplug, HIDAPI's libusb backend and file dialog support only when
+their development headers are found at configure time; without them it silently builds without
+that support. On Ubuntu 24.04 or Debian:
+
+```sh
+sudo apt-get install pkg-config libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+    libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev libegl-dev \
+    libdecor-0-dev libdbus-1-dev libibus-1.0-dev libudev-dev libusb-1.0-0-dev
+```
+
+The `platform` test fails when the `x11` or `wayland` driver is missing. If you installed the
+packages after a first configure, delete the build directory (or at least `CMakeCache.txt` and
+`_deps/sdl3-build`) so SDL checks again. A build with `-DIRONTHORN_BUILD_CLIENT=OFF` (a dedicated
+server) needs none of them.
 
 ```sh
 cmake --preset linux-clang
@@ -75,7 +92,8 @@ kernels with high ASLR entropy; lower it before configuring and building, as CI 
 libFuzzer target for the generator, and run it briefly as the `reflect_tool_fuzz` test.
 
 Shipping link test ([ADR-0017](../decisions/0017-runtime-and-editor-separation.md)): the sample
-player and server built in Shipping without the modules they must not link, as CI does:
+players and server built in Shipping without the modules they must not link, as CI does. The
+player preset needs the display packages above; the server preset doesn't:
 
 ```sh
 cmake --preset linux-shipping-player && cmake --build --preset linux-shipping-player
@@ -115,7 +133,8 @@ its row. Editor and tools applications are left out of the default build of `Rel
 Building one by name in `Release` is not refused, but nothing ships it, and a test that runs one
 must not run in `Release`. Only applications are excluded: `tools` and `editor` modules and their
 tests still build and run in `Release`, so `verify` covers them in every configuration. The
-samples `minimal_player` and `minimal_server` (`samples/`) are the applications today.
+samples `minimal_player`, `window_player` and `minimal_server` (`samples/`) are the
+applications today.
 
 Sanitizer builds turn the tools off, and with them the editor, so `editor` modules get no
 sanitizer coverage. That needs a follow-up when the first editor module lands.
@@ -161,8 +180,8 @@ reflection generator ([reflection](reflection.md)), which uses only the standard
 
 Run it before every commit ([ADR-0002](../decisions/0002-git-workflow-and-versioning.md)). CI
 runs the same gate on Windows, with the same pinned tools, plus Linux Clang, GCC, ASan + UBSan
-and TSan builds, and the shipping link test in a plain Ubuntu container without display
-packages. Formatting and clang-tidy run only in the Windows job.
+and TSan builds, and the shipping link test in a plain Ubuntu container, where only the player
+leg gets the display packages. Formatting and clang-tidy run only in the Windows job.
 
 ## Tests
 
@@ -175,6 +194,7 @@ packages. Formatting and clang-tidy run only in the Windows job.
     `module_layering_refuses_*` tests run the same check on made-up module tables and pass when
     it reports the expected violation.
   - `changelog_fragments`: changelog fragment format.
-- Each sample application runs once as `sample_<name>` (label `sample`).
+- Each sample application runs once as `sample_<name>` (label `sample`). `window_player` runs
+  for 10 frames on SDL's headless `offscreen` video driver.
 - Tests that need a GPU carry the `gpu` label. Skip them with `-ExcludeLabel gpu`
   (`ctest -LE gpu` on Linux).
