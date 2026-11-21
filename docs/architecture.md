@@ -81,9 +81,12 @@ which records failed asserts so tests can check them.
   "Actor" is an authoring word for an entity with a transform. See [Editor](#editor).
 - **Levels** are assets, and a **world** instantiates them. Open worlds stream in cells.
 - **Prefabs** nest, and changes to a prefab reach the copies that haven't overridden them.
-- The gameplay framework provides game mode, game state, player controller, player state,
-  pawn/character, camera manager, and subsystems scoped to the engine, world, game instance and
-  local player.
+- Gameplay is ECS-native ([ADR-0016](decisions/0016-gameplay-model-on-the-ecs.md)): components
+  are data, systems hold the logic, resources hold world-wide and app-wide state, and relations
+  link entities. There is no runtime Actor class and no per-entity tick. Players are entities
+  with a `Player` component, control is a `Controls` relation, and match rules are systems plus
+  a rules resource. Unreal concepts such as pawn, controller and game mode map onto these, as
+  the ADR's table shows.
 - Gameplay tags and data assets are first-class.
 
 ## Editor
