@@ -32,6 +32,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0025](0025-job-system.md) | The job system (amends 0012) | Accepted, amended by [0026](0026-job-system-rules-corrected.md) |
 | [0026](0026-job-system-rules-corrected.md) | Job system: rules corrected after the first implementation (amends 0025) | Accepted |
 | [0027](0027-input-rules-completed.md) | Input: rules completed after the first implementation (amends 0012, 0013) | Accepted |
+| [0028](0028-render-graph-v1.md) | Render graph v1 | Accepted |
 
 ## Planned
 
