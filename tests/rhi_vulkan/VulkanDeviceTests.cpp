@@ -590,6 +590,68 @@ TEST_SUITE("rhi_vulkan.validation") {
     }
 }
 
+TEST_SUITE("rhi_vulkan.validation") {
+    // Barrier.h: a barrier out of Undefined still follows the texture's earlier writes, and must
+    // name them. Without the access, the layout change races the earlier depth write
+    // (SYNC-HAZARD-WRITE-AFTER-WRITE on stderr).
+    TEST_CASE("a depth buffer discarded after a depth write must name that write as the access before") {
+        if (!testValidation() || kShipping) {
+            MESSAGE("skipped: validation is off (Shipping, or ITH_RHI_TEST_VALIDATION=off)");
+            return;
+        }
+        std::optional<Device> device = makeDevice();
+        if (!device) {
+            return;
+        }
+        const TextureHandle depth = makeTexture(*device, {.width = 4,
+                                                          .height = 4,
+                                                          .format = Format::D32Float,
+                                                          .usage = TextureUsage::DepthStencil,
+                                                          .debugName = "Reused depth"});
+        for (const bool namesWrite : {true, false}) {
+            CAPTURE(namesWrite);
+            if (!beginFrame(*device)) {
+                return;
+            }
+            CommandList& list = device->openCommandList("Depth reuse");
+            list.barrier(TextureBarrier{.texture = depth,
+                                        .stagesBefore = PipelineStage::DepthStencil,
+                                        .accessBefore = Access::DepthStencilWrite,
+                                        .stagesAfter = PipelineStage::DepthStencil,
+                                        .accessAfter = Access::DepthStencilWrite,
+                                        .layoutBefore = TextureLayout::Undefined,
+                                        .layoutAfter = TextureLayout::DepthStencilWrite});
+            list.beginRendering({.depth = {.texture = depth}}); // the clear writes depth
+            list.endRendering();
+            {
+                const ith::test::AssertCapture capture;
+                list.barrier(TextureBarrier{.texture = depth,
+                                            .stagesBefore = PipelineStage::DepthStencil,
+                                            .accessBefore = namesWrite ? Access::DepthStencilWrite : Access::None,
+                                            .stagesAfter = PipelineStage::DepthStencil,
+                                            .accessAfter = Access::DepthStencilWrite,
+                                            .layoutBefore = TextureLayout::Undefined,
+                                            .layoutAfter = TextureLayout::DepthStencilWrite});
+                list.beginRendering({.depth = {.texture = depth}});
+                list.endRendering();
+                if (namesWrite) {
+                    CHECK(capture.count() == 0);
+                } else if (capture.count() == 0) {
+                    // The layer is not installed; machines that must have it set ITH_RHI_TEST_REQUIRE_VULKAN.
+                    MESSAGE("the validation layer reported nothing: it is probably not installed");
+                    CHECK(environment("ITH_RHI_TEST_REQUIRE_VULKAN") != "1");
+                } else {
+                    CHECK(capture.lastMessage().find("validation layer reported an error") != std::string::npos);
+                }
+            }
+            device->discard(list);
+            REQUIRE(device->endFrame().hasValue());
+        }
+        REQUIRE(device->waitIdle().hasValue());
+        device->destroy(depth);
+    }
+}
+
 TEST_SUITE("rhi_vulkan.device_loss") {
     TEST_CASE("a lost device reports device loss from submit and every later call") {
         std::optional<Device> device = makeDevice();

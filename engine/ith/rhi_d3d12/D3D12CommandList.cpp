@@ -188,7 +188,13 @@ void D3D12CommandList::barrier(const Barriers& barriers) {
         D3D12_TEXTURE_BARRIER native{};
         native.SyncBefore = before;
         native.SyncAfter = after;
-        native.AccessBefore = access(texture.accessBefore, before, textureReads(texture.layoutBefore, record));
+        // Direct3D 12 refuses an access before a barrier out of the undefined layout: the contents
+        // are discarded, so nothing needs flushing, and SyncBefore still waits for the earlier
+        // work. Vulkan needs that access to order the layout change after earlier writes, so
+        // callers name it, as for a depth buffer reused every frame.
+        native.AccessBefore = texture.layoutBefore == TextureLayout::Undefined
+                                  ? D3D12_BARRIER_ACCESS_NO_ACCESS
+                                  : access(texture.accessBefore, before, textureReads(texture.layoutBefore, record));
         native.AccessAfter = access(texture.accessAfter, after, textureReads(texture.layoutAfter, record));
         native.LayoutBefore = layout(texture.layoutBefore);
         native.LayoutAfter = layout(texture.layoutAfter);

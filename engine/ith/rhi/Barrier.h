@@ -65,7 +65,8 @@ inline constexpr bool kIsFlags<Access> = true;
 
 // The memory layout of a texture's subresources.
 enum class TextureLayout : std::uint8_t {
-    // The contents are discarded. Only as layoutBefore.
+    // The contents are discarded. Only as layoutBefore. A barrier out of it still orders the
+    // texture's earlier use: name that use's stages and accesses before (see TextureBarrier).
     Undefined,
     // Any access; slow, for rare cases.
     General,
@@ -111,6 +112,15 @@ struct SubresourceRange {
 };
 
 // Orders accesses to a range of one texture and changes its layout.
+//
+// Out of TextureLayout::Undefined the contents are discarded, but the layout change still writes
+// the texture, so it must come after the texture's earlier use: name that use's stages before,
+// and its accesses before where it wrote, e.g. DepthStencil and DepthStencilWrite for a depth
+// buffer reused every frame, or only Copy for a target last read by a copy. Vulkan needs the
+// written access to order the change (synchronization validation reports a write-after-write
+// hazard without it); Direct3D 12 waits for the stages and drops the access, which it refuses out
+// of an undefined layout. A texture not used before, or a swapchain image (acquiring it orders it
+// after its presentation), needs neither.
 struct TextureBarrier {
     TextureHandle texture;
     PipelineStage stagesBefore = PipelineStage::None;

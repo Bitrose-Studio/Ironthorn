@@ -667,6 +667,40 @@ TEST_SUITE("rhi_d3d12.textures") {
         discardThenClear(*device);
     }
 
+    // Regression: a barrier out of Undefined that names the earlier writes it follows, as Vulkan
+    // needs for a depth buffer reused every frame, was refused by the debug layer.
+    TEST_CASE("a target discarded after earlier writes, naming them, is cleared again") {
+        std::optional<Device> device = makeDevice();
+        if (!device) {
+            return;
+        }
+        const TextureHandle target = makeTexture(*device, targetDesc());
+        const BufferHandle readback = makeBuffer(*device, BufferUsage::CopyDst, MemoryType::Readback, 1024);
+        if (!beginFrame(*device)) {
+            return;
+        }
+        CommandList& first = device->openCommandList("First clear");
+        first.barrier(toRenderTarget(target));
+        const std::array green{ColorAttachment{.texture = target, .clearColor = {0.0f, 1.0f, 0.0f, 1.0f}}};
+        first.beginRendering({.colors = green});
+        first.endRendering();
+        REQUIRE(device->submit(first).hasValue());
+        CommandList& second = device->openCommandList("Discard and clear");
+        second.barrier(TextureBarrier{.texture = target,
+                                      .stagesBefore = PipelineStage::ColorOutput,
+                                      .accessBefore = Access::RenderTargetWrite,
+                                      .stagesAfter = PipelineStage::ColorOutput,
+                                      .accessAfter = Access::RenderTargetWrite,
+                                      .layoutBefore = TextureLayout::Undefined,
+                                      .layoutAfter = TextureLayout::RenderTarget});
+        const std::array red{ColorAttachment{.texture = target, .clearColor = {1.0f, 0.0f, 0.0f, 1.0f}}};
+        second.beginRendering({.colors = red});
+        second.endRendering();
+        readBack(second, target, readback);
+        finish(*device, second);
+        checkTexel(device->mappedMemory(readback), 0, 0, {255, 0, 0, 255});
+    }
+
     TEST_CASE("the discard and clear pass GPU-based validation") {
         if (!testValidation()) {
             MESSAGE("skipped: validation is off (ITH_RHI_TEST_VALIDATION=off)");
