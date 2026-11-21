@@ -13,7 +13,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0006](0006-math-and-coordinate-conventions.md) | Math library and coordinate conventions | Accepted |
 | [0007](0007-logging-and-profiling.md) | Logging and profiling | Accepted |
 | [0008](0008-editor-familiar-to-unreal-developers.md) | An editor familiar to Unreal Engine developers | Accepted |
-| [0009](0009-rhi.md) | Rendering hardware interface over Vulkan and Direct3D 12 | Accepted |
+| [0009](0009-rhi.md) | Rendering hardware interface over Vulkan and Direct3D 12 | Accepted, amended by [0021](0021-rhi-device-structure-and-backend-modules.md) |
 | [0010](0010-serialization.md) | Serialization formats and versioning | Accepted, amended by [0020](0020-serialization-rules-completed.md) |
 | [0011](0011-shader-language-and-pipeline.md) | Shader language and pipeline | Accepted |
 | [0012](0012-windowing-and-event-loop.md) | Windowing and the platform event loop | Accepted |
@@ -25,6 +25,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0018](0018-reflection.md) | Reflection | Accepted, amended by [0019](0019-reflection-rules-corrected.md) |
 | [0019](0019-reflection-rules-corrected.md) | Reflection: rules corrected after the first implementation | Accepted |
 | [0020](0020-serialization-rules-completed.md) | Serialization: rules completed after the first implementation | Accepted |
+| [0021](0021-rhi-device-structure-and-backend-modules.md) | RHI: device structure and backend modules | Accepted |
 
 ## Planned
 
