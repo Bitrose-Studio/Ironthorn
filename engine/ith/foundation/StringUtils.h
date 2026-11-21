@@ -39,10 +39,17 @@ std::string toLowerAscii(std::string_view text);
 // exactly.
 bool equalsIgnoreCaseAscii(std::string_view a, std::string_view b);
 
+// True when `text` ends with `suffix`, treating ASCII letters of either case as equal.
+bool endsWithIgnoreCaseAscii(std::string_view text, std::string_view suffix);
+
 // Returns a copy of `text` with every non-overlapping occurrence of `from` replaced by `to`,
 // scanning left to right. Precondition (asserted): `from` is not empty. If it is, `text` is
 // returned unchanged.
 std::string replaceAll(std::string_view text, std::string_view from, std::string_view to);
+
+// True when `text` is well-formed UTF-8 (RFC 3629): no overlong forms, no surrogates (U+D800 to
+// U+DFFF), nothing above U+10FFFF and no truncated sequence. The empty string is valid.
+bool isValidUtf8(std::string_view text) noexcept;
 
 // Returns the value (0-15) of a hexadecimal digit in either letter case, or -1 when `character`
 // is not a hexadecimal digit.

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 
 namespace ith {
 namespace {
@@ -75,6 +76,51 @@ std::string replaceAll(std::string_view text, std::string_view from, std::string
         result.append(to);
         begin = match + from.size();
     }
+}
+
+bool endsWithIgnoreCaseAscii(std::string_view text, std::string_view suffix) {
+    return text.size() >= suffix.size() && equalsIgnoreCaseAscii(text.substr(text.size() - suffix.size()), suffix);
+}
+
+bool isValidUtf8(std::string_view text) noexcept {
+    std::size_t index = 0;
+    while (index < text.size()) {
+        const auto lead = static_cast<unsigned char>(text[index]);
+        if (lead < 0x80) {
+            ++index;
+            continue;
+        }
+        std::size_t length = 0;
+        std::uint32_t value = 0;
+        if (lead >= 0xc2 && lead <= 0xdf) {
+            length = 2;
+            value = lead & 0x1fu;
+        } else if (lead >= 0xe0 && lead <= 0xef) {
+            length = 3;
+            value = lead & 0x0fu;
+        } else if (lead >= 0xf0 && lead <= 0xf4) {
+            length = 4;
+            value = lead & 0x07u;
+        } else {
+            return false; // a continuation byte, an overlong 2-byte lead (C0, C1) or F5 to FF
+        }
+        if (text.size() - index < length) {
+            return false;
+        }
+        for (std::size_t offset = 1; offset < length; ++offset) {
+            const auto next = static_cast<unsigned char>(text[index + offset]);
+            if ((next & 0xc0u) != 0x80u) {
+                return false;
+            }
+            value = (value << 6u) | (next & 0x3fu);
+        }
+        const bool overlong = (length == 3 && value < 0x800) || (length == 4 && value < 0x10000);
+        if (overlong || (value >= 0xd800 && value <= 0xdfff) || value > 0x10ffff) {
+            return false;
+        }
+        index += length;
+    }
+    return true;
 }
 
 } // namespace ith

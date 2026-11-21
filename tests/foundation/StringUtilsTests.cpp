@@ -96,3 +96,46 @@ TEST_SUITE("foundation.strings") {
     }
 #endif
 }
+
+TEST_SUITE("foundation.strings.utf8") {
+    TEST_CASE("isValidUtf8 accepts well-formed UTF-8") {
+        CHECK(ith::isValidUtf8(""));
+        CHECK(ith::isValidUtf8("plain ASCII"));
+        CHECK(ith::isValidUtf8("\xc3\x89"
+                               "corce"));                            // U+00C9
+        CHECK(ith::isValidUtf8("\xd0\x9a\xd0\xbe\xd1\x80\xd0\xb0")); // Cyrillic
+        CHECK(ith::isValidUtf8("\xe2\x82\xac"));                     // U+20AC
+        CHECK(ith::isValidUtf8("\xef\xbf\xbf"));                     // U+FFFF
+        CHECK(ith::isValidUtf8("\xf0\x9f\x98\x80"));                 // U+1F600
+        CHECK(ith::isValidUtf8("\xf4\x8f\xbf\xbf"));                 // U+10FFFF
+        CHECK(ith::isValidUtf8(std::string_view("a\0b", 3)));
+    }
+
+    TEST_CASE("isValidUtf8 refuses malformed sequences") {
+        CHECK_FALSE(ith::isValidUtf8("\x80"));             // lone continuation byte
+        CHECK_FALSE(ith::isValidUtf8("\xc0\xaf"));         // overlong '/'
+        CHECK_FALSE(ith::isValidUtf8("\xc1\xbf"));         // overlong
+        CHECK_FALSE(ith::isValidUtf8("\xe0\x80\xaf"));     // overlong, 3 bytes
+        CHECK_FALSE(ith::isValidUtf8("\xf0\x80\x80\xaf")); // overlong, 4 bytes
+        CHECK_FALSE(ith::isValidUtf8("\xed\xa0\x80"));     // U+D800, a surrogate
+        CHECK_FALSE(ith::isValidUtf8("\xed\xbf\xbf"));     // U+DFFF
+        CHECK_FALSE(ith::isValidUtf8("\xf4\x90\x80\x80")); // above U+10FFFF
+        CHECK_FALSE(ith::isValidUtf8("\xf5\x80\x80\x80")); // invalid lead
+        CHECK_FALSE(ith::isValidUtf8("\xff"));
+        CHECK_FALSE(ith::isValidUtf8("\xc3"));         // truncated
+        CHECK_FALSE(ith::isValidUtf8("\xe2\x82"));     // truncated
+        CHECK_FALSE(ith::isValidUtf8("\xe2\x28\xa1")); // bad continuation
+        CHECK_FALSE(ith::isValidUtf8("ok\xfe"));
+    }
+}
+
+TEST_SUITE("foundation.strings.suffix") {
+    TEST_CASE("endsWithIgnoreCaseAscii compares ASCII letters without case") {
+        CHECK(ith::endsWithIgnoreCaseAscii("Rock.PNG", ".png"));
+        CHECK(ith::endsWithIgnoreCaseAscii("Rock.png", ".PNG"));
+        CHECK(ith::endsWithIgnoreCaseAscii("x", ""));
+        CHECK_FALSE(ith::endsWithIgnoreCaseAscii("png", ".png"));
+        CHECK_FALSE(ith::endsWithIgnoreCaseAscii("Rock.pnf", ".png"));
+        CHECK_FALSE(ith::endsWithIgnoreCaseAscii("\xc3\x89", "\xc3\xa9")); // only ASCII is folded
+    }
+}
