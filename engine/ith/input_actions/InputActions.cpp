@@ -18,6 +18,14 @@
 namespace ith {
 namespace {
 
+// The first position of `id` in `path`. A predicate rather than std::ranges::find: the MSVC
+// standard library (14.52 and later) sends std::find over 16-byte trivially comparable values such
+// as AssetId to a vectorized search that supports only 1-, 2-, 4- and 8-byte elements, which
+// fails to compile under clang-cl ("unexpected size").
+std::vector<AssetId>::iterator firstOf(std::vector<AssetId>& path, AssetId id) {
+    return std::ranges::find_if(path, [id](AssetId entry) { return entry == id; });
+}
+
 // Digital keys of a player: keyboard keys, then mouse buttons, then gamepad buttons.
 constexpr std::size_t kMouseButtonBase = kKeyTableSize;
 constexpr std::size_t kMouseButtonCount = 8;
@@ -864,7 +872,7 @@ void orderDependencies(TablePlan& plan) {
             if (mark == marks.end()) {
                 self(self, next);
             } else if (mark->second == Mark::Active) {
-                plan.onCycle.insert(std::ranges::find(path, next), path.end());
+                plan.onCycle.insert(firstOf(path, next), path.end());
             }
         }
         path.pop_back();
