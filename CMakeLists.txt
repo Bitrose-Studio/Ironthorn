@@ -15,7 +15,10 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(IRONTHORN_BUILD_TESTS "Build the unit and integration tests" ON)
+# Module kinds (ADR-0017): runtime modules are always built; these options build the others.
+option(IRONTHORN_BUILD_CLIENT "Build the client modules, which a dedicated server doesn't run (window, renderer, audio, game UI)" ON)
 option(IRONTHORN_BUILD_TOOLS "Build the tools-only modules, such as the shader compiler (downloads Slang and DXC)" ON)
+option(IRONTHORN_BUILD_EDITOR "Build the editor modules and applications (needs the client and tools modules)" ON)
 option(IRONTHORN_WARNINGS_AS_ERRORS "Treat warnings in Ironthorn targets as errors" OFF)
 option(IRONTHORN_ENABLE_SANITIZERS "Build with AddressSanitizer and UndefinedBehaviorSanitizer (Clang/GCC)" OFF)
 option(IRONTHORN_ENABLE_TSAN "Build with ThreadSanitizer (Clang/GCC, not with IRONTHORN_ENABLE_SANITIZERS)" OFF)
@@ -25,6 +28,12 @@ option(IRONTHORN_ENABLE_TSAN "Build with ThreadSanitizer (Clang/GCC, not with IR
 if(IRONTHORN_BUILD_TOOLS AND (IRONTHORN_ENABLE_SANITIZERS OR IRONTHORN_ENABLE_TSAN))
     message(STATUS "Sanitizers are on: building without the tools (IRONTHORN_BUILD_TOOLS=OFF).")
     set(IRONTHORN_BUILD_TOOLS OFF)
+endif()
+
+# Editor modules may depend on every kind, so the editor is built only with the client and tools.
+if(IRONTHORN_BUILD_EDITOR AND NOT (IRONTHORN_BUILD_CLIENT AND IRONTHORN_BUILD_TOOLS))
+    message(STATUS "The client or tools modules are off: building without the editor (IRONTHORN_BUILD_EDITOR=OFF).")
+    set(IRONTHORN_BUILD_EDITOR OFF)
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -51,6 +60,7 @@ endif()
 
 add_subdirectory(engine)
 add_subdirectory(tools)
+add_subdirectory(samples)
 
 if(IRONTHORN_BUILD_TESTS)
     add_subdirectory(tests)

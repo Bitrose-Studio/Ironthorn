@@ -60,8 +60,8 @@ if ($Command -eq 'tidy' -and -not $PSBoundParameters.ContainsKey('Preset')) {
     $Preset = 'windows-clang'
 }
 
-$sourceDirectories = @('engine', 'editor', 'tests', 'tools')
-$lintDirectories = @('engine', 'editor', 'tools')
+$sourceDirectories = @('engine', 'editor', 'samples', 'tests', 'tools')
+$lintDirectories = @('engine', 'editor', 'samples', 'tools')
 
 function Get-BuildDir([string]$PresetName) {
     return Join-Path $repoRoot "build\$PresetName"

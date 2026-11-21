@@ -49,6 +49,16 @@ Rules ([ADR-0004](decisions/0004-modules-and-layering.md)):
 - A module depends only on modules of its own or a lower layer, without cycles. A test checks
   this.
 - The runtime never depends on the editor.
+- Every module also has a **kind** ([ADR-0017](decisions/0017-runtime-and-editor-separation.md)):
+  `runtime` (every game process), `client` (not on a dedicated server), `tools` (offline
+  processing) or `editor`. `runtime` and `client` modules live in the layers `foundation` to
+  `framework`, `tools` and `editor` modules in the `editor` layer. `runtime` depends only on
+  `runtime`, `client` on `runtime` and `client`, `tools` on `runtime` and `tools`, `editor` on
+  anything. The same test checks this.
+- Executables are **applications** of one target: the editor links every kind, the player
+  `runtime` and `client`, the dedicated server only `runtime`, tools `runtime` and `tools`. The
+  test checks each application's whole dependency closure, and a CI job builds the sample player
+  and server in Shipping with the other kinds turned off.
 - The renderer, audio, physics and UI don't own the scene. They read data extracted from it
   each frame.
 - No third-party or graphics-backend types appear in public module headers.
@@ -59,16 +69,20 @@ Foundation conventions: math types and coordinates follow
 
 ## Modules today
 
-| Module | Layer | What it is for | What it must not do |
-|---|---|---|---|
-| [`foundation`](../engine/ith/foundation) | foundation | Asserts (`ITH_ASSERT`, `ITH_VERIFY`, `ITH_FATAL`) with a replaceable handler; `ith::Expected<T, E>` for failures without exceptions; the engine version; string helpers; `Stopwatch` and `FixedTimestep`; FNV-1a hashing; `ith::Uuid`; the `LinearAllocator` arena and `ObjectPool<T>`; `Mutex` and `MutexLock` with Clang thread-safety annotations (`ITH_GUARDED_BY` and friends); compiler and sanitizer hooks (`Compiler.h`) | Depend on anything but the C++ standard library; hold engine state |
-| [`reflection`](../engine/ith/reflection) | core | Generated reflection ([ADR-0018](decisions/0018-reflection.md), [guide](development/reflection.md)): the `ITH_TYPE`, `ITH_FIELD` and `ITH_ENUM` annotations; `TypeInfo` and `FieldInfo` records with stable FNV-1a ids, layout, value functions (construct, copy, move, destroy, field-wise equality), flags and attributes; `ith::typeOf<T>()` with hand-written leaf types and `std::array`, `std::vector`, `std::optional`; `TypeRegistry` with lookup by id, name and `FormerName`. Modules opt in with `REFLECT` in `ith_add_module` | Use RTTI or static initializers; register types after startup; hold editor-only data in runtime types |
-| [`ecs`](../engine/ith/ecs) | core | The entity-component system ([ADR-0014](decisions/0014-ecs-storage-and-world.md), [guide](development/ecs.md)), first slice: `ith::World` with a stable address, `ith::Entity` 64-bit generational handles (index, generation, world id) with stale-handle checks; archetype tables with aligned type-erased columns, swap-remove and cached add/remove transitions; constant-time `has`; typed queries (`query<T, const U>().forEach`) with per-world caches of matching archetypes. Component types are reflected structs with the `Component` role, identified by their reflection type id | Expose its storage types in its API; reset generations; allow structural changes while a query iterates; depend on an ECS library |
-| [`shader_compiler`](../engine/ith/shader_compiler) | editor (tools only) | `ith::ShaderCompiler`: compiles a self-contained Slang source for one entry point and stage to SPIR-V 1.6 or to signed DXIL Shader Model 6.6, through Slang's library API and DXC, with the compiler diagnostics as the error ([ADR-0011](decisions/0011-shader-language-and-pipeline.md)). Built only with `IRONTHORN_BUILD_TOOLS` | Be linked by a game or any runtime module; expose Slang types |
+| Module | Layer | Kind | What it is for | What it must not do |
+|---|---|---|---|---|
+| [`foundation`](../engine/ith/foundation) | foundation | runtime | Asserts (`ITH_ASSERT`, `ITH_VERIFY`, `ITH_FATAL`) with a replaceable handler; `ith::Expected<T, E>` for failures without exceptions; the engine version; string helpers; `Stopwatch` and `FixedTimestep`; FNV-1a hashing; `ith::Uuid`; the `LinearAllocator` arena and `ObjectPool<T>`; `Mutex` and `MutexLock` with Clang thread-safety annotations (`ITH_GUARDED_BY` and friends); compiler and sanitizer hooks (`Compiler.h`) | Depend on anything but the C++ standard library; hold engine state |
+| [`reflection`](../engine/ith/reflection) | core | runtime | Generated reflection ([ADR-0018](decisions/0018-reflection.md), [guide](development/reflection.md)): the `ITH_TYPE`, `ITH_FIELD` and `ITH_ENUM` annotations; `TypeInfo` and `FieldInfo` records with stable FNV-1a ids, layout, value functions (construct, copy, move, destroy, field-wise equality), flags and attributes; `ith::typeOf<T>()` with hand-written leaf types and `std::array`, `std::vector`, `std::optional`; `TypeRegistry` with lookup by id, name and `FormerName`. Modules opt in with `REFLECT` in `ith_add_module` | Use RTTI or static initializers; register types after startup; hold editor-only data in runtime types |
+| [`ecs`](../engine/ith/ecs) | core | runtime | The entity-component system ([ADR-0014](decisions/0014-ecs-storage-and-world.md), [guide](development/ecs.md)), first slice: `ith::World` with a stable address, `ith::Entity` 64-bit generational handles (index, generation, world id) with stale-handle checks; archetype tables with aligned type-erased columns, swap-remove and cached add/remove transitions; constant-time `has`; typed queries (`query<T, const U>().forEach`) with per-world caches of matching archetypes. Component types are reflected structs with the `Component` role, identified by their reflection type id | Expose its storage types in its API; reset generations; allow structural changes while a query iterates; depend on an ECS library |
+| [`shader_compiler`](../engine/ith/shader_compiler) | editor | tools | `ith::ShaderCompiler`: compiles a self-contained Slang source for one entry point and stage to SPIR-V 1.6 or to signed DXIL Shader Model 6.6, through Slang's library API and DXC, with the compiler diagnostics as the error ([ADR-0011](decisions/0011-shader-language-and-pipeline.md)). Built only with `IRONTHORN_BUILD_TOOLS` | Be linked by a game or any runtime module; expose Slang types |
 
 Build tools in `tools/` run on the host during the build and are linked into nothing.
 `ith_reflect` scans the annotated headers of each module that sets `REFLECT` and writes its
 `<module>.reflect.cpp`; it needs no third-party code and is built in every configuration.
+
+Sample applications in `samples/`: `minimal_player` (player) and `minimal_server` (dedicated
+server) create an empty world and exit. They give the target check and the shipping link test
+a player and a server to build.
 
 Test support (`tests/support`) provides the doctest entry point and `ith::test::AssertCapture`,
 which records failed asserts so tests can check them.

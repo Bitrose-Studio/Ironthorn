@@ -116,3 +116,66 @@ set_target_properties(ith_ecs_benchmark PROPERTIES
     COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
 add_test(NAME ecs_benchmark COMMAND ith_ecs_benchmark)
 set_tests_properties(ecs_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
+
+# The module_layering check must refuse what ADR-0004 and ADR-0017 forbid. Each case runs the
+# check on a made-up module table (fixture sources in tests/layering) and passes when the
+# expected violation is reported.
+function(ith_add_layering_failure_test name)
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "MODULES;APPLICATIONS;EXPECT" "")
+    string(REPLACE ";" "," layers "${ITH_LAYERS}")
+    add_test(NAME module_layering_refuses_${name}
+        COMMAND ${CMAKE_COMMAND}
+            "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}"
+            "-DMODULE_TABLE=${arg_MODULES}"
+            "-DAPPLICATION_TABLE=${arg_APPLICATIONS}"
+            "-DLAYERS=${layers}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/CheckModuleLayering.cmake")
+    set_tests_properties(module_layering_refuses_${name} PROPERTIES
+        LABELS "lint"
+        PASS_REGULAR_EXPRESSION "${arg_EXPECT}")
+endfunction()
+
+ith_add_layering_failure_test(upward_layer
+    MODULES "low:core:runtime=high|high:framework:runtime="
+    EXPECT "low [(]layer 2[)] depends on high [(]layer 4[)], a higher layer")
+ith_add_layering_failure_test(cycle
+    MODULES "a:core:runtime=b|b:core:runtime=a"
+    EXPECT "a depends on itself through a cycle")
+ith_add_layering_failure_test(runtime_on_tools
+    MODULES "baker:editor:tools=|net:core:runtime=baker"
+    EXPECT "net [(]runtime[)] depends on baker [(]tools[)]")
+ith_add_layering_failure_test(runtime_on_client
+    MODULES "net:core:runtime=renderer|renderer:core:client="
+    EXPECT "net [(]runtime[)] depends on renderer [(]client[)]")
+ith_add_layering_failure_test(tools_on_client
+    MODULES "renderer:engine:client=|cooker:editor:tools=renderer"
+    EXPECT "cooker [(]tools[)] depends on renderer [(]client[)]")
+ith_add_layering_failure_test(client_on_editor
+    MODULES "outliner:editor:editor=|renderer:engine:client=outliner"
+    EXPECT "renderer [(]client[)] depends on outliner [(]editor[)]")
+ith_add_layering_failure_test(tools_kind_below_editor_layer
+    MODULES "baker:core:tools="
+    EXPECT "baker is a tools module in the core layer, but tools modules belong in the editor layer")
+ith_add_layering_failure_test(runtime_kind_in_editor_layer
+    MODULES "net:editor:runtime="
+    EXPECT "net is a runtime module in the editor layer, but runtime modules belong in the layers below editor")
+ith_add_layering_failure_test(server_links_client
+    MODULES "net:core:runtime=|renderer:engine:client=net|gameplay:framework:client=renderer"
+    APPLICATIONS "game_server:server:=gameplay"
+    EXPECT "application game_server [(]server[)] links renderer [(]client[)]")
+ith_add_layering_failure_test(player_links_tools
+    MODULES "net:core:runtime=|baker:editor:tools=net"
+    APPLICATIONS "game_player:player:=net,baker"
+    EXPECT "application game_player [(]player[)] links baker [(]tools[)]")
+ith_add_layering_failure_test(tools_links_editor
+    MODULES "outliner:editor:editor="
+    APPLICATIONS "cooker:tools:=outliner"
+    EXPECT "application cooker [(]tools[)] links outliner [(]editor[)]")
+ith_add_layering_failure_test(application_include
+    MODULES "net:core:runtime=|renderer:engine:client=net"
+    APPLICATIONS "game_server:server:tests/layering/ServerIncludesRenderer.cpp=net"
+    EXPECT "tests/layering/ServerIncludesRenderer.cpp includes module 'renderer', which application game_server does not depend on")
+ith_add_layering_failure_test(application_unknown_module
+    MODULES "net:core:runtime="
+    APPLICATIONS "game_server:server:=net,physics"
+    EXPECT "application game_server links unknown module 'physics'")

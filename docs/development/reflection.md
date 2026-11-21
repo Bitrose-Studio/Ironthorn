@@ -26,8 +26,10 @@ ith_add_module(gameplay
     REFLECT)
 ```
 
-`REFLECT` adds a dependency on the `reflection` module. The generator reruns only when one of
-the module's headers changes and rewrites the generated file only when its content changes.
+`REFLECT` adds a dependency on the `reflection` module and passes the module's `KIND`
+([ADR-0017](../decisions/0017-runtime-and-editor-separation.md)) to the generator, which allows
+`EditorOnly` only in `editor` modules. The generator reruns only when one of the module's
+headers changes and rewrites the generated file only when its content changes.
 
 ## Annotating a type
 

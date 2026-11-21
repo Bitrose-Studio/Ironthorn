@@ -9,7 +9,7 @@ Requirements:
 
 ```powershell
 ./scripts/bootstrap.ps1          # once: pinned CMake, Ninja, clang-format and clang-tidy into .tools/
-./scripts/dev.ps1 build          # MSVC, development configuration (RelWithDebInfo)
+./scripts/dev.ps1 build          # MSVC, Development configuration (RelWithDebInfo)
 ./scripts/dev.ps1 test
 ./scripts/dev.ps1 verify         # the pre-commit gate (see below)
 ```
@@ -74,14 +74,65 @@ kernels with high ASLR entropy; lower it before configuring and building, as CI 
 `sudo sysctl vm.mmap_rnd_bits=28`. Clang sanitizer builds also build `ith_reflect_fuzz`, a
 libFuzzer target for the generator, and run it briefly as the `reflect_tool_fuzz` test.
 
+Shipping link test ([ADR-0017](../decisions/0017-runtime-and-editor-separation.md)): the sample
+player and server built in Shipping without the modules they must not link, as CI does:
+
+```sh
+cmake --preset linux-shipping-player && cmake --build --preset linux-shipping-player
+cmake --preset linux-shipping-server && cmake --build --preset linux-shipping-server
+```
+
+## Module kinds and build options
+
+Every module has a kind besides its layer
+([ADR-0017](../decisions/0017-runtime-and-editor-separation.md)), declared with
+`ith_add_module(<name> LAYER <layer> KIND <kind> …)`; the default is `runtime`.
+
+| Kind | Holds | Layers | May depend on | Built when |
+|---|---|---|---|---|
+| `runtime` | code every game process needs | `foundation` to `framework` | `runtime` | always |
+| `client` | code a dedicated server doesn't run | `foundation` to `framework` | `runtime`, `client` | `IRONTHORN_BUILD_CLIENT` |
+| `tools` | offline processing, never in a game | `editor` | `runtime`, `tools` | `IRONTHORN_BUILD_TOOLS` |
+| `editor` | the editor | `editor` | any kind | `IRONTHORN_BUILD_EDITOR` |
+
+The three options are on by default. A module whose kind is off is not declared at all, so
+anything that links it fails to configure. The editor needs the client and tools modules:
+when either is off, CMake turns `IRONTHORN_BUILD_EDITOR` off too and says so.
+
+Executables are applications, declared with
+`ith_add_application(<name> KIND <target> SOURCES … MODULES …)`:
+
+| Target | May link kinds | Configurations | Skipped when |
+|---|---|---|---|
+| `editor` | all | Debug, Development | `IRONTHORN_BUILD_EDITOR` is off |
+| `player` | `runtime`, `client` | Debug, Development, Shipping | `IRONTHORN_BUILD_CLIENT` is off |
+| `server` | `runtime` | Debug, Development, Shipping | never |
+| `tools` | `runtime`, `tools` | Debug, Development | `IRONTHORN_BUILD_TOOLS` is off |
+
+The `module_layering` test checks the whole dependency closure of each application against
+its row. Editor and tools applications are left out of the default build of `Release`
+(Shipping): the `all` target of Ninja Multi-Config, the solution build of Visual Studio.
+Building one by name in `Release` is not refused, but nothing ships it, and a test that runs one
+must not run in `Release`. Only applications are excluded: `tools` and `editor` modules and their
+tests still build and run in `Release`, so `verify` covers them in every configuration. The
+samples `minimal_player` and `minimal_server` (`samples/`) are the applications today.
+
+Sanitizer builds turn the tools off, and with them the editor, so `editor` modules get no
+sanitizer coverage. That needs a follow-up when the first editor module lands.
+
+Each application is meant to call the registration function of every module it links, from a
+source file generated out of its module list (ADR-0017 rule 5). That is deferred until the first
+module registration function exists ([ADR-0016](../decisions/0016-gameplay-model-on-the-ecs.md));
+the samples register nothing today.
+
 ## Tools and their dependencies
 
-`IRONTHORN_BUILD_TOOLS` (on by default) builds the tools-only modules, which the editor and the
+`IRONTHORN_BUILD_TOOLS` (on by default) builds the `tools` modules, which the editor and the
 cooker link and games never do. Today that is `shader_compiler`. Its prebuilt Slang and DXC
 releases (Windows and Linux, x86-64) are downloaded at configure time, pinned by SHA-256. Their
 shared libraries are copied next to the test executable after each link, so `ctest` runs
-without any setup. Configure with `-DIRONTHORN_BUILD_TOOLS=OFF` to build only the runtime
-modules without these downloads.
+without any setup. Configure with `-DIRONTHORN_BUILD_TOOLS=OFF` to build without the tools
+modules and these downloads.
 
 On Linux the tools need glibc 2.38 or newer (Ubuntu 24.04 or newer), which DXC's libraries
 require, and zlib (`libz.so.1`).
@@ -96,28 +147,34 @@ reflection generator ([reflection](reflection.md)), which uses only the standard
 | Configuration | Meaning | Asserts |
 |---|---|---|
 | `Debug` | unoptimized, full checks | on |
-| `RelWithDebInfo` | **development**: optimized, the everyday configuration | on |
-| `Release` | **shipping**: what players get | off |
+| `RelWithDebInfo` | **Development**: optimized, the everyday configuration | on |
+| `Release` | **Shipping**: what players get | off |
 
 ## The pre-commit gate
 
 `./scripts/dev.ps1 verify` runs the following and prints one PASS/FAIL line per step:
 
 - format check
-- MSVC builds and tests in Debug, development and Release
+- MSVC builds and tests in Debug, Development and Release
 - a clang-cl build and tests
 - clang-tidy
 
 Run it before every commit ([ADR-0002](../decisions/0002-git-workflow-and-versioning.md)). CI
 runs the same gate on Windows, with the same pinned tools, plus Linux Clang, GCC, ASan + UBSan
-and TSan builds. Formatting and clang-tidy run only in the Windows job.
+and TSan builds, and the shipping link test in a plain Ubuntu container without display
+packages. Formatting and clang-tidy run only in the Windows job.
 
 ## Tests
 
 - Each suite is an executable `ith_<name>_tests` registered with CTest as `<name>`, using
   doctest.
 - Two lint checks also run as CTest tests:
-  - `module_layering`: module layering rules ([ADR-0004](../decisions/0004-modules-and-layering.md)).
+  - `module_layering`: module layering rules ([ADR-0004](../decisions/0004-modules-and-layering.md))
+    and the kind and application target rules
+    ([ADR-0017](../decisions/0017-runtime-and-editor-separation.md)). The
+    `module_layering_refuses_*` tests run the same check on made-up module tables and pass when
+    it reports the expected violation.
   - `changelog_fragments`: changelog fragment format.
+- Each sample application runs once as `sample_<name>` (label `sample`).
 - Tests that need a GPU carry the `gpu` label. Skip them with `-ExcludeLabel gpu`
   (`ctest -LE gpu` on Linux).
