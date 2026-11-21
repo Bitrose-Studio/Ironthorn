@@ -45,6 +45,12 @@ the tools: CMake turns `IRONTHORN_BUILD_TOOLS` off and says so. The shader compi
 DXC are prebuilt, uninstrumented shared libraries, so a sanitizer would check only the module's
 thin wrapper around them; the other Linux and Windows builds test it.
 
+The reflection generator `ith_reflect` is instrumented too and runs during the build, so the
+sanitizer runtime's needs apply at build time, not only to `ctest`. Clang 18's runtimes fail on
+kernels with high ASLR entropy; lower it before configuring and building, as CI does:
+`sudo sysctl vm.mmap_rnd_bits=28`. Clang sanitizer builds also build `ith_reflect_fuzz`, a
+libFuzzer target for the generator, and run it briefly as the `reflect_tool_fuzz` test.
+
 ## Tools and their dependencies
 
 `IRONTHORN_BUILD_TOOLS` (on by default) builds the tools-only modules, which the editor and the
@@ -56,6 +62,11 @@ modules without these downloads.
 
 On Linux the tools need glibc 2.38 or newer (Ubuntu 24.04 or newer), which DXC's libraries
 require, and zlib (`libz.so.1`).
+
+The build tools in `tools/` are different: the build itself runs them, so they are built in
+every configuration whatever `IRONTHORN_BUILD_TOOLS` says. Today that is `ith_reflect`, the
+reflection generator ([reflection](reflection.md)), which uses only the standard library and
+`foundation`.
 
 ## Configurations
 
