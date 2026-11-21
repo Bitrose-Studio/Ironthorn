@@ -15,10 +15,16 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -31,6 +37,22 @@ constexpr JobSystemConfig kNoWorkers{.foregroundWorkers = 0, .backgroundWorkers 
 
 JobSystemConfig workers(std::uint32_t foreground, std::uint32_t background) {
     return JobSystemConfig{.foregroundWorkers = foreground, .backgroundWorkers = background};
+}
+
+// For the death tests: prints a failed assert or fatal error like the default handler, then ends the
+// process at once with exit code 0. The CTests match the message; a process that dies by SIGABRT counts as
+// failed whatever it printed.
+[[noreturn]] ith::AssertAction printAndExit(const ith::AssertInfo& info) {
+    const char* kind = info.expression != nullptr ? "assertion failed" : "fatal error";
+    const char* message = info.message != nullptr ? info.message : "";
+    std::fprintf(stderr, "%s(%d): %s: %s\n", info.file, info.line, kind, message);
+    std::fflush(stderr);
+#ifdef _WIN32
+    // On Windows, _Exit still runs process-exit work, which crashed now and then (an access
+    // violation) while other threads were mid-job. TerminateProcess ends the process outright.
+    TerminateProcess(GetCurrentProcess(), 0);
+#endif
+    std::_Exit(0);
 }
 
 // Submits a job that waits on a counter `levels` times nested, each level one job deeper.
@@ -514,6 +536,7 @@ TEST_CASE("JobSystem: a continuation counted by the counter it follows asserts a
 // Deadlocks on purpose and must end the process with the watchdog's fatal error. Skipped in the
 // normal run; the CTest jobs_watchdog runs it alone and expects the message.
 TEST_CASE("Watchdog: stops the process when nested waits deadlock the foreground lane" * doctest::skip()) {
+    ith::setAssertHandler(&printAndExit);
     JobSystem jobs(workers(1, 0));
     std::atomic<int> deepest{0};
     JobCounter counter;
@@ -528,22 +551,29 @@ TEST_CASE("Watchdog: stops the process when nested waits deadlock the foreground
 // a record. Skipped in the normal run; the CTest jobs_pool_exhausted runs it alone and expects
 // the fatal error.
 TEST_CASE("JobSystem: stops the process when parked continuations exhaust the foreground pool" * doctest::skip()) {
+    ith::setAssertHandler(&printAndExit);
     JobSystemConfig config = workers(1, 1);
     config.foregroundJobCapacity = 2;
     JobSystem jobs(config);
     JobCounter counter;
     JobCounter after;
+    std::atomic<bool> started{false};
     std::atomic<bool> parked{false};
     jobs.submit(
         JobLane::Foreground, "Parent",
-        [&jobs, &counter, &parked] {
+        [&jobs, &counter, &started, &parked] {
+            started.store(true);
             while (!parked.load()) {
                 std::this_thread::yield();
             }
             jobs.submit(JobLane::Foreground, "Child", [] {}, &counter);
         },
         &counter);
-    std::this_thread::sleep_for(std::chrono::milliseconds(20)); // The parent runs; its record is free again.
+    // Once the parent runs on the worker, its record is free again. (Had the main thread run it
+    // instead, it would spin there forever, waiting for itself to set `parked`.)
+    while (!started.load()) {
+        std::this_thread::yield();
+    }
     jobs.submitAfter(counter, JobLane::Foreground, "Then", [] {}, &after);
     jobs.submitAfter(counter, JobLane::Foreground, "Then", [] {}, &after);
     parked.store(true);
