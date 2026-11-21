@@ -16,7 +16,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0009](0009-rhi.md) | Rendering hardware interface over Vulkan and Direct3D 12 | Accepted, amended by [0021](0021-rhi-device-structure-and-backend-modules.md) |
 | [0010](0010-serialization.md) | Serialization formats and versioning | Accepted, amended by [0020](0020-serialization-rules-completed.md) |
 | [0011](0011-shader-language-and-pipeline.md) | Shader language and pipeline | Accepted, amended by [0023](0023-build-time-shaders-for-samples-and-tests.md) |
-| [0012](0012-windowing-and-event-loop.md) | Windowing and the platform event loop | Accepted |
+| [0012](0012-windowing-and-event-loop.md) | Windowing and the platform event loop | Accepted, amended by [0025](0025-job-system.md) |
 | [0013](0013-input.md) | Input: events, state, routing and consumption | Accepted |
 | [0014](0014-ecs-storage-and-world.md) | ECS storage and the world | Accepted |
 | [0015](0015-asset-identity-and-reimport.md) | Asset identity and non-destructive reimport | Accepted, amended by [0024](0024-asset-document-envelope-and-extension.md) |
@@ -29,6 +29,8 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0022](0022-gpu-minimum-features-completed.md) | GPU minimum features completed for the RHI (amends 0005) | Accepted |
 | [0023](0023-build-time-shaders-for-samples-and-tests.md) | Build-time shaders for samples and tests (amends 0011) | Accepted |
 | [0024](0024-asset-document-envelope-and-extension.md) | Asset documents: the envelope id and native asset extensions (amends 0015, 0020) | Accepted |
+| [0025](0025-job-system.md) | The job system (amends 0012) | Accepted, amended by [0026](0026-job-system-rules-corrected.md) |
+| [0026](0026-job-system-rules-corrected.md) | Job system: rules corrected after the first implementation (amends 0025) | Accepted |
 
 ## Planned
 

@@ -1,6 +1,7 @@
 # ADR-0012: Windowing and the platform event loop
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0025](0025-job-system.md)
 - **Date:** 2026-11-20
 - **Related:** [ADR-0001](0001-cpp-language-and-safety-rules.md) (no exceptions, no RTTI),
   [ADR-0004](0004-modules-and-layering.md) (`platform` layer, no third-party types in public
