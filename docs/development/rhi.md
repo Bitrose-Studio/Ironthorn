@@ -7,20 +7,25 @@ renderer passes, the UI renderer and the editor viewport are written against
 module in the `platform` layer ([ADR-0017](../decisions/0017-runtime-and-editor-separation.md));
 a dedicated server doesn't link it. No graphics-API type appears in its headers.
 
-What exists today is the backend-neutral part and the **null backend**, which has no GPU: it
-keeps objects, handles, descriptor indices, frames and swapchains like a real backend and drops
-the commands. It serves the tests, and the editor or player running without a GPU.
+What exists today:
+
+- the backend-neutral part (`rhi`);
+- the **null backend** (`rhi`), which has no GPU: it keeps objects, handles, descriptor indices,
+  frames and swapchains like a real backend and drops the commands. It serves the tests, and the
+  editor or player running without a GPU;
+- the **Direct3D 12 backend** (`rhi_d3d12`, Windows only; see [Direct3D 12](#direct3d-12));
+- the **selection module** (`rhi_select`), whose `createDevice()` picks the backend.
+
+The Vulkan backend comes next.
 
 ## A frame
 
 ```cpp
 #include "ith/rhi/Device.h"
+#include "ith/rhi_select/CreateDevice.h"
 
-// Each backend has a factory: createNullDevice() in this module; createD3D12Device() and
-// createVulkanDevice() in the backend modules, and a selection module that picks one at
-// start-up (Direct3D 12 by default on Windows, otherwise Vulkan). The backends and the
-// selection module don't exist yet.
-ith::Expected<ith::rhi::Device, ith::rhi::Error> device = createDevice(...);
+// Direct3D 12 by default on Windows, otherwise Vulkan (ADR-0021); a backend can be asked for.
+ith::Expected<ith::rhi::Device, ith::rhi::Error> device = ith::rhi::createDevice({});
 if (!device) {
     return fail(device.error()); // e.g. "The GPU 'X' lacks features Ironthorn needs: ... [rhi.unsupported_device]"
 }
@@ -136,12 +141,16 @@ Mesh-shader pipelines and draws come with the renderer's mesh path (ADR-0021).
   constants, but can't yet see whether a shader declares resources outside the bindless model.
   That needs the shader metadata of ADR-0011 rule 6, which the shader pipeline doesn't produce
   yet.
-- **Validation layers** (rule 18): `DeviceDesc::validation` and `gpuBasedValidation` do nothing
-  until a GPU backend exists, and nothing yet enforces that shipping builds never load the
-  layers.
-- **Readback from textures**: there is no texture-to-buffer copy yet; it comes with the first
-  backend, for image tests.
+- **Validation layers** (rule 18): the Direct3D 12 backend loads the debug layer; Vulkan's
+  validation layers come with its backend. Shipping (Release) builds compile the Direct3D 12 debug
+  layer out and don't ship `d3d12SDKLayers.dll`.
+- **The Vulkan backend** (`rhi_vulkan`).
 - **Mesh shaders and ray tracing** commands, with the renderer paths that use them.
+- **D3D12MA's CPU allocations** go to the C runtime: its allocation callbacks aren't routed to an
+  engine allocator yet (ADR-0009 rule 3), because the engine has no general-purpose allocator.
+- **`LoadOp::DontCare`** is treated as `Load` on Direct3D 12: the contents are kept, which the
+  load operation allows. A render target or depth buffer whose barrier comes from `Undefined`
+  is discarded by that barrier.
 
 ## Backends
 
@@ -157,6 +166,94 @@ swapchain recreation); renderer code never includes it.
 
 The Direct3D 12 and Vulkan backends are separate modules, `rhi_d3d12` and `rhi_vulkan`, which
 keep their vendor libraries private. The renderer and the editor depend on `rhi` only.
+Applications call `createDevice()` (`ith/rhi_select/CreateDevice.h`), the one place that knows
+the backends: Direct3D 12 by default on Windows, otherwise Vulkan, `Backend::Null` for no GPU,
+and `rhi.backend_unavailable` for a backend this program doesn't have (Vulkan, for now).
+
+## Direct3D 12
+
+`rhi_d3d12` (`engine/ith/rhi_d3d12`) implements the backend on Direct3D 12 with the
+[DirectX-Headers](https://github.com/microsoft/DirectX-Headers), the
+[D3D12 Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator) and
+the Agility SDK, all at the versions in `cmake/IronthornDependencies.cmake`.
+`createD3D12Device()` (`ith/rhi_d3d12/D3D12Device.h`) creates the device.
+
+- **Adapters.** `AdapterPreference::HighPerformance` takes the first hardware adapter in DXGI's
+  high-performance order that supports feature level 12_0; `Software` takes WARP.
+- **Minimum features** (ADR-0005): Shader Model 6.6, Resource Binding Tier 3, wave intrinsics
+  and enhanced barriers. A GPU without one fails with `rhi.unsupported_device`, naming each.
+- **Binding.** One shader-visible CBV/SRV/UAV heap (`Limits::resourceDescriptors`, 262,144) and
+  one sampler heap (2,048), and one root signature for every pipeline: 32 root constants (the
+  128 bytes of `pushConstants()`) at register `b0, space0`, with the heaps directly indexed by
+  SM 6.6 shaders (`ResourceDescriptorHeap[i]`, `SamplerDescriptorHeap[i]`). A shader declares its
+  constants as a constant buffer at `b0, space0`; a pipeline whose shaders bind anything else
+  fails with `rhi.invalid_shader`. Buffers are viewed as raw buffers (`ByteAddressBuffer`,
+  `RWByteAddressBuffer`) of 4-byte words. A storage texture is viewed at mip 0, a sampled one
+  with all its mips (the device refuses sRGB storage textures on every backend).
+- **Memory.** D3D12MA allocates every buffer and texture. Upload and Readback buffers stay
+  mapped.
+- **Barriers** map one to one onto enhanced barriers. A shader read (`Access::ShaderRead`) maps to
+  a shader-resource read, or to an unordered-access read when the texture layout is
+  `ShaderWrite` (or a `General` storage texture).
+- **Commands.** One direct queue and one fence carry the timeline. Each pooled command list has
+  its own allocator, reset when the list is begun. `beginRendering()` sets render targets and
+  clears; indirect draws and dispatches use command signatures; markers are PIX-readable events.
+- **Shaders** must be DXIL in a DXBC container; anything else fails with `rhi.invalid_shader`.
+- **Swapchains** are flip-model DXGI swapchains with three buffers, created from the window's
+  `HWND`. For an sRGB format the buffers are UNORM and their render-target views sRGB. Tearing
+  is used when `vsync` is off and the display allows it.
+- **Device loss.** DRED's breadcrumbs and page-fault reports are on in every build; a lost
+  device's error names the removal reason, the command lists the GPU didn't finish and the
+  faulting allocation. If signaling the timeline fails after work was queued, the backend removes
+  the device, so that nothing is left untracked, and reports the loss. Waits for the GPU look for
+  device removal every second, so none waits without a limit. For tests,
+  `removeD3D12DeviceForTesting()` removes a device and `failNextD3D12SignalForTesting()` makes the
+  next signal fail. The debug layer, DRED and a removal affect every device of the process on the
+  same adapter: create a process's devices with the same validation setting.
+
+### The Agility SDK
+
+The backend is built against the Agility SDK's headers (DirectX-Headers of the same version),
+so a process must run on the Agility SDK's `D3D12Core.dll` rather than the older one in Windows.
+The executable does that by exporting `D3D12SDKVersion` and `D3D12SDKPath`, and by having the
+runtime in a `D3D12` folder next to it:
+
+    <executable directory>/
+        game.exe            exports D3D12SDKVersion = 620, D3D12SDKPath = ".\D3D12\"
+        D3D12/
+            D3D12Core.dll
+            d3d12SDKLayers.dll   (not in Shipping)
+
+`ith_add_application` sets this up on Windows for every player and editor application whose
+`MODULES` include `rhi_select`, through
+`ith_use_d3d12_agility_sdk(<target>)` (`cmake/IronthornDependencies.cmake`). Other executables
+that create a Direct3D 12 device, like test suites, call that function themselves. When Windows
+has a newer runtime than the package, it uses its own. When the process runs an older one (the
+exports or the folder are missing), `createD3D12Device()` fails with `rhi.backend_unavailable`.
+
+**Validation** (`DeviceDesc::validation`, on by default in Debug) needs the debug layer, which
+needs both the package's `d3d12SDKLayers.dll` and the Windows optional feature **Graphics
+Tools** (Settings > System > Optional features, or
+`Add-WindowsCapability -Online -Name Tools.Graphics.DirectX~~~~0.0.1.0` as administrator).
+Without it, a device that asks for validation fails with `rhi.backend_unavailable`. The debug
+layer's warnings and errors go to stderr; errors and corruption are asserted.
+
+### Testing on a GPU
+
+`tests/rhi_d3d12` (CTest name `rhi_d3d12`, label `gpu`, Windows only) runs devices, resources,
+deferred destruction, clears read back from a render target, discarded render targets (also
+under GPU-based validation when validation is on), copy round trips through buffers and through
+textures at deeper mips, layers, 3D slices and both depth formats, lists recorded on several
+threads while others create and destroy resources, a swapchain on a hidden window, device loss
+and failed timeline signals and, when the tools are built, compute and draw pipelines compiled
+from Slang at run time. It uses WARP, so it runs on hosted CI runners, with validation on. Two
+environment variables change that:
+
+- `ITH_RHI_TEST_ADAPTER=hardware` runs it on the fastest hardware GPU;
+- `ITH_RHI_TEST_VALIDATION=off` runs it without the debug layer, on a machine without Graphics
+  Tools.
+
+`tests/rhi_select` checks backend selection without a GPU, on every platform.
 
 ## Testing on the null backend
 

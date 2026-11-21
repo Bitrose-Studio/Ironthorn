@@ -6,6 +6,9 @@ Requirements:
 
 - Visual Studio 2022 with the **Desktop development with C++** workload.
 - The **C++ Clang tools for Windows** component (clang-cl, for the `windows-clang` preset).
+- The Windows optional feature **Graphics Tools**, for the Direct3D 12 debug layer that Debug
+  builds and the `rhi_d3d12` tests turn on ([RHI guide](rhi.md#the-agility-sdk)). Without it, run
+  the tests with `ITH_RHI_TEST_VALIDATION=off`.
 
 ```powershell
 ./scripts/bootstrap.ps1          # once: pinned CMake, Ninja, clang-format and clang-tidy into .tools/
@@ -205,4 +208,5 @@ leg gets the display packages. Formatting and clang-tidy run only in the Windows
 - Each sample application runs once as `sample_<name>` (label `sample`). `window_player` runs
   for 10 frames on SDL's headless `offscreen` video driver.
 - Tests that need a GPU carry the `gpu` label. Skip them with `-ExcludeLabel gpu`
-  (`ctest -LE gpu` on Linux).
+  (`ctest -LE gpu` on Linux). On Windows they run the Direct3D 12 backend on WARP, which every
+  Windows machine has, so verify and CI run them ([RHI guide](rhi.md#testing-on-a-gpu)).
