@@ -85,6 +85,45 @@ if(TARGET ith_rhi_d3d12)
     endif()
 endif()
 
+# The Vulkan backend on a GPU (Windows and Linux): the fastest hardware GPU, or a software one such
+# as lavapipe. Without a Vulkan loader or driver every test reports itself skipped, unless
+# ITH_RHI_TEST_REQUIRE_VULKAN=1. With the tools built, its shaders are compiled from Slang at run
+# time and the pipeline tests run too.
+if(TARGET ith_rhi_vulkan)
+    set(ith_rhi_vulkan_test_libraries ith::rhi_vulkan ith::rhi_select Threads::Threads)
+    if(IRONTHORN_BUILD_TOOLS)
+        list(APPEND ith_rhi_vulkan_test_libraries ith::shader_compiler)
+    endif()
+    ith_add_test_suite(rhi_vulkan
+        SOURCES rhi_vulkan/VulkanDeviceTests.cpp
+        LIBRARIES ${ith_rhi_vulkan_test_libraries}
+        LABELS gpu)
+    if(IRONTHORN_BUILD_TOOLS)
+        target_compile_definitions(ith_rhi_vulkan_tests PRIVATE ITH_TEST_HAS_SHADER_COMPILER=1)
+        ith_copy_shader_compiler_runtime(ith_rhi_vulkan_tests)
+    endif()
+endif()
+
+# A libFuzzer target for the Vulkan backend's SPIR-V binding check, in Clang sanitizer builds
+# only, with a short smoke run in CTest like the others, seeded with SPIR-V the shader compiler
+# wrote (rhi_vulkan/fuzz_seeds).
+if(TARGET ith_rhi_vulkan AND IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+        AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_executable(ith_rhi_vulkan_spirv_fuzz rhi_vulkan/SpirvCheckFuzz.cpp)
+    target_link_libraries(ith_rhi_vulkan_spirv_fuzz PRIVATE ith::rhi_vulkan)
+    target_compile_options(ith_rhi_vulkan_spirv_fuzz PRIVATE -fsanitize=fuzzer)
+    target_link_options(ith_rhi_vulkan_spirv_fuzz PRIVATE -fsanitize=fuzzer)
+    set_target_properties(ith_rhi_vulkan_spirv_fuzz PROPERTIES
+        FOLDER "Ironthorn/Tests"
+        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    set(corpus "${CMAKE_CURRENT_BINARY_DIR}/rhi_vulkan_spirv_fuzz_corpus")
+    file(MAKE_DIRECTORY "${corpus}")
+    add_test(NAME rhi_vulkan_spirv_fuzz
+        COMMAND ith_rhi_vulkan_spirv_fuzz -runs=20000 -max_len=8192 -malloc_limit_mb=512
+            "${corpus}" "${CMAKE_CURRENT_SOURCE_DIR}/rhi_vulkan/fuzz_seeds")
+    set_tests_properties(rhi_vulkan_spirv_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
+endif()
+
 # The reflection generator, run in-process on fixture headers.
 ith_add_test_suite(reflect_tool
     SOURCES reflect_tool/ScannerTests.cpp

@@ -1,0 +1,10 @@
+---
+# The repository's checks, minus two that fight Vulkan's C interface:
+#   bugprone-invalid-enum-default-initialization  its structs are meant to be zero-initialized
+#                                                 (Info{}), and some of their enums have no zero value
+#   bugprone-signed-bitwise                       its flag bits are enumerators, whose type is signed
+InheritParentConfig: true
+Checks: >
+  -bugprone-invalid-enum-default-initialization,
+  -bugprone-signed-bitwise
+...

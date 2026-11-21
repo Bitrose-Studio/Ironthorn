@@ -21,3 +21,4 @@
 
 # Fuzz seed corpora are small binary files kept in Git directly (no LFS), never converted.
 tests/**/fuzz_seeds/**/*.bin -text
+tests/**/fuzz_seeds/**/*.spv -text
