@@ -1,0 +1,25 @@
+{
+  "format": "ith.asset_meta",
+  "version": 1,
+  "id": "01234567-89ab-cdef-1122-334455667788",
+  "data": {
+    "importer": "test.objects",
+    "importerVersion": 3,
+    "settings": {
+      "scale": 2
+    },
+    "subAssets": [
+      {
+        "key": "material:Steel",
+        "id": "00000000-0000-0001-0000-000000000001",
+        "missing": false
+      },
+      {
+        "key": "mesh:#0",
+        "id": "00000000-0000-0001-0000-000000000002",
+        "missing": true
+      }
+    ],
+    "overrides": {}
+  }
+}

@@ -346,3 +346,42 @@ ith_add_layering_failure_test(include_of_undeclared_module
     UNAVAILABLE "rhi_d3d12"
     APPLICATIONS "game_server:server:tests/layering/ServerIncludesRenderer.cpp=net"
     EXPECT "tests/layering/ServerIncludesRenderer.cpp includes module 'renderer', which application game_server does not depend on")
+
+# Asset ids and the reflected hard and soft references, through both archives.
+ith_add_test_suite(assets
+    SOURCES assets/AssetIdTests.cpp
+    LIBRARIES ith::assets ith::serialization)
+
+# The asset database (tools only): sidecars, native headers, scan problems, move, rename and
+# delete, import and reimport with a test importer, and the derived-data cache. Each test works in
+# its own temporary project folder.
+if(IRONTHORN_BUILD_TOOLS)
+    ith_add_test_suite(asset_database
+        SOURCES
+            asset_database/AssetTestSupport.h
+            asset_database/DerivedDataCacheTests.cpp
+            asset_database/ImportTests.cpp
+            asset_database/ScanTests.cpp
+            asset_database/SidecarTests.cpp
+        LIBRARIES ith::asset_database)
+endif()
+
+# A libFuzzer target for the sidecar and native header readers, with a short smoke run in CTest
+# like the others, in Clang sanitizer builds with the tools on.
+if(TARGET ith_asset_database AND IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+        AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_executable(ith_asset_sidecar_fuzz asset_database/SidecarFuzz.cpp)
+    target_link_libraries(ith_asset_sidecar_fuzz PRIVATE ith::asset_database)
+    target_compile_options(ith_asset_sidecar_fuzz PRIVATE -fsanitize=fuzzer)
+    target_link_options(ith_asset_sidecar_fuzz PRIVATE -fsanitize=fuzzer)
+    set_target_properties(ith_asset_sidecar_fuzz PROPERTIES
+        FOLDER "Ironthorn/Tests"
+        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    set(corpus "${CMAKE_CURRENT_BINARY_DIR}/asset_sidecar_fuzz_corpus")
+    file(MAKE_DIRECTORY "${corpus}")
+    add_test(NAME asset_sidecar_fuzz
+        COMMAND ith_asset_sidecar_fuzz -runs=20000 -max_len=4096 -malloc_limit_mb=512
+            -dict=${CMAKE_CURRENT_SOURCE_DIR}/serialization/fuzz_seeds/json.dict
+            "${corpus}" "${CMAKE_CURRENT_SOURCE_DIR}/asset_database/fuzz_seeds/sidecar")
+    set_tests_properties(asset_sidecar_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
+endif()
