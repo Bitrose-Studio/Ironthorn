@@ -68,11 +68,11 @@ jobs:
         run: cmake --preset ${{ matrix.configure }}
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
+      # TSAN_OPTIONS, with the suppressions file, comes from the linux-tsan test preset.
       - name: Test
         env:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-          TSAN_OPTIONS: halt_on_error=1
         run: ctest --preset ${{ matrix.preset }}
       # ADR-0014 rule 19: the ECS benchmark runs in CI and prints its numbers. It never fails on
       # them: shared runners are too noisy for a timing gate.

@@ -91,6 +91,10 @@ kernels with high ASLR entropy; lower it before configuring and building, as CI 
 `sudo sysctl vm.mmap_rnd_bits=28`. Clang sanitizer builds also build `ith_reflect_fuzz`, a
 libFuzzer target for the generator, and run it briefly as the `reflect_tool_fuzz` test.
 
+The `linux-tsan` test preset sets `TSAN_OPTIONS` with `tests/tsan-suppressions.txt`, which holds
+the reports TSan makes about system libraries the engine can't change, each with its reason.
+Run `ctest --preset linux-tsan`, or pass the same `TSAN_OPTIONS` when starting a test by hand.
+
 Shipping link test ([ADR-0017](../decisions/0017-runtime-and-editor-separation.md)): the sample
 players and server built in Shipping without the modules they must not link, as CI does. The
 player preset needs the display packages above; the server preset doesn't:

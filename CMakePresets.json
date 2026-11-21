@@ -102,6 +102,12 @@
         { "name": "linux-clang-release", "inherits": "test-base", "configurePreset": "linux-clang", "configuration": "Release" },
         { "name": "linux-gcc-dev", "inherits": "test-base", "configurePreset": "linux-gcc", "configuration": "RelWithDebInfo" },
         { "name": "linux-asan", "inherits": "test-base", "configurePreset": "linux-asan", "configuration": "Debug" },
-        { "name": "linux-tsan", "inherits": "test-base", "configurePreset": "linux-tsan", "configuration": "Debug" }
+        {
+            "name": "linux-tsan",
+            "inherits": "test-base",
+            "configurePreset": "linux-tsan",
+            "configuration": "Debug",
+            "environment": { "TSAN_OPTIONS": "halt_on_error=1:suppressions=${sourceDir}/tests/tsan-suppressions.txt" }
+        }
     ]
 }

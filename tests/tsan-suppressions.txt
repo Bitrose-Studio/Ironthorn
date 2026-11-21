@@ -1,0 +1,12 @@
+# ThreadSanitizer suppressions for the linux-tsan preset (CMakePresets.json passes this file in
+# TSAN_OPTIONS). Each entry is as narrow as the report allows and says why it can't be fixed.
+
+# libdbus, the system's D-Bus library, which SDL loads at run time. SDL_Init opens private
+# session and system bus connections (dbus_bus_get_private) and SDL_Quit closes them
+# (dbus_connection_close, dbus_connection_unref). libdbus takes its bus lock and a connection lock
+# in one order when connecting and in the other when closing, which TSan reports as a
+# lock-order inversion. Both happen on the main thread, one after the other, so they can't
+# deadlock here; libdbus is not built with TSan, so its locking can't be checked or changed from
+# this repository. The report only appears where a D-Bus session bus is running (CI runners,
+# desktops), not in a bare container.
+deadlock:libdbus-1.so
