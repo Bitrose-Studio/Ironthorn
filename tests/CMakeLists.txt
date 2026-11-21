@@ -38,6 +38,15 @@ if(ITH_BUILD_SHADER_COMPILER)
     ith_copy_shader_compiler_runtime(ith_shader_compiler_tests)
 endif()
 
+# Input: the stable control ids and names (which must never change), state, routing,
+# consumption, focus, capture and assignment, with injected events.
+ith_add_test_suite(input
+    SOURCES
+        input/ControlNamesTests.cpp
+        input/InputStateTests.cpp
+        input/InputTests.cpp
+    LIBRARIES ith::input)
+
 # The platform layer on SDL's headless "offscreen" driver. The tests also call SDL directly, to
 # list its compiled-in video drivers and to push events the offscreen driver can't produce.
 if(IRONTHORN_BUILD_CLIENT)
