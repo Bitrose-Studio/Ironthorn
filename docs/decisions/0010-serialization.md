@@ -1,6 +1,7 @@
 # ADR-0010: Serialization formats and versioning
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0020](0020-serialization-rules-completed.md)
 - **Date:** 2026-11-20
 - **Related:** [ADR-0001](0001-cpp-language-and-safety-rules.md) (no exceptions, generated
   reflection, fuzz targets), [ADR-0004](0004-modules-and-layering.md) (serialization in `core`,
