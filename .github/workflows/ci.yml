@@ -67,3 +67,30 @@ jobs:
       - name: Benchmarks
         if: matrix.preset == 'linux-clang-release'
         run: ctest --test-dir build/${{ matrix.configure }} -C Release -L benchmark --verbose
+
+  # ADR-0017 rule 4: the sample player and server build in Shipping without the editor and tools
+  # modules, and the server also without the client modules, on a plain Ubuntu image with no
+  # display packages. If either needed such a module, it would fail to configure or link.
+  # The player leg proves little until the first client module exists; it will then need display
+  # packages, while the server leg must stay without them.
+  shipping-link:
+    name: shipping link (${{ matrix.application }})
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        application: [player, server]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: apt-get update && apt-get install -y --no-install-recommends cmake ninja-build clang
+      - name: Configure
+        run: cmake --preset linux-shipping-${{ matrix.application }}
+      - name: Build
+        run: cmake --build --preset linux-shipping-${{ matrix.application }}
+      - name: Run
+        run: ./build/linux-shipping-${{ matrix.application }}/bin/Release/minimal_${{ matrix.application }}

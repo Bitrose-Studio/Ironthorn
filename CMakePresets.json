@@ -53,6 +53,22 @@
             "displayName": "Linux (Clang, TSan)",
             "inherits": "linux-clang",
             "cacheVariables": { "IRONTHORN_ENABLE_TSAN": "ON" }
+        },
+        {
+            "name": "linux-shipping-player",
+            "displayName": "Linux shipping link test: player, without editor and tools modules",
+            "inherits": "linux-clang",
+            "cacheVariables": {
+                "IRONTHORN_BUILD_EDITOR": "OFF",
+                "IRONTHORN_BUILD_TOOLS": "OFF",
+                "IRONTHORN_BUILD_TESTS": "OFF"
+            }
+        },
+        {
+            "name": "linux-shipping-server",
+            "displayName": "Linux shipping link test: dedicated server, runtime modules only",
+            "inherits": "linux-shipping-player",
+            "cacheVariables": { "IRONTHORN_BUILD_CLIENT": "OFF" }
         }
     ],
     "buildPresets": [
@@ -65,7 +81,9 @@
         { "name": "linux-clang-release", "configurePreset": "linux-clang", "configuration": "Release" },
         { "name": "linux-gcc-dev", "configurePreset": "linux-gcc", "configuration": "RelWithDebInfo" },
         { "name": "linux-asan", "configurePreset": "linux-asan", "configuration": "Debug" },
-        { "name": "linux-tsan", "configurePreset": "linux-tsan", "configuration": "Debug" }
+        { "name": "linux-tsan", "configurePreset": "linux-tsan", "configuration": "Debug" },
+        { "name": "linux-shipping-player", "configurePreset": "linux-shipping-player", "configuration": "Release", "targets": ["minimal_player"] },
+        { "name": "linux-shipping-server", "configurePreset": "linux-shipping-server", "configuration": "Release", "targets": ["minimal_server"] }
     ],
     "testPresets": [
         {
