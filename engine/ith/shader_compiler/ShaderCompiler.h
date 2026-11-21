@@ -21,7 +21,9 @@
 // Code is generated with column-major matrix layout, as SPIR-V 1.6 and as DXIL Shader Model 6.6.
 // SPIR-V keeps the entry point's name (not "main"), and is optimized and checked by the SPIR-V
 // tools in Slang's glslang library, without which it can't be generated; DXIL is validated and
-// signed by DXC.
+// signed by DXC. SPIR-V compilations define ITH_SPIRV=1, so that one source can declare the
+// Vulkan bindless set for SPIR-V and use ResourceDescriptorHeap for DXIL. The options are listed in
+// docs/development/shaders.md.
 
 #include "ith/foundation/Expected.h"
 

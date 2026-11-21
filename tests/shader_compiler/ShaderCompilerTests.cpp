@@ -157,6 +157,29 @@ TEST_SUITE("shader_compiler") {
         checkCompileFailure(compiler.compile(request(kShaderSource, missing, ith::ShaderTarget::Spirv)));
     }
 
+    TEST_CASE("ITH_SPIRV is 1 for SPIR-V and undefined for DXIL, as ith_embed_shaders defines it") {
+        constexpr std::string_view kBody = R"(
+RWStructuredBuffer<uint> values;
+[numthreads(1, 1, 1)]
+void computeMain(uint3 id : SV_DispatchThreadID) {
+    values[id.x] = id.x;
+}
+)";
+        // Each source compiles only for the target whose definition it expects.
+        const std::string spirvOnly =
+            "#if !defined(ITH_SPIRV) || ITH_SPIRV != 1\n#error not SPIR-V\n#endif\n" + std::string(kBody);
+        const std::string dxilOnly = "#ifdef ITH_SPIRV\n#error not DXIL\n#endif\n" + std::string(kBody);
+        ith::ShaderCompiler compiler = createCompiler();
+        const ith::Expected<std::vector<std::byte>> spirv =
+            compiler.compile(request(spirvOnly, kEntryPoints[2], ith::ShaderTarget::Spirv));
+        CHECK(spirv.hasValue());
+        const ith::Expected<std::vector<std::byte>> dxil =
+            compiler.compile(request(dxilOnly, kEntryPoints[2], ith::ShaderTarget::Dxil));
+        CHECK(dxil.hasValue());
+        checkCompileFailure(compiler.compile(request(dxilOnly, kEntryPoints[2], ith::ShaderTarget::Spirv)));
+        checkCompileFailure(compiler.compile(request(spirvOnly, kEntryPoints[2], ith::ShaderTarget::Dxil)));
+    }
+
     TEST_CASE("empty source fails because it has no entry point") {
         ith::ShaderCompiler compiler = createCompiler();
         checkCompileFailure(compiler.compile(request("", kEntryPoints[2], ith::ShaderTarget::Spirv)));
