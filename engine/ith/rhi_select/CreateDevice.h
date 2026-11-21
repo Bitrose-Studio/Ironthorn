@@ -26,12 +26,13 @@ namespace ith::rhi {
 
 // Creates a device on `backend`, or on defaultBackend() when it is std::nullopt.
 // - Backend::D3D12 calls createD3D12Device(desc) (ith/rhi_d3d12/D3D12Device.h);
-// - Backend::Vulkan will call createVulkanDevice(desc);
+// - Backend::Vulkan calls createVulkanDevice(desc) (ith/rhi_vulkan/VulkanDevice.h), on every platform;
 // - Backend::Null creates a null device without a GPU (ith/rhi/NullDevice.h), ignoring `desc`.
 //
 // Fails with BackendUnavailable when the backend is not built into this program (Direct3D 12
-// outside Windows; Vulkan until its backend exists), or with the backend's own errors, such as
-// UnsupportedDevice. Must be called on the thread that will be the render thread.
+// outside Windows), or with the backend's own errors, such as BackendUnavailable when Vulkan has no
+// loader or driver, or UnsupportedDevice. Must be called on the thread that will be the render
+// thread.
 Expected<Device, Error> createDevice(const DeviceDesc& desc, std::optional<Backend> backend = std::nullopt);
 
 } // namespace ith::rhi

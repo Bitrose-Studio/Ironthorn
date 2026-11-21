@@ -1,7 +1,9 @@
 #include "ith/rhi_select/CreateDevice.h"
 
 #include "ith/rhi/NullDevice.h"
+#include "ith/rhi_vulkan/VulkanDevice.h"
 
+// Direct3D 12 exists only on Windows.
 #ifdef _WIN32
 #include "ith/rhi_d3d12/D3D12Device.h"
 #endif
@@ -18,8 +20,7 @@ Backend defaultBackend() {
 #endif
 }
 
-// `desc` is unused where no GPU backend is built yet.
-Expected<Device, Error> createDevice([[maybe_unused]] const DeviceDesc& desc, std::optional<Backend> backend) {
+Expected<Device, Error> createDevice(const DeviceDesc& desc, std::optional<Backend> backend) {
     switch (backend.value_or(defaultBackend())) {
         case Backend::D3D12:
 #ifdef _WIN32
@@ -29,8 +30,7 @@ Expected<Device, Error> createDevice([[maybe_unused]] const DeviceDesc& desc, st
                                         .message = "The Direct3D 12 backend exists only on Windows"});
 #endif
         case Backend::Vulkan:
-            return makeUnexpected(
-                Error{.code = ErrorCode::BackendUnavailable, .message = "The Vulkan backend is not built yet"});
+            return createVulkanDevice(desc);
         case Backend::Null:
             return createNullDevice();
     }

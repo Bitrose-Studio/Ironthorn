@@ -25,10 +25,17 @@ TEST_SUITE("rhi_select") {
         CHECK(device->capabilities().backend == Backend::Null);
     }
 
-    TEST_CASE("Vulkan is unavailable until its backend is built") {
-        const Expected<Device, Error> device = createDevice({}, Backend::Vulkan);
-        REQUIRE_FALSE(device.hasValue());
-        CHECK(device.error().code == ErrorCode::BackendUnavailable);
+    TEST_CASE("Vulkan is built in: it creates a device, or names why it can't") {
+        // Without a Vulkan driver (hosted CI runners) the backend reports that it is unavailable;
+        // the device itself is covered by the rhi_vulkan suite.
+        const Expected<Device, Error> device = createDevice({.validation = false}, Backend::Vulkan);
+        if (device) {
+            CHECK(device->capabilities().backend == Backend::Vulkan);
+        } else {
+            MESSAGE(device.error().toString());
+            CHECK((device.error().code == ErrorCode::BackendUnavailable ||
+                   device.error().code == ErrorCode::UnsupportedDevice));
+        }
     }
 
 #ifndef _WIN32

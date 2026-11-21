@@ -5,10 +5,14 @@
 //   window_player              runs until the window is closed
 //   window_player --frames N   stops after N frames, e.g. headless in CI with the environment
 //                              variable SDL_VIDEO_DRIVER=offscreen
+//   window_player --backend B  renders with backend B: d3d12, vulkan or null (default: the
+//                              platform's, Direct3D 12 on Windows and Vulkan elsewhere)
+//   window_player --adapter A  renders on adapter A: hardware (the default, the fastest GPU) or
+//                              software (WARP on Direct3D 12, lavapipe on Vulkan)
 //
-// It renders where the window has a native handle and the platform's backend exists (Direct3D 12
-// on Windows); otherwise, as with the headless "offscreen" driver or before the Vulkan backend
-// exists, it runs the event loop without rendering, about 60 times a second. On Wayland such a
+// It renders where the window has a native handle and the backend can start; otherwise, as with
+// the headless "offscreen" driver or without a GPU driver, it runs the event loop without
+// rendering, about 60 times a second. On Wayland such a
 // window stays invisible: a Wayland window appears only once something is presented to it.
 
 #include "ith/foundation/Version.h"
@@ -21,9 +25,11 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <system_error>
 #include <thread>
@@ -61,16 +67,18 @@ struct Renderer {
 };
 
 // A renderer for the window, or nothing when the window can't be rendered to here.
-std::optional<Renderer> createRenderer(const ith::Window& window) {
+std::optional<Renderer> createRenderer(const ith::Window& window, std::optional<ith::rhi::Backend> backend,
+                                       ith::rhi::AdapterPreference adapter) {
     const ith::NativeWindowHandle handle = window.nativeHandle();
     if (std::holds_alternative<std::monostate>(handle)) {
         std::printf("window_player: the video driver has no native window; running without rendering\n");
         return std::nullopt;
     }
-    // Validation is on in Debug builds and needs the Windows "Graphics Tools"
-    // (docs/development/building.md); without them the device fails, and this prints why.
+    // Validation is on in Debug builds. On Direct3D 12 it needs the Windows "Graphics Tools"
+    // (docs/development/building.md); without them the device fails, and this prints why. On
+    // Vulkan it runs when the validation layer is installed.
     ith::Expected<ith::rhi::Device, ith::rhi::Error> device =
-        ith::rhi::createDevice({.applicationName = "window_player"});
+        ith::rhi::createDevice({.adapter = adapter, .applicationName = "window_player"}, backend);
     if (!device) {
         std::fprintf(stderr, "window_player: %s; running without rendering\n", device.error().toString().c_str());
         return std::nullopt;
@@ -85,9 +93,14 @@ std::optional<Renderer> createRenderer(const ith::Window& window) {
         std::fprintf(stderr, "window_player: %s; running without rendering\n", swapchain.error().toString().c_str());
         return std::nullopt;
     }
-    std::printf("window_player: rendering with %s on '%s'\n",
-                device->capabilities().backend == ith::rhi::Backend::D3D12 ? "Direct3D 12" : "Vulkan",
-                device->capabilities().adapter.name.c_str());
+    const ith::rhi::Backend chosen = device->capabilities().backend;
+    const char* name = "the null backend";
+    if (chosen == ith::rhi::Backend::D3D12) {
+        name = "Direct3D 12";
+    } else if (chosen == ith::rhi::Backend::Vulkan) {
+        name = "Vulkan";
+    }
+    std::printf("window_player: rendering with %s on '%s'\n", name, device->capabilities().adapter.name.c_str());
     return Renderer{.device = std::move(*device), .swapchain = *swapchain};
 }
 
@@ -152,25 +165,71 @@ void resizeOnEvent(Renderer& renderer, const ith::Window& window, const ith::Eve
     }
 }
 
+// The command line.
+struct Options {
+    // 0 runs until the window is closed.
+    std::uint64_t frameLimit = 0;
+    // std::nullopt picks the platform's backend.
+    std::optional<ith::rhi::Backend> backend;
+    ith::rhi::AdapterPreference adapter = ith::rhi::AdapterPreference::HighPerformance;
+};
+
+std::optional<ith::rhi::Backend> parseBackend(std::string_view value) {
+    if (value == "d3d12") {
+        return ith::rhi::Backend::D3D12;
+    }
+    if (value == "vulkan") {
+        return ith::rhi::Backend::Vulkan;
+    }
+    if (value == "null") {
+        return ith::rhi::Backend::Null;
+    }
+    return std::nullopt;
+}
+
+// The options, or std::nullopt after printing what is wrong with them.
+std::optional<Options> parseOptions(std::span<char* const> arguments) {
+    Options options;
+    for (std::size_t i = 1; i < arguments.size(); ++i) {
+        const std::string_view argument(arguments[i]);
+        const bool hasValue = i + 1 < arguments.size();
+        if (argument == "--frames" && hasValue) {
+            const std::string_view value(arguments[++i]);
+            const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), options.frameLimit);
+            if (error != std::errc() || end != value.data() + value.size() || options.frameLimit == 0) {
+                std::fprintf(stderr, "window_player: --frames needs a positive number\n");
+                return std::nullopt;
+            }
+        } else if (argument == "--backend" && hasValue) {
+            options.backend = parseBackend(arguments[++i]);
+            if (!options.backend) {
+                std::fprintf(stderr, "window_player: --backend takes d3d12, vulkan or null\n");
+                return std::nullopt;
+            }
+        } else if (argument == "--adapter" && hasValue &&
+                   (std::string_view(arguments[i + 1]) == "hardware" ||
+                    std::string_view(arguments[i + 1]) == "software")) {
+            options.adapter = std::string_view(arguments[++i]) == "software"
+                                  ? ith::rhi::AdapterPreference::Software
+                                  : ith::rhi::AdapterPreference::HighPerformance;
+        } else {
+            std::fprintf(
+                stderr,
+                "usage: window_player [--frames N] [--backend d3d12|vulkan|null] [--adapter hardware|software]\n");
+            return std::nullopt;
+        }
+    }
+    return options;
+}
+
 } // namespace
 
 int main(int argc, char** argv) { // NOLINT(misc-const-correctness): the signature of main is fixed
-    // 0 runs until the window is closed.
-    std::uint64_t frameLimit = 0;
-    for (int i = 1; i < argc; ++i) {
-        const std::string_view argument(argv[i]);
-        if (argument == "--frames" && i + 1 < argc) {
-            const std::string_view value(argv[++i]);
-            const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), frameLimit);
-            if (error != std::errc() || end != value.data() + value.size() || frameLimit == 0) {
-                std::fprintf(stderr, "window_player: --frames needs a positive number\n");
-                return 2;
-            }
-        } else {
-            std::fprintf(stderr, "usage: window_player [--frames N]\n");
-            return 2;
-        }
+    const std::optional<Options> options = parseOptions(std::span<char* const>(argv, static_cast<std::size_t>(argc)));
+    if (!options) {
+        return 2;
     }
+    const auto [frameLimit, backend, adapter] = *options;
 
     ith::Expected<ith::Platform> platform = ith::Platform::create();
     if (!platform) {
@@ -191,7 +250,7 @@ int main(int argc, char** argv) { // NOLINT(misc-const-correctness): the signatu
                     pixels.height, static_cast<double>(window->displayScale()),
                     nativeHandleKind(window->nativeHandle()));
 
-        std::optional<Renderer> renderer = createRenderer(*window);
+        std::optional<Renderer> renderer = createRenderer(*window, backend, adapter);
         const auto start = std::chrono::steady_clock::now();
         std::uint64_t frames = 0;
         bool running = true;
