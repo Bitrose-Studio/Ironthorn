@@ -13,12 +13,20 @@ set(ITH_LAYERS foundation platform core engine framework editor application)
 #     SOURCES <files...>
 #     [DEPENDS <module names...>]
 #     [PUBLIC_LIBRARIES <targets...>]
-#     [PRIVATE_LIBRARIES <targets...>])
+#     [PRIVATE_LIBRARIES <targets...>]
+#     [REFLECT])
+#
+# REFLECT runs the reflection generator over the module's headers (the .h files in SOURCES)
+# and compiles the result into the module; it adds a dependency on the reflection module.
 function(ith_add_module name)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "LAYER" "SOURCES;DEPENDS;PUBLIC_LIBRARIES;PRIVATE_LIBRARIES")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "REFLECT" "LAYER" "SOURCES;DEPENDS;PUBLIC_LIBRARIES;PRIVATE_LIBRARIES")
 
     if(NOT arg_LAYER IN_LIST ITH_LAYERS)
         message(FATAL_ERROR "Module '${name}': LAYER must be one of: ${ITH_LAYERS}")
+    endif()
+
+    if(arg_REFLECT AND NOT "reflection" IN_LIST arg_DEPENDS)
+        list(APPEND arg_DEPENDS reflection)
     endif()
 
     set(target ith_${name})
@@ -45,6 +53,62 @@ function(ith_add_module name)
     set_property(GLOBAL APPEND PROPERTY ITH_MODULES ${name})
     set_property(GLOBAL PROPERTY ITH_MODULE_LAYER_${name} "${arg_LAYER}")
     set_property(GLOBAL PROPERTY ITH_MODULE_DEPENDS_${name} "${arg_DEPENDS}")
+
+    if(arg_REFLECT)
+        # Module kinds (ADR-0017) are not declared yet; editor-layer modules are the editor kind.
+        set(kind runtime)
+        if(arg_LAYER STREQUAL "editor")
+            set(kind editor)
+        endif()
+        set(headers "")
+        foreach(source IN LISTS arg_SOURCES)
+            if(source MATCHES "\\.h$")
+                list(APPEND headers "${source}")
+            endif()
+        endforeach()
+        ith_reflect_target(${target}
+            MODULE ${name}
+            KIND ${kind}
+            # Engine modules only for now: game modules will pass their own include root.
+            INCLUDE_ROOT "${PROJECT_SOURCE_DIR}/engine"
+            HEADERS ${headers})
+    endif()
+endfunction()
+
+# ith_reflect_target(<target>
+#     MODULE <name>
+#     KIND <runtime|client|tools|editor>
+#     INCLUDE_ROOT <dir>
+#     HEADERS <headers...>)
+#
+# Generates <name>.reflect.cpp from the annotated HEADERS with tools/ith_reflect and adds it to
+# <target> (ADR-0018). The generated file includes each header by its path relative to
+# INCLUDE_ROOT and defines ith::generated::registerReflection_<name>. The generator reruns only
+# when one of the headers or the generator itself changes, and rewrites the file only when its
+# content changes. Each configuration gets its own copy, built by that configuration's generator.
+# ith_add_module(... REFLECT) calls this; tests use it directly for test-only reflected types.
+function(ith_reflect_target target)
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "MODULE;KIND;INCLUDE_ROOT" "HEADERS")
+
+    set(headers "")
+    foreach(header IN LISTS arg_HEADERS)
+        cmake_path(ABSOLUTE_PATH header BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" OUTPUT_VARIABLE absolute)
+        list(APPEND headers "${absolute}")
+    endforeach()
+
+    set(output "${PROJECT_BINARY_DIR}/generated/${arg_MODULE}/$<CONFIG>/${arg_MODULE}.reflect.cpp")
+    add_custom_command(
+        OUTPUT "${output}"
+        COMMAND ith_reflect
+            --module ${arg_MODULE}
+            --kind ${arg_KIND}
+            --include-root "${arg_INCLUDE_ROOT}"
+            --output "${output}"
+            ${headers}
+        DEPENDS ith_reflect ${headers}
+        COMMENT "Generating reflection for ${arg_MODULE}"
+        VERBATIM)
+    target_sources(${target} PRIVATE "${output}")
 endfunction()
 
 # ith_add_test_suite(<name> SOURCES <files...> LIBRARIES <targets...> [LABELS <labels...>] [TIMEOUT <s>])

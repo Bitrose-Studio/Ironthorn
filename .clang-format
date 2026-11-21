@@ -54,6 +54,9 @@ FixNamespaceComments: true
 ReflowComments: false
 InsertNewlineAtEOF: true
 
+# Reflection annotations (ith/reflection/Annotations.h) stand on their own lines, like statements.
+StatementMacros: [ITH_TYPE, ITH_FIELD, ITH_ENUM]
+
 # The header matching the source file comes first, then engine headers, then
 # third-party headers, then the standard library.
 SortIncludes: CaseSensitive

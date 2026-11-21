@@ -50,6 +50,7 @@ if(IRONTHORN_BUILD_TESTS)
 endif()
 
 add_subdirectory(engine)
+add_subdirectory(tools)
 
 if(IRONTHORN_BUILD_TESTS)
     add_subdirectory(tests)

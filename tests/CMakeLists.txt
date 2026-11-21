@@ -36,3 +36,26 @@ if(IRONTHORN_BUILD_TOOLS)
         LIBRARIES ith::shader_compiler)
     ith_copy_shader_compiler_runtime(ith_shader_compiler_tests)
 endif()
+
+# The reflection generator, run in-process on fixture headers.
+ith_add_test_suite(reflect_tool
+    SOURCES reflect_tool/ScannerTests.cpp
+    LIBRARIES ith::reflect_scanner)
+
+# A libFuzzer target for the generator, in Clang sanitizer builds only. CTest runs a short smoke
+# run seeded with the fixture headers; new inputs go to a corpus in the build tree.
+if(IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+        AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_executable(ith_reflect_fuzz reflect_tool/ScannerFuzz.cpp)
+    target_link_libraries(ith_reflect_fuzz PRIVATE ith::reflect_scanner)
+    target_compile_options(ith_reflect_fuzz PRIVATE -fsanitize=fuzzer)
+    target_link_options(ith_reflect_fuzz PRIVATE -fsanitize=fuzzer)
+    set_target_properties(ith_reflect_fuzz PROPERTIES
+        FOLDER "Ironthorn/Tests"
+        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    set(corpus "${CMAKE_CURRENT_BINARY_DIR}/reflect_fuzz_corpus")
+    file(MAKE_DIRECTORY "${corpus}")
+    add_test(NAME reflect_tool_fuzz
+        COMMAND ith_reflect_fuzz -runs=20000 -max_len=4096 "${corpus}" "${CMAKE_CURRENT_SOURCE_DIR}/reflect_tool/fixtures")
+    set_tests_properties(reflect_tool_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
+endif()
