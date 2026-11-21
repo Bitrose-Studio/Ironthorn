@@ -1,0 +1,12 @@
+{
+  "format": "ith.input_bindings",
+  "version": 1,
+  "data": {
+    "profiles": {
+      "default": {
+        "slots": {"jump.keyboard": "Keyboard.F", "crouch.gamepad": null},
+        "settings": {"look_sensitivity": 1.4, "invert_look_y": true}
+      }
+    }
+  }
+}

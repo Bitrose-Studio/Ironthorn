@@ -47,6 +47,61 @@ ith_add_test_suite(input
         input/InputTests.cpp
     LIBRARIES ith::input)
 
+# The input action layer (docs/specs/input-actions.md): assets and validation, values, modifiers,
+# triggers, phases and events, contexts and claims, routing and rebinding, with injected events and
+# explicit frame times; RegressionTests.cpp holds the cases found in review.
+ith_add_test_suite(input_actions
+    SOURCES
+        input_actions/ActionTestSupport.h
+        input_actions/AssetTests.cpp
+        input_actions/BindingTests.cpp
+        input_actions/ContextTests.cpp
+        input_actions/RegressionTests.cpp
+        input_actions/TriggerTests.cpp
+    LIBRARIES ith::input_actions)
+
+# No allocation in steady state: an executable of its own, because AllocationTests.cpp replaces the
+# global allocation functions with counting ones. Sanitizer builds replace them too (ASan reports
+# mismatched pairs, TSan's runtime defines them), so it isn't built there.
+if(NOT IRONTHORN_ENABLE_SANITIZERS AND NOT IRONTHORN_ENABLE_TSAN)
+    ith_add_test_suite(input_actions_allocation
+        SOURCES
+            input_actions/ActionTestSupport.h
+            input_actions/AllocationTests.cpp
+        LIBRARIES ith::input_actions)
+endif()
+
+# A libFuzzer target for the untrusted readers of the input action layer and the serialization
+# envelope: readDocument, asset documents with their id, the input action and context assets and
+# the bindings document, in Clang sanitizer builds only, with a short smoke run like the others.
+if(IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+        AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_executable(ith_input_actions_fuzz input_actions/InputDocumentFuzz.cpp)
+    target_link_libraries(ith_input_actions_fuzz PRIVATE ith::input_actions)
+    target_compile_options(ith_input_actions_fuzz PRIVATE -fsanitize=fuzzer)
+    target_link_options(ith_input_actions_fuzz PRIVATE -fsanitize=fuzzer)
+    set_target_properties(ith_input_actions_fuzz PROPERTIES
+        FOLDER "Ironthorn/Tests"
+        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    set(corpus "${CMAKE_CURRENT_BINARY_DIR}/input_actions_fuzz_corpus")
+    file(MAKE_DIRECTORY "${corpus}")
+    add_test(NAME input_actions_fuzz
+        COMMAND ith_input_actions_fuzz -runs=20000 -max_len=4096 -malloc_limit_mb=512
+            -dict=${CMAKE_CURRENT_SOURCE_DIR}/serialization/fuzz_seeds/json.dict
+            "${corpus}" "${CMAKE_CURRENT_SOURCE_DIR}/input_actions/fuzz_seeds")
+    set_tests_properties(input_actions_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
+endif()
+
+# The input actions benchmark (docs/development/input-actions.md), like the ECS benchmark: it only
+# prints numbers, and its "benchmark" label keeps it out of normal test runs.
+add_executable(ith_input_actions_benchmark input_actions/InputActionsBenchmark.cpp)
+target_link_libraries(ith_input_actions_benchmark PRIVATE ith::input_actions)
+set_target_properties(ith_input_actions_benchmark PROPERTIES
+    FOLDER "Ironthorn/Benchmarks"
+    COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+add_test(NAME input_actions_benchmark COMMAND ith_input_actions_benchmark)
+set_tests_properties(input_actions_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
+
 # The platform layer on SDL's headless "offscreen" driver. The tests also call SDL directly, to
 # list its compiled-in video drivers and to push events the offscreen driver can't produce.
 if(IRONTHORN_BUILD_CLIENT)

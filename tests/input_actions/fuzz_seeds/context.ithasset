@@ -1,0 +1,17 @@
+{
+  "format": "ith.input_context",
+  "version": 1,
+  "id": "6f1c2a90-3b8e-4d7a-9c15-2e4f6a8b0d13",
+  "data": {
+    "displayName": "On foot",
+    "mappings": [
+      {
+        "action": {"asset": "00000000-0000-0001-0000-000000000002", "subAsset": "00000000-0000-0000-0000-000000000000"},
+        "key": "Keyboard.Space",
+        "triggers": [{"type": "Chord", "chord": {"action": {"asset": "00000000-0000-0001-0000-000000000002", "subAsset": "00000000-0000-0000-0000-000000000000"}}}],
+        "slot": "jump.keyboard",
+        "slotLabel": "Primary"
+      }
+    ]
+  }
+}

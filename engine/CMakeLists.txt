@@ -17,6 +17,7 @@ add_subdirectory(ith/serialization)
 add_subdirectory(ith/ecs)
 add_subdirectory(ith/assets)
 add_subdirectory(ith/input)
+add_subdirectory(ith/input_actions)
 # The shader compiler needs Slang and DXC, which sanitizer builds leave out (ITH_BUILD_SHADER_COMPILER).
 if(ITH_BUILD_SHADER_COMPILER)
     add_subdirectory(ith/shader_compiler)

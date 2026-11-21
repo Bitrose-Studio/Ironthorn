@@ -1,0 +1,15 @@
+{
+  "format": "ith.input_action",
+  "version": 1,
+  "id": "0b8e7f6a-1c2d-4e3f-8a9b-0c1d2e3f4a5b",
+  "data": {
+    "displayName": "Move",
+    "valueKind": "Axis2",
+    "combine": "Strongest",
+    "clampToUnit": true,
+    "consumesKeys": null,
+    "modifiers": [{"type": "DeadZone", "deadZone": {"lower": 0.2, "upper": 1, "shape": "Radial"}}],
+    "triggers": [{"type": "Hold", "kind": "Explicit", "threshold": 0.5, "hold": {"seconds": 0.5, "once": true}},
+                 {"type": "Combo", "combo": {"steps": [{"action": {"asset": "0b8e7f6a-1c2d-4e3f-8a9b-0c1d2e3f4a5b", "subAsset": "00000000-0000-0000-0000-000000000000"}, "phase": "Triggered", "maxSeconds": 0.5}], "cancelActions": []}}]
+  }
+}
