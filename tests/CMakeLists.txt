@@ -46,6 +46,19 @@ if(IRONTHORN_BUILD_CLIENT)
         LIBRARIES ith::platform SDL3::SDL3-static Threads::Threads)
 endif()
 
+# The RHI on its null backend: handles, deferred destruction, frame pacing, swapchains, device
+# loss and the recording checks, without a GPU.
+if(IRONTHORN_BUILD_CLIENT)
+    ith_add_test_suite(rhi
+        SOURCES
+            rhi/CommandListTests.cpp
+            rhi/ConcurrencyTests.cpp
+            rhi/DeviceTests.cpp
+            rhi/FrameTests.cpp
+            rhi/RhiTestSupport.h
+        LIBRARIES ith::rhi Threads::Threads)
+endif()
+
 # The reflection generator, run in-process on fixture headers.
 ith_add_test_suite(reflect_tool
     SOURCES reflect_tool/ScannerTests.cpp

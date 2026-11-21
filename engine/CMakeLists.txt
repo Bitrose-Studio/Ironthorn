@@ -6,6 +6,7 @@
 
 add_subdirectory(ith/foundation)
 add_subdirectory(ith/platform)
+add_subdirectory(ith/rhi)
 add_subdirectory(ith/reflection)
 add_subdirectory(ith/serialization)
 add_subdirectory(ith/ecs)
