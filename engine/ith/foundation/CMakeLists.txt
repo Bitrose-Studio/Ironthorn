@@ -12,6 +12,7 @@ ith_add_module(foundation
         Hash.h
         LinearAllocator.h
         LinearAllocator.cpp
+        Mutex.h
         ObjectPool.h
         Stopwatch.h
         StringUtils.h
