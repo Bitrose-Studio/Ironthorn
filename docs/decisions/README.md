@@ -22,7 +22,8 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0015](0015-asset-identity-and-reimport.md) | Asset identity and non-destructive reimport | Accepted |
 | [0016](0016-gameplay-model-on-the-ecs.md) | Gameplay model on the ECS | Accepted |
 | [0017](0017-runtime-and-editor-separation.md) | Runtime and editor separation | Accepted |
-| [0018](0018-reflection.md) | Reflection | Accepted |
+| [0018](0018-reflection.md) | Reflection | Accepted, amended by [0019](0019-reflection-rules-corrected.md) |
+| [0019](0019-reflection-rules-corrected.md) | Reflection: rules corrected after the first implementation | Accepted |
 
 ## Planned
 
