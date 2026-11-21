@@ -386,6 +386,34 @@ if(TARGET ith_asset_database AND IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPI
     set_tests_properties(asset_sidecar_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
 endif()
 
+# The glTF importer (tools only): embedded, external and GLB buffers, accessors, meshes, materials,
+# source keys, reimport and the derived-data cache through the asset database, and malformed input.
+if(IRONTHORN_BUILD_TOOLS)
+    ith_add_test_suite(asset_importers
+        SOURCES asset_importers/GltfImporterTests.cpp
+        LIBRARIES ith::asset_importers)
+endif()
+
+# A libFuzzer target for the glTF importer, with a short smoke run in CTest like the others, in
+# Clang sanitizer builds with the tools on.
+if(TARGET ith_asset_importers AND IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+        AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_executable(ith_gltf_import_fuzz asset_importers/GltfFuzz.cpp)
+    target_link_libraries(ith_gltf_import_fuzz PRIVATE ith::asset_importers)
+    target_compile_options(ith_gltf_import_fuzz PRIVATE -fsanitize=fuzzer)
+    target_link_options(ith_gltf_import_fuzz PRIVATE -fsanitize=fuzzer)
+    set_target_properties(ith_gltf_import_fuzz PROPERTIES
+        FOLDER "Ironthorn/Tests"
+        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    set(corpus "${CMAKE_CURRENT_BINARY_DIR}/gltf_import_fuzz_corpus")
+    file(MAKE_DIRECTORY "${corpus}")
+    add_test(NAME gltf_import_fuzz
+        COMMAND ith_gltf_import_fuzz -runs=20000 -max_len=8192 -malloc_limit_mb=1024
+            -dict=${CMAKE_CURRENT_SOURCE_DIR}/asset_importers/fuzz_seeds/gltf.dict
+            "${corpus}" "${CMAKE_CURRENT_SOURCE_DIR}/asset_importers/fuzz_seeds/gltf")
+    set_tests_properties(gltf_import_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
+endif()
+
 # The job system (ADR-0025): deterministic tests without workers, functional and stress tests
 # with workers, the wait rules and shutdown. The stress tests are sized for Debug and the
 # sanitizer builds.
