@@ -385,3 +385,42 @@ if(TARGET ith_asset_database AND IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPI
             "${corpus}" "${CMAKE_CURRENT_SOURCE_DIR}/asset_database/fuzz_seeds/sidecar")
     set_tests_properties(asset_sidecar_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
 endif()
+
+# The job system (ADR-0025): deterministic tests without workers, functional and stress tests
+# with workers, the wait rules and shutdown. The stress tests are sized for Debug and the
+# sanitizer builds.
+ith_add_test_suite(jobs
+    SOURCES
+        jobs/JobHelpersTests.cpp
+        jobs/JobStressTests.cpp
+        jobs/JobSystemTests.cpp
+    LIBRARIES ith::jobs Threads::Threads)
+
+# The deadlock watchdog ends the process, so its test case is skipped in the suite and runs alone
+# here, passing when the watchdog's fatal error is printed.
+add_test(NAME jobs_watchdog
+    COMMAND ith_jobs_tests "--test-case=Watchdog: stops the process*" --no-skip
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+set_tests_properties(jobs_watchdog PROPERTIES
+    LABELS "unit"
+    TIMEOUT 120
+    PASS_REGULAR_EXPRESSION "Job system deadlock")
+
+# Likewise for a foreground pool exhausted by parked continuations (ADR-0026 rule 3).
+add_test(NAME jobs_pool_exhausted
+    COMMAND ith_jobs_tests "--test-case=JobSystem: stops the process when parked*" --no-skip
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+set_tests_properties(jobs_pool_exhausted PROPERTIES
+    LABELS "unit"
+    TIMEOUT 120
+    PASS_REGULAR_EXPRESSION "foreground job pool exhausted")
+
+# The job system benchmark (docs/development/jobs.md): job overhead, parallelFor speed-up,
+# continuation and wake-up latency. Like ecs_benchmark it only prints numbers.
+add_executable(ith_jobs_benchmark jobs/JobsBenchmark.cpp)
+target_link_libraries(ith_jobs_benchmark PRIVATE ith::jobs Threads::Threads)
+set_target_properties(ith_jobs_benchmark PROPERTIES
+    FOLDER "Ironthorn/Benchmarks"
+    COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+add_test(NAME jobs_benchmark COMMAND ith_jobs_benchmark)
+set_tests_properties(jobs_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
