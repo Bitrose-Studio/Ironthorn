@@ -11,6 +11,7 @@ Every dependency is fetched at configure time as an archive pinned by URL and SH
 | Library | Version | License | Used for | Shipped in games |
 |---|---|---|---|---|
 | [doctest](https://github.com/doctest/doctest) | 2.5.3 | MIT | unit tests | no |
+| [yyjson](https://github.com/ibireme/yyjson) | 0.13.0 | MIT | JSON reading and writing for source data and config, private to the `serialization` module | yes |
 | [SDL](https://github.com/libsdl-org/SDL) | 3.4.20 | zlib; its bundled HIDAPI is used under HIDAPI's BSD-style license (HIDAPI is offered under GPL-3, a BSD-style or its original license, at the user's choice) | windows, the event loop and the clipboard in the `platform` client module; later keyboard, mouse, gamepads, text input, cursors and file dialogs | yes |
 | [Slang](https://github.com/shader-slang/slang) | 2026.22.1 (prebuilt release) | Apache-2.0 WITH LLVM-exception | shader compilation in the `shader_compiler` tools module | no |
 | [DXC](https://github.com/microsoft/DirectXShaderCompiler) | 1.9.2609 (prebuilt release) | Windows archive: `dxcompiler.dll` under the LLVM release license (University of Illinois/NCSA, `LICENSE-LLVM.txt`) and the `dxil.dll` validator under Microsoft's DirectX Shader Compiler license terms (`LICENSE-MS.txt`, which allows use on Windows only); the archive has no table mapping files to its three license files. Linux archive: its release notes put every file, `libdxcompiler.so` and `libdxil.so` included, under `LICENSE-LLVM.txt` (NCSA); it also contains the same `LICENSE-MS.txt` without naming files it covers | DXIL code generation, validation and signing, loaded by Slang | no |
@@ -29,3 +30,10 @@ dialogs, power, joystick and HIDAPI on) are in `cmake/IronthornDependencies.cmak
 reasons in [ADR-0012](../decisions/0012-windowing-and-event-loop.md). zlib needs no notice in a
 shipped game, but games ship SDL's and HIDAPI's license texts in their third-party notices
 (`LICENSE.txt` and `src/hidapi/LICENSE-bsd.txt` in the archive).
+
+yyjson is built from its release archive as a static library and linked only by the
+`serialization` module, whose `Json.cpp` is the only file that includes it
+([ADR-0010](../decisions/0010-serialization.md)). File I/O and the incremental reader are turned
+off and its reader and writer are limited to 64 levels of nesting
+(`cmake/IronthornDependencies.cmake`). Games ship its MIT license text (`LICENSE` in the
+archive) in their third-party notices.

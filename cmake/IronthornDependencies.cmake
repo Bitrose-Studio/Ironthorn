@@ -39,6 +39,26 @@ if(IRONTHORN_BUILD_TESTS)
     FetchContent_MakeAvailable(doctest)
 endif()
 
+# --- yyjson: JSON reader and writer (MIT) ------------------------------------------------
+# Private to the serialization module (ADR-0010); only its Json.cpp includes yyjson.h. Built as
+# a static library from the release archive with the engine's toolchain flags, so sanitizer
+# builds instrument it too. File I/O and the incremental reader are off (the engine does its own
+# I/O), and nesting is limited to the engine's kMaxDepth (64) in yyjson's reader and writer as
+# well as in the engine's own code.
+ith_declare_dependency(yyjson
+    URL https://github.com/ibireme/yyjson/archive/refs/tags/0.13.0.tar.gz
+    SHA256 34e0f62a2bc11ab20d601e8ca1cc2b2079503aa45119a19133d89d19b94a0fae)
+ith_dependency_option(YYJSON_INSTALL OFF)
+ith_dependency_option(YYJSON_BUILD_TESTS OFF)
+ith_dependency_option(YYJSON_BUILD_FUZZER OFF)
+ith_dependency_option(YYJSON_BUILD_MISC OFF)
+ith_dependency_option(YYJSON_BUILD_DOC OFF)
+ith_dependency_option(YYJSON_DISABLE_FILE ON)
+ith_dependency_option(YYJSON_DISABLE_INCR_READER ON)
+ith_dependency_option(YYJSON_READER_DEPTH_LIMIT 64)
+ith_dependency_option(YYJSON_WRITER_DEPTH_LIMIT 64)
+FetchContent_MakeAvailable(yyjson)
+
 # --- Slang and DXC: the shader compiler (tools only, never linked into games) ----------
 # Both are their publishers' prebuilt releases: building either from source takes LLVM and far
 # longer than the engine. Slang is linked as a shared library and loads DXC's dxcompiler and
