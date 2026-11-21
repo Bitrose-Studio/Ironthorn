@@ -18,7 +18,8 @@
 //   std::vector<ith::serialization::Error> warnings;
 //   const auto read = ith::serialization::readText(*text, kLoadoutFormat, loadout, {.source = "a.json", .warnings = &warnings});
 //
-// The document is an object with "format", "version" and "data"; "data" holds the value:
+// The document is an object with "format", "version" and "data", in that order; an asset document
+// (a native asset, ADR-0024) also has an "id" before "data". "data" holds the value:
 // - bool as true or false; integers as exact decimal numbers; float and double as the shortest
 //   text that reads back bit-identical (std::to_chars), never infinities or NaN;
 // - std::string as a string, ith::Uuid as its canonical string;
@@ -40,6 +41,7 @@
 // All functions are thread-safe for distinct targets.
 
 #include "ith/foundation/Expected.h"
+#include "ith/foundation/Uuid.h"
 #include "ith/reflection/TypeInfo.h"
 #include "ith/reflection/TypeOf.h"
 #include "ith/serialization/Document.h"
@@ -74,19 +76,28 @@ struct TextReadOptions {
     // The bytes the read may allocate; 0 means the default of allocationBudget (Document.h). The
     // JSON tree and the value are each checked against it.
     std::size_t allocationBudget = 0;
+    // The document's "id" (ADR-0024 rule 3: the caller chooses for each read). Not null: an asset
+    // document is expected, which must have an "id" that is a UUID other than nil; the id is stored
+    // here when the read succeeds. Null: a document with an "id" is refused. Either mismatch fails
+    // with "serialization.not_a_document", whatever `unknownFields` says.
+    Uuid* id = nullptr;
 };
 
-// Writes the value of `type` at `object` as a document of `format` at its current version.
-// Fails with "serialization.non_finite" (an infinite or NaN float), "serialization.invalid_enum"
-// (a value that is no enumerator, or has bits no enumerator has), "serialization.not_saved" (the
-// type, or an element type, is Transient), "serialization.unsupported_type" (an optional of an
-// optional), "serialization.too_deep", "serialization.too_large" or "serialization.write_failed"
-// (a string that is not UTF-8). Precondition (asserted): `format` is valid (Document.h).
-Expected<std::string, Error> writeText(const DocumentFormat& format, const TypeInfo& type, const void* object);
+// Writes the value of `type` at `object` as a document of `format` at its current version. With
+// an `id`, an asset document: the id is written between "version" and "data"; a nil id fails with
+// "serialization.invalid_id". Fails with "serialization.non_finite" (an infinite or NaN float),
+// "serialization.invalid_enum" (a value that is no enumerator, or has bits no enumerator has),
+// "serialization.not_saved" (the type, or an element type, is Transient),
+// "serialization.unsupported_type" (an optional of an optional), "serialization.too_deep",
+// "serialization.too_large" or "serialization.write_failed" (a string that is not UTF-8).
+// Precondition (asserted): `format` is valid (Document.h).
+Expected<std::string, Error> writeText(const DocumentFormat& format, const TypeInfo& type, const void* object,
+                                       const Uuid* id = nullptr);
 
 // Reads a document of `format` into the value of `type` at `target`, migrating older versions.
 // On failure the target is unchanged. Fails with the parseJson errors and:
-// - "serialization.not_a_document": not an object with "format", "version" and "data";
+// - "serialization.not_a_document": not an object with "format", "version" and "data", or an "id"
+//   that doesn't match options.id (see TextReadOptions::id);
 // - "serialization.wrong_format", "serialization.newer_version", "serialization.version_too_old";
 // - "serialization.migration_failed";
 // - "serialization.wrong_type", "serialization.out_of_range", "serialization.unknown_enumerator",
@@ -99,10 +110,22 @@ Expected<std::string, Error> writeText(const DocumentFormat& format, const TypeI
 Expected<void, Error> readText(std::string_view text, const DocumentFormat& format, const TypeInfo& type, void* target,
                                const TextReadOptions& options = {});
 
+// Reads the envelope of a document of `format` (ADR-0024 rule 2) and returns its "data" tree,
+// migrated to the current version: for documents whose content is keyed by names rather than a
+// reflected type, such as configuration. The envelope checks, the options, the failures and the
+// warnings for unknown document keys are those of readText.
+Expected<Value, Error> readDocument(std::string_view text, const DocumentFormat& format,
+                                    const TextReadOptions& options = {});
+
+// Writes `data` as the "data" of a document of `format` at its current version, with the "id" of
+// an asset document when `id` is given. Fails with "serialization.invalid_format",
+// "serialization.invalid_id" (a nil id) and the writeJson errors.
+Expected<std::string, Error> writeDocument(const DocumentFormat& format, const Value& data, const Uuid* id = nullptr);
+
 // writeText for a reflected type T.
 template <typename T>
-Expected<std::string, Error> writeText(const DocumentFormat& format, const T& value) {
-    return writeText(format, typeOf<T>(), &value);
+Expected<std::string, Error> writeText(const DocumentFormat& format, const T& value, const Uuid* id = nullptr) {
+    return writeText(format, typeOf<T>(), &value, id);
 }
 
 // readText for a reflected type T.

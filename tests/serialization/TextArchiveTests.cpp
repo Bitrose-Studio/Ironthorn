@@ -506,4 +506,95 @@ TEST_SUITE("serialization.text") {
         const Error key = readError<ith::test::Health>(R"({"a\u0001b": 1})", serialization::UnknownFields::Fail);
         CHECK(key.path == R"($.a\x01b)");
     }
+
+    TEST_CASE("asset documents carry an id between version and data") {
+        ith::test::Health health;
+        health.current = 4.0f;
+        const ith::Uuid id = *ith::Uuid::parse("01234567-89ab-cdef-fedc-ba9876543210");
+        const auto text = serialization::writeText(kFormat, health, &id);
+        REQUIRE(text.hasValue());
+        CHECK(*text == "{\n"
+                       "  \"format\": \"test.text\",\n"
+                       "  \"version\": 1,\n"
+                       "  \"id\": \"01234567-89ab-cdef-fedc-ba9876543210\",\n"
+                       "  \"data\": {\n"
+                       "    \"current\": 4,\n"
+                       "    \"maximum\": 100\n"
+                       "  }\n"
+                       "}\n");
+
+        ith::Uuid read;
+        ith::test::Health loaded;
+        REQUIRE(serialization::readText(*text, kFormat, loaded, {.id = &read}));
+        CHECK(read == id);
+        CHECK(loaded.current == 4.0f);
+
+        const ith::Uuid nil;
+        CHECK(serialization::writeText(kFormat, health, &nil).error().code == "serialization.invalid_id");
+    }
+
+    TEST_CASE("the reader chooses whether a document needs an id") {
+        const auto check = [](const std::string& text, bool expectId, const char* code) {
+            CAPTURE(text);
+            ith::Uuid id;
+            ith::test::Health health;
+            health.current = 1.0f;
+            const auto result = serialization::readText(
+                text, kFormat, health,
+                {.unknownFields = serialization::UnknownFields::Warn, .id = expectId ? &id : nullptr});
+            REQUIRE_FALSE(result.hasValue());
+            CHECK(result.error().code == code);
+            CHECK(health.current == 1.0f);
+            CHECK(id.isNil());
+        };
+        const std::string withId =
+            R"({"format": "test.text", "version": 1, "id": "01234567-89ab-cdef-fedc-ba9876543210", "data": {}})";
+        check(withId, false, "serialization.not_a_document");
+        check(document("{}"), true, "serialization.not_a_document");
+        check(R"({"format": "test.text", "version": 1, "id": "00000000-0000-0000-0000-000000000000", "data": {}})",
+              true, "serialization.not_a_document");
+        check(R"({"format": "test.text", "version": 1, "id": 7, "data": {}})", true, "serialization.not_a_document");
+        check(R"({"format": "test.text", "version": 1, "id": "x", "data": {}})", true, "serialization.not_a_document");
+        check(R"({"format": "test.text", "version": 1, "id": "01234567-89ab-cdef-fedc-ba9876543210", )"
+              R"("id": "01234567-89ab-cdef-fedc-ba9876543210", "data": {}})",
+              true, "serialization.duplicate_field");
+    }
+
+    TEST_CASE("migrations of asset documents see only the data") {
+        // kHealthFormat's migration from version 1 renames "hp"; a document id is not data.
+        const std::string text = R"({"format": "test.health", "version": 1, )"
+                                 R"("id": "01234567-89ab-cdef-fedc-ba9876543210", "data": {"hp": 6}})";
+        ith::Uuid id;
+        ith::test::Health health;
+        REQUIRE(serialization::readText(text, kHealthFormat, health, {.id = &id}));
+        CHECK(health.current == 6.0f);
+        CHECK(id.toString() == "01234567-89ab-cdef-fedc-ba9876543210");
+    }
+
+    TEST_CASE("documents keyed by names read and write their data tree") {
+        Value data = Value::object();
+        data.set("look", Value::real(1.5));
+        const auto text = serialization::writeDocument(kFormat, data);
+        REQUIRE(text.hasValue());
+        std::vector<Error> warnings;
+        const auto read = serialization::readDocument(*text, kFormat, {.source = "b.json", .warnings = &warnings});
+        REQUIRE(read.hasValue());
+        CHECK(*read == data);
+        CHECK(warnings.empty());
+
+        const auto extra = serialization::readDocument(
+            R"({"format": "test.text", "version": 1, "data": {}, "note": 1})", kFormat, {.warnings = &warnings});
+        REQUIRE(extra.hasValue());
+        REQUIRE(warnings.size() == 1);
+        CHECK(warnings[0].code == "serialization.unknown_field");
+        CHECK(serialization::readDocument(document("{}", "2"), kFormat).error().code == "serialization.newer_version");
+
+        const ith::Uuid id = ith::Uuid::generate();
+        const auto asset = serialization::writeDocument(kFormat, data, &id);
+        REQUIRE(asset.hasValue());
+        ith::Uuid readId;
+        REQUIRE(serialization::readDocument(*asset, kFormat, {.id = &readId}));
+        CHECK(readId == id);
+        CHECK(serialization::readDocument(*asset, kFormat).error().code == "serialization.not_a_document");
+    }
 }

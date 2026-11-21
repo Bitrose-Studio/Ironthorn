@@ -9,7 +9,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -512,14 +514,32 @@ Unexpected<Error> headerError(std::string_view source, std::string code, std::st
 
 constexpr const char* kNotADocument = R"(a document is an object with "format", "version" and "data")";
 
-// The three keys of a document.
+// The keys of a document.
 struct Header {
     const Value* name = nullptr;
     const Value* version = nullptr;
+    const Value* id = nullptr;
     Value* data = nullptr;
 };
 
-// Finds the keys of a document. Other keys are skipped, or fail with UnknownFields::Fail.
+[[nodiscard]] bool isHeaderKey(std::string_view key) noexcept {
+    return key == "format" || key == "version" || key == "id" || key == "data";
+}
+
+// The id of an asset document, or nullopt when `id` is not a UUID other than nil.
+std::optional<Uuid> documentId(const Value& id) {
+    if (id.kind() != Value::Kind::String) {
+        return std::nullopt;
+    }
+    const Expected<Uuid> parsed = Uuid::parse(id.asString());
+    if (!parsed || parsed->isNil()) {
+        return std::nullopt;
+    }
+    return *parsed;
+}
+
+// Finds the keys of a document and checks its "id" against options.id (ADR-0024 rule 3). Other
+// keys are skipped, or fail with UnknownFields::Fail.
 Expected<Header, Error> findHeader(Value& document, const TextReadOptions& options) {
     if (document.kind() != Value::Kind::Object) {
         return headerError(options.source, "serialization.not_a_document", kNotADocument);
@@ -533,6 +553,9 @@ Expected<Header, Error> findHeader(Value& document, const TextReadOptions& optio
         } else if (member.key == "version") {
             duplicate = header.version != nullptr;
             header.version = &member.value;
+        } else if (member.key == "id") {
+            duplicate = header.id != nullptr;
+            header.id = &member.value;
         } else if (member.key == "data") {
             duplicate = header.data != nullptr;
             header.data = &member.value;
@@ -548,6 +571,17 @@ Expected<Header, Error> findHeader(Value& document, const TextReadOptions& optio
     if (header.name == nullptr || header.version == nullptr || header.data == nullptr ||
         header.name->kind() != Value::Kind::String) {
         return headerError(options.source, "serialization.not_a_document", kNotADocument);
+    }
+    if (options.id == nullptr && header.id != nullptr) {
+        return headerError(options.source, "serialization.not_a_document",
+                           R"(the document has an "id", but only asset documents have one)");
+    }
+    if (options.id != nullptr && header.id == nullptr) {
+        return headerError(options.source, "serialization.not_a_document", R"(an asset document needs an "id")");
+    }
+    if (options.id != nullptr && !documentId(*header.id).has_value()) {
+        return headerError(options.source, "serialization.not_a_document",
+                           R"(the document's "id" is not a UUID other than nil)");
     }
     return header;
 }
@@ -595,36 +629,10 @@ Expected<void, Error> migrate(Value& data, std::uint32_t version, const Document
     return {};
 }
 
-} // namespace
-
-Expected<std::string, Error> writeText(const DocumentFormat& format, const TypeInfo& type, const void* object) {
-    if (!detail::isValidFormat(format)) {
-        return makeUnexpected(makeError("serialization.invalid_format", "the DocumentFormat is invalid"));
-    }
-    if (detail::isExcluded(type.flags, detail::kNotInText)) {
-        return makeUnexpected(
-            makeError("serialization.not_saved", std::string(type.name) + " is Transient and can't be saved"));
-    }
-    Value document = Value::object();
-    document.set("format", Value::string(std::string(format.name)));
-    document.set("version", Value::unsignedInteger(format.version));
-    TextWriter writer;
-    // The document object is the first level of nesting.
-    if (!writer.write(type, object, document.set("data", Value()), 1)) {
-        return makeUnexpected(writer.takeError());
-    }
-    return writeJson(document);
-}
-
-Expected<void, Error> readText(std::string_view text, const DocumentFormat& format, const TypeInfo& type, void* target,
-                               const TextReadOptions& options) {
-    if (!detail::isValidFormat(format)) {
-        return headerError(options.source, "serialization.invalid_format", "the DocumentFormat is invalid");
-    }
-    if (detail::isExcluded(type.flags, detail::kNotInText)) {
-        return headerError(options.source, "serialization.not_saved",
-                           std::string(type.name) + " is Transient and can't be loaded");
-    }
+// Parses `text`, checks its envelope against `format` and options.id, and migrates its data in
+// place. Returns the whole document; its "data" member holds the current version.
+Expected<Value, Error> parseDocument(std::string_view text, const DocumentFormat& format,
+                                     const TextReadOptions& options) {
     Expected<Value, Error> document = parseJson(text, JsonReadOptions{.source = options.source,
                                                                       .syntax = options.syntax,
                                                                       .maxSize = options.maxSize,
@@ -640,38 +648,126 @@ Expected<void, Error> readText(std::string_view text, const DocumentFormat& form
     if (!version) {
         return makeUnexpected(version.error());
     }
-    // Migrations edit the parsed tree, which is discarded on failure.
+    // Migrations edit the parsed tree, which is discarded on failure. They see "data" only, never
+    // the envelope.
     if (Expected<void, Error> migrated = migrate(*header->data, *version, format, options.source); !migrated) {
         return makeUnexpected(std::move(migrated).error());
+    }
+    return document;
+}
+
+// Completes a successful read: stores the id (checked by findHeader) and appends the warnings for
+// unknown document keys, at most kMaxHeaderWarnings of them.
+void finishRead(const Value& document, const TextReadOptions& options) {
+    if (options.id != nullptr) {
+        *options.id = documentId(*document.find("id")).value_or(Uuid());
+    }
+    if (options.warnings == nullptr) {
+        return;
+    }
+    constexpr std::size_t kMaxHeaderWarnings = 100;
+    std::size_t unknownKeys = 0;
+    for (const Value::Member& member : document.members()) {
+        if (!isHeaderKey(member.key) && ++unknownKeys <= kMaxHeaderWarnings) {
+            options.warnings->push_back(
+                Error{.code = "serialization.unknown_field",
+                      .message = "unknown document key '" + detail::printable(member.key) + "' is dropped",
+                      .source = std::string(options.source)});
+        }
+    }
+    if (unknownKeys > kMaxHeaderWarnings) {
+        options.warnings->push_back(Error{.code = "serialization.unknown_field",
+                                          .message = std::to_string(unknownKeys - kMaxHeaderWarnings) +
+                                                     " more unknown document keys are dropped",
+                                          .source = std::string(options.source)});
+    }
+}
+
+// A document object with "format", "version" and, for an asset document, "id"; the caller adds
+// "data". Fails with "serialization.invalid_format" or "serialization.invalid_id".
+Expected<Value, Error> makeEnvelope(const DocumentFormat& format, const Uuid* id) {
+    if (!detail::isValidFormat(format)) {
+        return makeUnexpected(makeError("serialization.invalid_format", "the DocumentFormat is invalid"));
+    }
+    if (id != nullptr && id->isNil()) {
+        return makeUnexpected(makeError("serialization.invalid_id", "an asset document's id can't be nil"));
+    }
+    Value document = Value::object();
+    document.set("format", Value::string(std::string(format.name)));
+    document.set("version", Value::unsignedInteger(format.version));
+    if (id != nullptr) {
+        document.set("id", Value::string(id->toString()));
+    }
+    return document;
+}
+
+} // namespace
+
+Expected<std::string, Error> writeText(const DocumentFormat& format, const TypeInfo& type, const void* object,
+                                       const Uuid* id) {
+    Expected<Value, Error> document = makeEnvelope(format, id);
+    if (!document) {
+        return makeUnexpected(std::move(document).error());
+    }
+    if (detail::isExcluded(type.flags, detail::kNotInText)) {
+        return makeUnexpected(
+            makeError("serialization.not_saved", std::string(type.name) + " is Transient and can't be saved"));
+    }
+    TextWriter writer;
+    // The document object is the first level of nesting.
+    if (!writer.write(type, object, document->set("data", Value()), 1)) {
+        return makeUnexpected(writer.takeError());
+    }
+    return writeJson(*document);
+}
+
+Expected<std::string, Error> writeDocument(const DocumentFormat& format, const Value& data, const Uuid* id) {
+    Expected<Value, Error> document = makeEnvelope(format, id);
+    if (!document) {
+        return makeUnexpected(std::move(document).error());
+    }
+    document->set("data", data);
+    return writeJson(*document);
+}
+
+Expected<Value, Error> readDocument(std::string_view text, const DocumentFormat& format,
+                                    const TextReadOptions& options) {
+    if (!detail::isValidFormat(format)) {
+        return headerError(options.source, "serialization.invalid_format", "the DocumentFormat is invalid");
+    }
+    Expected<Value, Error> document = parseDocument(text, format, options);
+    if (!document) {
+        return makeUnexpected(std::move(document).error());
+    }
+    finishRead(*document, options);
+    Value data = std::move(*document->find("data"));
+    return data;
+}
+
+Expected<void, Error> readText(std::string_view text, const DocumentFormat& format, const TypeInfo& type, void* target,
+                               const TextReadOptions& options) {
+    if (!detail::isValidFormat(format)) {
+        return headerError(options.source, "serialization.invalid_format", "the DocumentFormat is invalid");
+    }
+    if (detail::isExcluded(type.flags, detail::kNotInText)) {
+        return headerError(options.source, "serialization.not_saved",
+                           std::string(type.name) + " is Transient and can't be loaded");
+    }
+    const Expected<Value, Error> document = parseDocument(text, format, options);
+    if (!document) {
+        return makeUnexpected(document.error());
     }
 
     const detail::TempValue result(type);
     TextReader reader(options.unknownFields, options.warnings != nullptr,
                       allocationBudget(text.size(), options.allocationBudget));
-    if (!reader.read(type, *header->data, result.get(), 1)) {
+    if (!reader.read(type, *document->find("data"), result.get(), 1)) {
         return withSource(reader.takeError(), options.source);
     }
     result.moveInto(target);
 
+    finishRead(*document, options);
     if (options.warnings != nullptr) {
-        // Unknown document keys, at most kMaxHeaderWarnings of them.
-        constexpr std::size_t kMaxHeaderWarnings = 100;
-        std::size_t unknownKeys = 0;
-        for (const Value::Member& member : document->members()) {
-            if (member.key != "format" && member.key != "version" && member.key != "data" &&
-                ++unknownKeys <= kMaxHeaderWarnings) {
-                options.warnings->push_back(
-                    Error{.code = "serialization.unknown_field",
-                          .message = "unknown document key '" + detail::printable(member.key) + "' is dropped",
-                          .source = std::string(options.source)});
-            }
-        }
-        if (unknownKeys > kMaxHeaderWarnings) {
-            options.warnings->push_back(Error{.code = "serialization.unknown_field",
-                                              .message = std::to_string(unknownKeys - kMaxHeaderWarnings) +
-                                                         " more unknown document keys are dropped",
-                                              .source = std::string(options.source)});
-        }
         for (Error& warning : reader.takeWarnings()) {
             warning.source = std::string(options.source);
             options.warnings->push_back(std::move(warning));
