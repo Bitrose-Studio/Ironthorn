@@ -161,11 +161,13 @@ its row. Editor and tools applications are left out of the default build of `Rel
 Building one by name in `Release` is not refused, but nothing ships it, and a test that runs one
 must not run in `Release`. Only applications are excluded: `tools` and `editor` modules and their
 tests still build and run in `Release`, so `verify` covers them in every configuration. The
-samples `minimal_player`, `window_player` and `minimal_server` (`samples/`) are the
-applications today.
+samples `minimal_player`, `window_player`, `scene_player` (built only with the tools, whose
+`slangc` compiles its shaders) and `minimal_server` (`samples/`) are the applications today.
 
 Sanitizer builds turn the tools off, and with them the editor, so `editor` modules get no
-sanitizer coverage. That needs a follow-up when the first editor module lands.
+sanitizer coverage. That needs a follow-up when the first editor module lands. The same goes for
+`scene_player` and its GPU test, which need the tools' `slangc`: their code
+(`samples/scene_player/Scenes.cpp`) gets no sanitizer coverage either.
 
 Each application is meant to call the registration function of every module it links, from a
 source file generated out of its module list (ADR-0017 rule 5). That is deferred until the first
@@ -179,7 +181,8 @@ cooker link and games never do. Today that is `shader_compiler`. Its prebuilt Sl
 releases (Windows and Linux, x86-64) are downloaded at configure time, pinned by SHA-256. Their
 shared libraries are copied next to the test executable after each link, so `ctest` runs
 without any setup. Configure with `-DIRONTHORN_BUILD_TOOLS=OFF` to build without the tools
-modules and these downloads.
+modules and these downloads. The build also runs Slang's `slangc` to compile the shaders that
+samples and their tests embed (`ith_embed_shaders()`), so those exist only with the tools.
 
 On Linux the tools need glibc 2.38 or newer (Ubuntu 24.04 or newer), which DXC's libraries
 require, and zlib (`libz.so.1`).
@@ -223,7 +226,8 @@ leg gets the display packages. Formatting and clang-tidy run only in the Windows
     it reports the expected violation.
   - `changelog_fragments`: changelog fragment format.
 - Each sample application runs once as `sample_<name>` (label `sample`). `window_player` runs
-  for 10 frames on SDL's headless `offscreen` video driver.
+  for 10 frames on SDL's headless `offscreen` video driver. So does `scene_player`, which
+  renders nothing there; the `scene_player` GPU suite draws its scenes.
 - Tests that need a GPU carry the `gpu` label. Skip them with `-ExcludeLabel gpu`
   (`ctest -LE gpu` on Linux). On Windows they run the Direct3D 12 backend on WARP, which every
   Windows machine has, so verify and CI run them. The Vulkan tests run on the machine's GPU, or

@@ -92,7 +92,12 @@ device->destroy(*swapchain); // before the window
   read them without a lock.
 - **Explicit barriers.** The RHI tracks no resource state. A barrier names the stages and
   accesses before and after, and for textures the layouts (`Barrier.h`). A swapchain image starts
-  every frame in an undefined layout and ends it in `Present`.
+  every frame in an undefined layout and ends it in `Present`. A barrier out of `Undefined`
+  discards the contents but still follows the texture's earlier use: name that use's stages, and
+  its accesses where it wrote (a depth buffer reused every frame: `DepthStencil` and
+  `DepthStencilWrite`).
+  Vulkan's synchronization validation reports a write-after-write hazard without the access;
+  Direct3D 12 drops it.
 - **Frames.** At most `kFramesInFlight` (2) frames are in flight: `beginFrame()` waits for the
   frame two back. Command lists come from the frame's pool, may be recorded on several threads
   at once (one thread per list), and are submitted or discarded before `endFrame()`. A list
@@ -194,7 +199,10 @@ the Agility SDK, all at the versions in `cmake/IronthornDependencies.cmake`.
   mapped.
 - **Barriers** map one to one onto enhanced barriers. A shader read (`Access::ShaderRead`) maps to
   a shader-resource read, or to an unordered-access read when the texture layout is
-  `ShaderWrite` (or a `General` storage texture).
+  `ShaderWrite` (or a `General` storage texture). A texture barrier out of `Undefined` keeps
+  its stages but drops its access before, which Direct3D 12 refuses there; Vulkan needs it, so
+  name the earlier writes anyway (a depth buffer reused every frame: `DepthStencil` and
+  `DepthStencilWrite` before).
 - **Commands.** One direct queue and one fence carry the timeline. Each pooled command list has
   its own allocator, reset when the list is begun. `beginRendering()` sets render targets and
   clears; indirect draws and dispatches use command signatures; markers are PIX-readable events.
@@ -360,6 +368,17 @@ there is none, with validation on where the layer is installed. Environment vari
 `tests/rhi_select` checks backend selection on every platform; its Vulkan case accepts a device or
 `rhi.backend_unavailable`/`rhi.unsupported_device`.
 
+### Scenes
+
+`tests/scene_player` (CTest name `scene_player`, label `gpu`, built with the tools) renders the
+scenes of the `scene_player` sample offscreen on each backend the machine has, with the same
+environment variables as above, and checks the pixels against the geometry, without reference
+images: the triangle's corners, centroid, vertex colors and covered area; a near cube hiding a
+larger far one drawn after it (reversed depth); and the 10,000-cube field's sky and its nearest
+cubes' colors. Direct3D 12 runs with GPU-based validation. Where both backends run, it also
+checks that they render the same images (at most 1% of texels differ by more than 2 levels, 5%
+for the field).
+
 ## Testing on the null backend
 
 `createNullDevice()` (`ith/rhi/NullDevice.h`) takes the capabilities and limits to report and
@@ -380,3 +399,24 @@ gpu.failNextResize();                // the next swapchain recreation fails
 swapchain builds, so tests check behaviour without a GPU. The tests in `tests/rhi` cover handle
 lifetimes, deferred destruction, frame pacing, swapchains, device loss, the recording checks,
 and the thread-safe calls racing the render thread (run under ThreadSanitizer in CI).
+
+## Samples
+
+`samples/scene_player` draws with the bindless model end to end: shaders read vertices and
+instances from buffers whose `shaderReadIndex()` is in the push constants, and pipelines have no
+vertex input layout. `--scene triangle` draws three vertices in one `draw(3)`; the default scene
+draws 10,000 cubes in one `drawIndexed(36, 10000)` with a 16-bit index buffer, per-instance
+position, size and color in a storage buffer, a camera in the push constants, a reversed `D32Float`
+depth buffer and one directional light. `--no-vsync` makes the printed frame time the time a
+frame takes; GPU time isn't measured until the RHI has timestamp queries.
+
+The scenes' code (`Scenes.h`, `Scenes.cpp`) is compiled into the sample and into its GPU test.
+`depthBarrier()` readies the reused depth buffer each frame, after the earlier frames' depth writes
+(see [the rule for barriers out of `Undefined`](#rules)). The Slang shaders (`Triangle.slang`,
+`Cubes.slang`) are compiled at build time by the pinned `slangc` with `ith_embed_shaders()` and
+embedded in each program, as
+[ADR-0023](../decisions/0023-build-time-shaders-for-samples-and-tests.md) (embedded shaders are
+compiled at build time with slangc) allows for samples and tests; so the sample and the test exist
+only with `IRONTHORN_BUILD_TOOLS`. One source serves both APIs through `ITH_SPIRV`, with the
+engine's compile options ([shaders](shaders.md)). Games load cooked shaders instead (ADR-0011
+rule 9).
