@@ -66,6 +66,20 @@ ith_dependency_option(YYJSON_READER_DEPTH_LIMIT 64)
 ith_dependency_option(YYJSON_WRITER_DEPTH_LIMIT 64)
 FetchContent_MakeAvailable(yyjson)
 
+# --- xxHash: 128-bit content hashes for the derived-data cache (BSD-2-Clause) -------------
+# Header only and private to asset_database (ADR-0015 rule 11): Hash128.cpp includes xxhash.h
+# with XXH_INLINE_ALL, so no library is built. The archive has no top-level CMakeLists.txt, so
+# FetchContent only unpacks it; its command-line tool (cli/, GPL-2.0) is never compiled.
+if(IRONTHORN_BUILD_TOOLS)
+    ith_declare_dependency(xxhash
+        URL https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.4.tar.gz
+        SHA256 5738270935e7c3d38a79b3adf7c9692566ce7895a25f67de43ad52ab504acd32)
+    FetchContent_MakeAvailable(xxhash)
+    add_library(ith_xxhash INTERFACE)
+    add_library(ith::xxhash ALIAS ith_xxhash)
+    target_include_directories(ith_xxhash SYSTEM INTERFACE "${xxhash_SOURCE_DIR}")
+endif()
+
 # --- Slang and DXC: the shader compiler (tools only, never linked into games) ----------
 # Both are their publishers' prebuilt releases: building either from source takes LLVM and far
 # longer than the engine. Slang is linked as a shared library and loads DXC's dxcompiler and

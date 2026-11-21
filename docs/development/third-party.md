@@ -12,6 +12,7 @@ Every dependency is fetched at configure time as an archive pinned by URL and SH
 |---|---|---|---|---|
 | [doctest](https://github.com/doctest/doctest) | 2.5.3 | MIT | unit tests | no |
 | [yyjson](https://github.com/ibireme/yyjson) | 0.13.0 | MIT | JSON reading and writing for source data and config, private to the `serialization` module | yes |
+| [xxHash](https://github.com/Cyan4973/xxHash) | 0.8.4 | BSD-2-Clause (the library header; the archive's `xxhsum` tool, GPL-2.0, is not built) | XXH3-128 content hashes for derived-data cache keys, private to the `asset_database` tools module (`Hash128.cpp`) | no |
 | [SDL](https://github.com/libsdl-org/SDL) | 3.4.20 | zlib; its bundled HIDAPI is used under HIDAPI's BSD-style license (HIDAPI is offered under GPL-3, a BSD-style or its original license, at the user's choice) | windows, the event loop and the clipboard in the `platform` client module; later keyboard, mouse, gamepads, text input, cursors and file dialogs | yes |
 | [Slang](https://github.com/shader-slang/slang) | 2026.22.1 (prebuilt release) | Apache-2.0 WITH LLVM-exception | shader compilation in the `shader_compiler` tools module, and its `slangc` at build time for the shaders samples embed (`ith_embed_shaders()`) | no |
 | [DXC](https://github.com/microsoft/DirectXShaderCompiler) | 1.9.2609 (prebuilt release) | Windows archive: `dxcompiler.dll` under the LLVM release license (University of Illinois/NCSA, `LICENSE-LLVM.txt`) and the `dxil.dll` validator under Microsoft's DirectX Shader Compiler license terms (`LICENSE-MS.txt`, which allows use on Windows only); the archive has no table mapping files to its three license files. Linux archive: its release notes put every file, `libdxcompiler.so` and `libdxil.so` included, under `LICENSE-LLVM.txt` (NCSA); it also contains the same `LICENSE-MS.txt` without naming files it covers | DXIL code generation, validation and signing, loaded by Slang | no |
@@ -28,6 +29,11 @@ time and their shared libraries are copied next to the executables that need the
 tree. Neither is committed, so the repository needs no notice for them. A distribution that
 ships them (an editor, never a game) must include their license files, which are in the
 archives.
+
+xxHash is header-only: `asset_database`'s `Hash128.cpp` is the only file that includes
+`xxhash.h`, with `XXH_INLINE_ALL`, so no library is built and no xxHash symbol is visible outside
+that file. The archive's command-line tool (`cli/`, GPL-2.0) is never compiled. Editors and tools
+that ship it include its BSD-2 license text (`LICENSE` in the archive).
 
 SDL is built from its release archive as a static library, only when `IRONTHORN_BUILD_CLIENT` is
 on (the default), and only the `platform` module links it; a dedicated server doesn't contain
