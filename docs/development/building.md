@@ -89,7 +89,11 @@ The reflection generator `ith_reflect` is instrumented too and runs during the b
 sanitizer runtime's needs apply at build time, not only to `ctest`. Clang 18's runtimes fail on
 kernels with high ASLR entropy; lower it before configuring and building, as CI does:
 `sudo sysctl vm.mmap_rnd_bits=28`. Clang sanitizer builds also build `ith_reflect_fuzz`, a
-libFuzzer target for the generator, and run it briefly as the `reflect_tool_fuzz` test.
+libFuzzer target for the generator, and run it briefly as the `reflect_tool_fuzz` test, and
+`ith_serialization_text_fuzz` and `ith_serialization_binary_fuzz` for the serialization readers
+(the `serialization_text_fuzz` and `serialization_binary_fuzz` tests). Clang ASan builds compile
+all code with libFuzzer's coverage instrumentation (`-fsanitize=fuzzer-no-link`), so the fuzz
+targets get coverage feedback from the libraries they call; other executables don't link libFuzzer.
 
 The `linux-tsan` test preset sets `TSAN_OPTIONS` with `tests/tsan-suppressions.txt`, which holds
 the reports TSan makes about system libraries the engine can't change, each with its reason.

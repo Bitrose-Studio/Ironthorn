@@ -100,4 +100,11 @@ if(IRONTHORN_ENABLE_SANITIZERS OR IRONTHORN_ENABLE_TSAN)
     # Sanitizer runtimes must see every translation unit, third-party code included.
     add_compile_options(-fsanitize=${ith_sanitizers} -fno-omit-frame-pointer -fno-sanitize-recover=all)
     add_link_options(-fsanitize=${ith_sanitizers})
+    # Clang's ASan builds also carry libFuzzer's coverage instrumentation, so the fuzz targets
+    # (tests/CMakeLists.txt) get coverage feedback from the engine and third-party code they
+    # call, not only from their own source file. Ordinary executables link without libFuzzer.
+    if(IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+            AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+        add_compile_options(-fsanitize=fuzzer-no-link)
+    endif()
 endif()
