@@ -104,6 +104,21 @@ if(TARGET ith_rhi_vulkan)
     endif()
 endif()
 
+# scene_player's scenes (the triangle and 10,000 instanced cubes) rendered offscreen on every GPU
+# backend the machine has, and checked analytically. Its shaders come from slangc at build time,
+# so it exists only with the tools, like the sample.
+if(TARGET scene_player)
+    ith_add_test_suite(scene_player
+        SOURCES scene_player/SceneTests.cpp "${PROJECT_SOURCE_DIR}/samples/scene_player/Scenes.cpp"
+        LIBRARIES ith::rhi ith::rhi_select
+        LABELS gpu)
+    target_include_directories(ith_scene_player_tests PRIVATE "${PROJECT_SOURCE_DIR}/samples/scene_player")
+    ith_scene_player_shaders(ith_scene_player_tests)
+    if(TARGET ith_rhi_d3d12)
+        ith_use_d3d12_agility_sdk(ith_scene_player_tests)
+    endif()
+endif()
+
 # A libFuzzer target for the Vulkan backend's SPIR-V binding check, in Clang sanitizer builds
 # only, with a short smoke run in CTest like the others, seeded with SPIR-V the shader compiler
 # wrote (rhi_vulkan/fuzz_seeds).

@@ -5,3 +5,4 @@
 add_subdirectory(minimal_player)
 add_subdirectory(minimal_server)
 add_subdirectory(window_player)
+add_subdirectory(scene_player)
