@@ -310,6 +310,61 @@ TEST_SUITE("asset_database.import") {
         CHECK_FALSE(fixture.database->reimport(ith::AssetId::generate()).hasValue());
     }
 
+    TEST_CASE("files the importer needs are read from the source's folder and are part of the cache key") {
+        Fixture fixture;
+        fixture.project.write("Ships/Ship.objects", "include Parts/Hull.txt\nmesh Hull\nrefer Textures/Rock.png\n");
+        fixture.project.write("Ships/Parts/Hull.txt", "first");
+        const ith::ImportReport first = fixture.import("Ships/Ship.objects");
+        CHECK(keysOf(first) == std::vector<std::string>{"file:Parts/Hull.txt", "mesh:Hull"});
+        REQUIRE(first.subAssets.size() == 2);
+        CHECK(payloadText(first.subAssets[0]) == "first");
+        CHECK(first.references == std::vector<std::string>{"Ships/Textures/Rock.png"});
+        CHECK(fixture.calls == 1);
+
+        // Unchanged inputs come from the cache, references included.
+        const ith::ImportReport cached = fixture.import("Ships/Ship.objects");
+        CHECK(cached.fromCache);
+        CHECK(cached.references == first.references);
+        CHECK(fixture.calls == 1);
+
+        // A changed dependency is a miss and keeps the ids.
+        fixture.project.write("Ships/Parts/Hull.txt", "second");
+        const ith::ImportReport changed = fixture.import("Ships/Ship.objects");
+        CHECK_FALSE(changed.fromCache);
+        CHECK(fixture.calls == 2);
+        REQUIRE(changed.subAssets.size() == 2);
+        CHECK(payloadText(changed.subAssets[0]) == "second");
+        CHECK(idsOf(changed).present == idsOf(first).present);
+    }
+
+    TEST_CASE("missing, escaping or miscased dependencies fail the import and change nothing") {
+        Fixture fixture;
+        const auto code = [&](std::string_view path) {
+            const auto report = fixture.database->import(path);
+            return report ? std::string() : report.error().code;
+        };
+        fixture.project.write("Ships/Missing.objects", "include Hull.txt\n");
+        CHECK(code("Ships/Missing.objects") == "asset.not_found");
+        fixture.project.write("Ships/hull.txt", "x");
+        CHECK(code("Ships/Missing.objects") == "asset.not_found"); // the file is "hull.txt"
+
+        fixture.project.write("Secret.txt", "x");
+        fixture.project.write("Ships/Escape.objects", "include ../Secret.txt\n");
+        CHECK(code("Ships/Escape.objects") == "import.invalid_output");
+        fixture.project.write("Ships/Absolute.objects", "include /Secret.txt\n");
+        CHECK(code("Ships/Absolute.objects") == "import.invalid_output");
+        fixture.project.write("Ships/Drive.objects", "include C:/Secret.txt\n");
+        CHECK(code("Ships/Drive.objects") == "import.invalid_output");
+        fixture.project.write("Ships/BadReference.objects", "refer ../Rock.png\n");
+        CHECK(code("Ships/BadReference.objects") == "import.invalid_output");
+
+        // Dependencies are checked before the importer runs; references only after it ran.
+        CHECK(fixture.calls == 1);
+        CHECK(fixture.database->records().empty());
+        CHECK_FALSE(fixture.project.exists("Ships/Missing.objects.meta"));
+        CHECK_FALSE(fixture.project.exists("Ships/Escape.objects.meta"));
+    }
+
     TEST_CASE("a file moved outside the editor keeps its id on import; a copy gets a new one") {
         Fixture fixture;
         fixture.project.write("Ship.objects", "mesh Hull\n");

@@ -15,6 +15,7 @@
 //       std::span<const std::string_view> extensions() const override { return kExtensions; }
 //       ith::serialization::Value defaultSettings() const override { ... }
 //       ith::Expected<ith::ImportOutput> import(std::span<const std::byte> source,
+//                                               std::span<const ith::ImportFile> files,
 //                                               const ith::serialization::Value& settings) const override;
 //   };
 //
@@ -52,6 +53,18 @@ struct ImportedObject {
 // What an importer returns: the objects of the source file, in source order.
 struct ImportOutput {
     std::vector<ImportedObject> objects;
+    // The files the objects refer to without the import reading them, such as the images of a
+    // material: paths relative to the source file's folder, '/'-separated, each valid as an asset
+    // path (isValidContentPath), sorted and without duplicates.
+    std::vector<std::string> references;
+};
+
+// A file next to the source that an import reads, such as a glTF's external buffer.
+struct ImportFile {
+    // The path relative to the source file's folder, as Importer::dependencies() returned it.
+    std::string_view path;
+    // The whole file.
+    std::span<const std::byte> bytes;
 };
 
 // Reads one kind of source file.
@@ -81,10 +94,26 @@ public:
     // The settings of a newly imported file: a JSON object.
     [[nodiscard]] virtual serialization::Value defaultSettings() const = 0;
 
+    // The other files the import of `source` with `settings` reads, such as a glTF's external
+    // buffers: paths relative to the source file's folder, '/'-separated, each valid as an asset
+    // path (isValidContentPath), so they never leave that folder. The asset database reads them,
+    // includes their content in the derived-data key and passes them to import(). Fails like
+    // import() when the source is malformed. The default has none.
+    //
+    // Defined here, like every non-pure member: a class whose first non-inline virtual function
+    // is defined in a module (built without RTTI) would have its type information emitted only
+    // there, and test code built with RTTI that derives from it would not link.
+    [[nodiscard]] virtual Expected<std::vector<std::string>>
+    dependencies(std::span<const std::byte> /*source*/, const serialization::Value& /*settings*/) const {
+        return std::vector<std::string>{};
+    }
+
     // Imports `source` with `settings` (an object; keys the importer doesn't know must be ignored,
-    // so that older settings still import). Fails with an error whose code starts with "import."
-    // when the source is malformed.
+    // so that older settings still import). `files` holds the files dependencies() named, sorted
+    // by path and without duplicates. The importer never reads files itself. Fails with an error
+    // whose code starts with "import." when the source is malformed.
     [[nodiscard]] virtual Expected<ImportOutput> import(std::span<const std::byte> source,
+                                                        std::span<const ImportFile> files,
                                                         const serialization::Value& settings) const = 0;
 };
 

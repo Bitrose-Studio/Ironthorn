@@ -8,6 +8,9 @@
 //   mesh                  (an unnamed mesh)
 //   material Steel
 //   !broken               (a line starting with '!' makes the import fail)
+//   include Parts/Hull.txt  (reads a file next to the source: an object "file Parts/Hull.txt" whose
+//                           payload is the file's content)
+//   refer Textures/Rock.png (a reference to another file)
 //
 // Each object's payload is its text after " = ", followed by "@<scale>" from the settings.
 
@@ -18,6 +21,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -29,6 +33,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace ith::test {
 
@@ -108,7 +113,18 @@ public:
         return settings;
     }
 
-    [[nodiscard]] Expected<ImportOutput> import(std::span<const std::byte> source,
+    [[nodiscard]] Expected<std::vector<std::string>>
+    dependencies(std::span<const std::byte> source, const serialization::Value& /*settings*/) const override {
+        std::vector<std::string> paths;
+        for (const std::string_view rawLine : split(textOf(source), '\n')) {
+            if (const std::string_view line = trim(rawLine); line.starts_with(kInclude)) {
+                paths.emplace_back(line.substr(kInclude.size()));
+            }
+        }
+        return paths;
+    }
+
+    [[nodiscard]] Expected<ImportOutput> import(std::span<const std::byte> source, std::span<const ImportFile> files,
                                                 const serialization::Value& settings) const override {
         if (m_calls != nullptr) {
             ++*m_calls;
@@ -116,7 +132,7 @@ public:
         const serialization::Value* scaleValue = settings.find("scale");
         const std::int64_t scale =
             scaleValue != nullptr ? scaleValue->toNumber<std::int64_t>().value_or(1) : std::int64_t{1};
-        const std::string_view text(reinterpret_cast<const char*>(source.data()), source.size());
+        const std::string_view text = textOf(source);
         ImportOutput output;
         for (const std::string_view rawLine : split(text, '\n')) {
             const std::string_view line = trim(rawLine);
@@ -125,6 +141,20 @@ public:
             }
             if (line.front() == '!') {
                 return makeError("import.malformed", "the source has a '!' line");
+            }
+            if (line.starts_with(kRefer)) {
+                output.references.emplace_back(line.substr(kRefer.size()));
+                continue;
+            }
+            if (line.starts_with(kInclude)) {
+                const std::string_view path = line.substr(kInclude.size());
+                const auto file = std::ranges::find(files, path, &ImportFile::path);
+                if (file == files.end()) {
+                    return makeError("import.malformed", "the file '" + std::string(path) + "' was not passed");
+                }
+                output.objects.push_back(ImportedObject{
+                    .type = "file", .name = std::string(path), .payload = {file->bytes.begin(), file->bytes.end()}});
+                continue;
             }
             std::string_view head = line;
             std::string payload;
@@ -145,7 +175,13 @@ public:
     }
 
 private:
+    static constexpr std::string_view kInclude = "include ";
+    static constexpr std::string_view kRefer = "refer ";
     static constexpr std::array<std::string_view, 1> kExtensions = {".objects"};
+
+    static std::string_view textOf(std::span<const std::byte> bytes) {
+        return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+    }
 
     std::atomic<int>* m_calls;
     std::uint32_t m_version;

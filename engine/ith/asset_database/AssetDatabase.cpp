@@ -351,12 +351,88 @@ Expected<bool> findSidecarForImport(const std::filesystem::path& content, std::s
     return false;
 }
 
-// The importer's output for `source` with the sidecar's settings: from the derived-data cache
-// when every input is unchanged (`fromCache`), otherwise imported and stored there.
+// The folder of `path` with a trailing '/', or empty for a file at the top of the Content folder.
+std::string_view folderOf(std::string_view path) {
+    const std::size_t slash = path.rfind('/');
+    return slash == std::string_view::npos ? std::string_view() : path.substr(0, slash + 1);
+}
+
+std::span<const std::byte> bytesOf(std::string_view text) {
+    return std::as_bytes(std::span<const char>(text.data(), text.size()));
+}
+
+// A file that an import reads besides its source (Importer::dependencies).
+struct Dependency {
+    // Relative to the source file's folder, as the importer named it.
+    std::string path;
+    std::string bytes;
+};
+
+// Reads the files the import of `source`, the file at `path`, needs besides it, sorted by path.
+// Fails with the importer's error, "import.invalid_output" (a path that isn't relative to the
+// source's folder), "asset.invalid_path", "asset.not_found" (also for a name in another case),
+// "asset.too_large" (too many files, or more than kMaxSourceFileSize together with the source) or
+// "asset.io".
+Expected<std::vector<Dependency>> readDependencies(const std::filesystem::path& content, std::string_view path,
+                                                   const Importer& importer, const std::string& source,
+                                                   const serialization::Value& settings) {
+    Expected<std::vector<std::string>> names = importer.dependencies(bytesOf(source), settings);
+    if (!names) {
+        return makeUnexpected(std::move(names).error());
+    }
+    std::ranges::sort(*names);
+    names->erase(std::ranges::unique(*names).begin(), names->end());
+    if (names->size() > kMaxImportDependencies) {
+        return makeError("asset.too_large", "'" + std::string(path) + "' needs " + std::to_string(names->size()) +
+                                                " other files; the most is " + std::to_string(kMaxImportDependencies));
+    }
+    std::vector<Dependency> dependencies;
+    dependencies.reserve(names->size());
+    std::size_t total = source.size();
+    for (std::string& name : *names) {
+        if (!isValidContentPath(name)) {
+            return makeError("import.invalid_output", "the importer of '" + std::string(path) + "' needs '" + name +
+                                                          "', which is not a path inside the file's folder");
+        }
+        const std::string file = std::string(folderOf(path)) + name;
+        if (!isValidContentPath(file)) {
+            return invalidPath(file);
+        }
+        Expected<bool> exists = existsExactly(content, file);
+        if (!exists) {
+            return makeUnexpected(std::move(exists).error());
+        }
+        if (!*exists) {
+            return makeError("asset.not_found", "'" + std::string(path) + "' needs '" + file +
+                                                    "', which doesn't exist (names are compared case sensitively)");
+        }
+        Expected<std::string> bytes = readFile(content / fromUtf8(file), kMaxSourceFileSize - total);
+        if (!bytes) {
+            return makeUnexpected(std::move(bytes).error());
+        }
+        total += bytes->size();
+        dependencies.push_back(Dependency{.path = std::move(name), .bytes = std::move(*bytes)});
+    }
+    return dependencies;
+}
+
+// The importer's output for `source` and its `dependencies` with the sidecar's settings: from the
+// derived-data cache when every input is unchanged (`fromCache`), otherwise imported and stored
+// there.
 Expected<ImportedAssetData> importOrReuse(const DerivedDataCache& cache, const Importer& importer,
-                                          const std::string& source, const Sidecar& sidecar, bool& fromCache) {
+                                          const std::string& source, const std::vector<Dependency>& dependencies,
+                                          const Sidecar& sidecar, bool& fromCache) {
+    std::vector<Hash128> dependencyHashes;
+    std::vector<ImportFile> files;
+    dependencyHashes.reserve(dependencies.size());
+    files.reserve(dependencies.size());
+    for (const Dependency& dependency : dependencies) {
+        dependencyHashes.push_back(hash128(dependency.bytes));
+        files.push_back(ImportFile{.path = dependency.path, .bytes = bytesOf(dependency.bytes)});
+    }
     const Expected<Hash128> key = derivedDataKey({
         .source = hash128(source),
+        .dependencies = dependencyHashes,
         .importerId = importer.id(),
         .importerVersion = importer.version(),
         .settings = &sidecar.settings,
@@ -375,8 +451,7 @@ Expected<ImportedAssetData> importOrReuse(const DerivedDataCache& cache, const I
     }
     fromCache = *hit;
     if (!*hit) {
-        Expected<ImportOutput> output =
-            importer.import(std::as_bytes(std::span<const char>(source.data(), source.size())), sidecar.settings);
+        Expected<ImportOutput> output = importer.import(bytesOf(source), files, sidecar.settings);
         if (!output) {
             return makeUnexpected(std::move(output).error());
         }
@@ -391,6 +466,15 @@ Expected<ImportedAssetData> importOrReuse(const DerivedDataCache& cache, const I
             data.objects.push_back(ImportedObjectData{
                 .key = std::move((*keys)[index]), .payload = std::vector<std::uint8_t>(bytes, bytes + payload.size())});
         }
+        for (const std::string& reference : output->references) {
+            if (!isValidContentPath(reference)) {
+                return makeError("import.invalid_output",
+                                 "the reference '" + reference + "' is not a path inside the source file's folder");
+            }
+        }
+        data.references = std::move(output->references);
+        std::ranges::sort(data.references);
+        data.references.erase(std::ranges::unique(data.references).begin(), data.references.end());
         if (Expected<void> stored = cache.put(*key, kImportedAssetFormat, data); !stored) {
             return makeUnexpected(std::move(stored).error());
         }
@@ -629,7 +713,13 @@ Expected<ImportReport> AssetDatabase::import(std::string_view path) {
     if (!source) {
         return makeUnexpected(std::move(source).error());
     }
-    Expected<ImportedAssetData> imported = importOrReuse(m_cache, *importer, *source, sidecar, report.fromCache);
+    Expected<std::vector<Dependency>> dependencies =
+        readDependencies(m_contentDirectory, path, *importer, *source, sidecar.settings);
+    if (!dependencies) {
+        return makeUnexpected(std::move(dependencies).error());
+    }
+    Expected<ImportedAssetData> imported =
+        importOrReuse(m_cache, *importer, *source, *dependencies, sidecar, report.fromCache);
     if (!imported) {
         return makeUnexpected(std::move(imported).error());
     }
@@ -665,6 +755,9 @@ Expected<ImportReport> AssetDatabase::import(std::string_view path) {
             ImportedSubAsset{.key = std::move(object.key),
                              .id = id,
                              .payload = std::vector<std::byte>(bytes, bytes + object.payload.size())});
+    }
+    for (const std::string& reference : data.references) {
+        report.references.push_back(std::string(folderOf(path)) + reference);
     }
     report.id = sidecar.id;
     insert(AssetRecord{.id = sidecar.id,

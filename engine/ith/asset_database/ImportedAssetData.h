@@ -28,6 +28,9 @@ struct ImportedAssetData {
     ITH_TYPE(Struct)
     ITH_FIELD()
     std::vector<ImportedObjectData> objects;
+    // The files the objects refer to, relative to the source file's folder (ImportOutput::references).
+    ITH_FIELD()
+    std::vector<std::string> references;
 };
 
 // The binary format of ImportedAssetData entries.

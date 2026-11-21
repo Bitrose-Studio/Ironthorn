@@ -55,6 +55,10 @@ namespace ith {
 // The largest source file import() reads, in bytes.
 inline constexpr std::size_t kMaxSourceFileSize = std::size_t{4} << 30;
 
+// The most files one import reads besides its source (Importer::dependencies). Their sizes count
+// towards kMaxSourceFileSize together with the source.
+inline constexpr std::size_t kMaxImportDependencies = 256;
+
 // One asset in the database.
 struct AssetRecord {
     AssetId id;
@@ -122,6 +126,9 @@ struct ImportReport {
     std::vector<ImportedSubAsset> subAssets;
     // The sub-assets that are no longer in the source file, kept in the sidecar marked missing.
     std::vector<SubAssetEntry> missing;
+    // The files the sub-assets refer to (ImportOutput::references), as paths relative to the Content
+    // folder, sorted. They are recorded, not checked: a referenced file may not exist yet.
+    std::vector<std::string> references;
     // The warnings of reading the sidecar, such as unknown keys that the rewrite dropped.
     std::vector<serialization::Error> warnings;
 };
@@ -160,12 +167,15 @@ public:
     // id, the importer for its extension and that importer's default settings; a file with one
     // is imported again with the importer and settings it names. When the sidecar's id belongs to
     // another path in the database, the file is a copy if that path still exists (it gets a new
-    // id) and was moved outside the editor otherwise (it keeps the id). The importer's output is
-    // taken from the derived-data cache when every input is unchanged. Sub-assets are matched by
-    // source key: matches keep their ids, new objects get new ids and objects that disappeared
-    // stay in the sidecar marked missing. The sidecar is rewritten only when it changes. Fails,
-    // leaving the files and the database unchanged, with "asset.invalid_path", "asset.not_found"
-    // (no such file), "asset.path_conflict" (a sidecar exists in another case), "asset.no_importer",
+    // id) and was moved outside the editor otherwise (it keeps the id). The files the importer
+    // needs besides the source (Importer::dependencies: at most kMaxImportDependencies, inside the
+    // source's folder, names compared case sensitively) are read too. The importer's output is
+    // taken from the derived-data cache when every input, those files included, is unchanged.
+    // Sub-assets are matched by source key: matches keep their ids, new objects get new ids and
+    // objects that disappeared stay in the sidecar marked missing. The sidecar is rewritten only
+    // when it changes. Fails, leaving the files and the database unchanged, with
+    // "asset.invalid_path", "asset.not_found" (no such file, or a file the importer needs is
+    // missing), "asset.path_conflict" (a sidecar exists in another case), "asset.no_importer",
     // "asset.too_large", "asset.sidecar_invalid" or the reading errors of readSidecar, the
     // importer's error, "import.invalid_output" or "asset.io".
     [[nodiscard]] Expected<ImportReport> import(std::string_view path);
