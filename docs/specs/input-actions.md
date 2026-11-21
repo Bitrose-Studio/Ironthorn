@@ -1,6 +1,6 @@
 # Spec: input actions and contexts
 
-- **Status:** Draft
+- **Status:** Implemented in v1 (see section 8 for the requirements not in v1)
 - **Date:** 2026-11-21
 - **Builds on:** [ADR-0003](../decisions/0003-clean-room.md) (clean room),
   [ADR-0004](../decisions/0004-modules-and-layering.md) (layers),
@@ -255,8 +255,10 @@ uses its own timestamp, not `now`.
 this player, within `maxSeconds` of the previous step (the first step has no time limit). After
 the first step it is `Ongoing`; on the last step it is `Triggered` for that frame and resets. It
 resets to `None` when a step's time runs out, when any action in `cancelActions` is `Triggered`,
-or when the action of a step other than the current one shows its phase out of order. The
-combo's own key is usually the last step's key; the trigger ignores the key's value and its
+or when the action of a step other than the current one shows its phase out of order. A step
+with phase `Triggered` advances the combo, or counts as out of order, **only in the first frame
+of a run of `Triggered` frames**; later frames of the same run are ignored, so actions using
+`Down` (or no trigger) work as steps. The combo's own key is usually the last step's key; the trigger ignores the key's value and its
 `threshold`.
 
 **Combining triggers on one mapping** (including the action's appended triggers):
@@ -264,9 +266,12 @@ combo's own key is usually the last step's key; the trigger ignores the key's va
 1. No triggers: `Triggered` while the value is actuated (any non-zero value), otherwise `None`.
 2. If any `Blocker` is `Triggered`, the mapping is `None`.
 3. Otherwise the mapping is `Triggered` when every `Implicit` trigger is `Triggered` and, if
-   there are `Explicit` triggers, at least one of them is `Triggered`.
+   there are `Explicit` triggers, at least one of them is `Triggered`. A mapping with **no
+   `Explicit` triggers** must also have its own value non-zero: implicit triggers alone never
+   fire a mapping whose key isn't held, so `Ctrl` alone never fires Save on `Ctrl + S`.
 4. Otherwise it is `Ongoing` if any `Explicit` or `Implicit` trigger is `Ongoing` or
-   `Triggered`.
+   `Triggered`. This includes a mapping without explicit triggers whose implicit triggers are
+   satisfied while its own key isn't held (`Ctrl` held, S not yet pressed).
 5. Otherwise `None`.
 
 Any trigger's kind may be changed in the asset: a `Chord` set to `Blocker` means "not while that
@@ -303,11 +308,25 @@ changes:
 
 **Claims.** During evaluation, when a mapping of an action with `consumesKeys` reaches a state
 other than `None`, it **claims** its key for that player. A claimed key reads as not actuated
-(zero) for every mapping of a **different, lower context** evaluated after it. The claim lasts
+(zero) for every mapping of a **different, lower context** evaluated after it. "Lower" means
+later in table order (step 1), so between two contexts of the same priority, the more recently
+added one hides a key it shares with the older one. The claim lasts
 until the key is released, even if the claiming mapping goes back to `None` while the key is
 still held (a `Pressed` mapping in a vehicle context keeps W from also moving the character on
 foot). A claim ends early when its mapping leaves the table; the key then becomes visible to
-lower mappings under the "already held" rule of 3.6.
+lower mappings under the "already held" rule of 3.6. That rule covers digital keys only: an
+**analog key** whose claim ends is read as it is, so a deflected stick or held trigger counts
+as a new actuation for the lower mappings (a `Pressed` mapping on it can fire).
+
+**Analog claims end on rest.** An analog key has no release edge, so its claim ends when it is no
+longer actuated: its magnitude falls below the claiming mapping's actuation threshold (the
+lowest `threshold` of its triggers), or below 0.2, the default dead zone, if the mapping has no
+triggers.
+
+**Overlapping controls.** A 2D control and its 1D axes are one control for claims: a claim on
+`Gamepad.LeftStick` also hides `Gamepad.LeftStickX` and `Gamepad.LeftStickY`, and a claim on
+either axis hides the stick; the same holds for `Mouse.Delta` and `Mouse.DeltaX` /
+`Mouse.DeltaY`, and for every other stick.
 
 **Within one context there are no claims**: one key may drive two actions in the same context.
 The exception is the **chord rule**: when a mapping with a `Chord` trigger on key K is not
@@ -370,6 +389,15 @@ that frame, so it gives `Completed` or `Canceled` like any other end.
   have no action states.
 - Each player reads only the devices assigned to it. Events from unassigned devices are not
   read; joining stays with the game, as ADR-0013 rule 12 describes.
+- **Gamepads are merged per player.** A player with several gamepads has one sample per gamepad
+  key, merged across all of that player's gamepads. Mappings name `Gamepad.*` keys, never a
+  particular gamepad.
+  - **Buttons** are a logical OR: the first gamepad to press a button gives the press, the last
+    one to release it gives the release.
+  - **A 1D axis** (a trigger, one stick axis) takes the value with the largest magnitude; on a
+    tie, the first gamepad in the player's device set wins.
+  - **A stick** takes the longest vector of any one gamepad, with both components from that
+    gamepad; components are never mixed across gamepads.
 - Two players may use the same context assets; every claim, queue, timer and state is per
   player.
 - **Components on the player entity:**
@@ -393,8 +421,9 @@ that frame, so it gives `Completed` or `Canceled` like any other end.
 - **Last used device family:** each player records which family last actuated a key (a press,
   or an analog value beyond 0.5). Input prompts use it to show the right key or gamepad glyph.
 - **Key prompts:** the plugin answers "which keys currently trigger action A for player P?",
-  ordered by context order, filtered by device family, using layout key names for keyboards
-  (ADR-0013 rule 3) and the gamepad type for glyphs (rule 6).
+  ordered by context order, filtered by device family, as stable key names. Turning them into
+  layout key names for keyboards (ADR-0013 rule 3) and gamepad glyphs (rule 6) is done by the
+  application or the UI, which can reach the platform layer; a `runtime` module cannot.
 - **Networking:** evaluation happens only where a local player exists. The plugin replicates
   nothing; sending player intent to a server belongs to the networking ADR. A dedicated server
   evaluates nothing because it has no local players.
@@ -402,9 +431,15 @@ that frame, so it gives `Completed` or `Canceled` like any other end.
 ### 3.10 Edge cases
 
 - **Focus loss.** `core/input` releases every held key with real release events (ADR-0013 rule
-  9). The plugin processes them like any release: actions end with `Completed` or `Canceled`,
-  timestamped with the release events. Keys still held when focus returns are ignored until
+  9). The plugin treats them as forced ends (below): actions end with `Completed` or
+  `Canceled`, timestamped with the release events, and release-based triggers don't fire. Keys still held when focus returns are ignored until
   pressed again, which `core/input` already guarantees.
+- **Forced ends.** An action can end without its key being released by the player:
+  suspension, a claim from a higher context, the chord rule (3.7), focus loss (including the
+  release events `core/input` sends for it) and capture loss. A forced end makes the mapping
+  read its key as not actuated, so the action ends with `Completed` or `Canceled` as usual, but
+  it **never fires `Released`, `HoldRelease` or `Tap`**: those fire only on a real release edge
+  of a key the mapping can see.
 - **Mouse capture.** While the mouse is captured, mouse input reaches only the game slot
   (ADR-0013 rule 11). Without capture, mouse input still reaches the game slot when no consumer
   above it takes it, so cursor-driven games work. `core/input` exposes whether the mouse is
@@ -538,7 +573,9 @@ Familiar to users of Unreal Engine's editor (ADR-0008), in Ironthorn's own look:
   modifier (radial for sticks, axial for triggers), visible and removable like any other.
 - **Validation** runs on save and in the asset scan: missing actions, unknown keys, slot
   conflicts (3.11), dependency cycles (3.7), unknown input settings (3.5), chords whose
-  action is mapped nowhere (3.10). Problems appear in the editor's message log with links to the
+  action is mapped nowhere (3.10), a `Chord` without an action, a `Combo` without steps, and
+  modifier or trigger parameters out of range (negative times or thresholds, a `DeadZone` with
+  `lower` not below `upper`, a `MultiTap` `count` below 2). Problems appear in the editor's message log with links to the
   asset.
 - **Project Settings → Input:** the input settings players can tune (3.5), the default profile's
   project-layer overrides, and the debug options below.
@@ -672,7 +709,8 @@ they inject `core/input` device events with explicit timestamps and a fixed fram
     (ADR-0014 rule 18).
 46. An action not in a player's table reads as zero and `None`.
 47. The key-prompt query returns the effective keys of an action for a player in context order,
-    filtered by device family, with layout key names.
+    filtered by device family, as stable key names (display names and glyphs come from the
+    application).
 48. Steady-state evaluation allocates no memory; only a mapping table rebuild may allocate.
 49. Four local players with 100 mappings each evaluate in at most 0.1 ms per frame on the Low
     tier reference machine (ADR-0005), measured by a benchmark.
@@ -802,3 +840,18 @@ Public documentation only. Epic Games' feature is named here only to identify th
 
 **Ironthorn:** ADR-0003, ADR-0004, ADR-0005, ADR-0008, ADR-0010, ADR-0013, ADR-0014,
 ADR-0015, ADR-0016, ADR-0017 and ADR-0024 in [docs/decisions](../decisions/README.md).
+
+## 8. Implementation status
+
+Version 1 of the plugin implements this spec, including the corrections made during
+implementation and review (3.6 rules 3 and 4 for mappings without explicit triggers, combo
+steps on the first frame of a `Triggered` run in 3.6, equal-priority claims, analog claims and
+overlapping controls in 3.7, gamepads merged per player in 3.9, key prompts as stable names in
+3.9, forced ends in 3.10, the added validation checks in 3.13). These requirements are **not in v1**:
+
+| Requirement | Why | Comes with |
+|---|---|---|
+| 2 and 4: failing cooking | There is no cooker yet | The cooker |
+| 43: interactive key capture | Needs the game UI consumer it runs in | The game UI framework (P4) |
+| 45: declared system access | The ECS schedule with declared access doesn't exist yet | The ECS schedule (ADR-0014 rule 18) |
+| 50 to 52: asset editors, key picker, debug overlay and console commands | No editor shell, overlay or console yet | The editor shell (P2) and the debug console |
