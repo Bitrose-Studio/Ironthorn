@@ -76,7 +76,7 @@ FetchContent_MakeAvailable(yyjson)
 # executable that compiles shaders; ith_copy_shader_compiler_runtime() puts them there. Slang's
 # standard-module folder is not copied: it is needed only once shaders get `import` search
 # paths.
-if(IRONTHORN_BUILD_TOOLS)
+if(ITH_BUILD_SHADER_COMPILER)
     set(ith_slang_version 2026.22.1)
     set(ith_dxc_version 1.9.2609)
     set(ith_slang_url https://github.com/shader-slang/slang/releases/download/v${ith_slang_version})

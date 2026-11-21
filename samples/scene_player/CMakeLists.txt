@@ -1,9 +1,9 @@
 # A player that draws through the RHI's bindless model (ADR-0009): a triangle, or 10,000
 # instanced cubes with a depth buffer in one draw, and prints its frame timings. Its shaders are
 # compiled at build time by the pinned slangc (ith_embed_shaders, ADR-0023), which comes with the
-# tools, so it is built only with IRONTHORN_BUILD_TOOLS; a game loads cooked shaders instead
-# (ADR-0011).
-if(NOT (IRONTHORN_BUILD_CLIENT AND IRONTHORN_BUILD_TOOLS))
+# shader compiler, so it is built only with ITH_BUILD_SHADER_COMPILER (the tools, without
+# sanitizers); a game loads cooked shaders instead (ADR-0011).
+if(NOT (IRONTHORN_BUILD_CLIENT AND ITH_BUILD_SHADER_COMPILER))
     return()
 endif()
 

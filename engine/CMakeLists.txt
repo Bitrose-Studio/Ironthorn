@@ -13,4 +13,7 @@ add_subdirectory(ith/rhi_select)
 add_subdirectory(ith/reflection)
 add_subdirectory(ith/serialization)
 add_subdirectory(ith/ecs)
-add_subdirectory(ith/shader_compiler)
+# The shader compiler needs Slang and DXC, which sanitizer builds leave out (ITH_BUILD_SHADER_COMPILER).
+if(ITH_BUILD_SHADER_COMPILER)
+    add_subdirectory(ith/shader_compiler)
+endif()

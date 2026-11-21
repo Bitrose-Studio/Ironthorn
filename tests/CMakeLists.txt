@@ -31,7 +31,7 @@ ith_add_test_suite(foundation
         foundation/VersionTests.cpp
     LIBRARIES ith::foundation Threads::Threads)
 
-if(IRONTHORN_BUILD_TOOLS)
+if(ITH_BUILD_SHADER_COMPILER)
     ith_add_test_suite(shader_compiler
         SOURCES shader_compiler/ShaderCompilerTests.cpp
         LIBRARIES ith::shader_compiler)
@@ -67,11 +67,11 @@ if(IRONTHORN_BUILD_CLIENT)
 endif()
 
 # The Direct3D 12 backend on a GPU (Windows only): WARP by default, so it runs on hosted CI
-# runners, or the fastest hardware GPU with ITH_RHI_TEST_ADAPTER=hardware. With the tools built,
+# runners, or the fastest hardware GPU with ITH_RHI_TEST_ADAPTER=hardware. With the shader compiler built,
 # its shaders are compiled from Slang at run time and the pipeline tests run too.
 if(TARGET ith_rhi_d3d12)
     set(ith_rhi_d3d12_test_libraries ith::rhi_d3d12 ith::rhi_select Threads::Threads)
-    if(IRONTHORN_BUILD_TOOLS)
+    if(ITH_BUILD_SHADER_COMPILER)
         list(APPEND ith_rhi_d3d12_test_libraries ith::shader_compiler)
     endif()
     ith_add_test_suite(rhi_d3d12
@@ -79,7 +79,7 @@ if(TARGET ith_rhi_d3d12)
         LIBRARIES ${ith_rhi_d3d12_test_libraries}
         LABELS gpu)
     ith_use_d3d12_agility_sdk(ith_rhi_d3d12_tests)
-    if(IRONTHORN_BUILD_TOOLS)
+    if(ITH_BUILD_SHADER_COMPILER)
         target_compile_definitions(ith_rhi_d3d12_tests PRIVATE ITH_TEST_HAS_SHADER_COMPILER=1)
         ith_copy_shader_compiler_runtime(ith_rhi_d3d12_tests)
     endif()
@@ -87,18 +87,18 @@ endif()
 
 # The Vulkan backend on a GPU (Windows and Linux): the fastest hardware GPU, or a software one such
 # as lavapipe. Without a Vulkan loader or driver every test reports itself skipped, unless
-# ITH_RHI_TEST_REQUIRE_VULKAN=1. With the tools built, its shaders are compiled from Slang at run
+# ITH_RHI_TEST_REQUIRE_VULKAN=1. With the shader compiler built, its shaders are compiled from Slang at run
 # time and the pipeline tests run too.
 if(TARGET ith_rhi_vulkan)
     set(ith_rhi_vulkan_test_libraries ith::rhi_vulkan ith::rhi_select Threads::Threads)
-    if(IRONTHORN_BUILD_TOOLS)
+    if(ITH_BUILD_SHADER_COMPILER)
         list(APPEND ith_rhi_vulkan_test_libraries ith::shader_compiler)
     endif()
     ith_add_test_suite(rhi_vulkan
         SOURCES rhi_vulkan/VulkanDeviceTests.cpp
         LIBRARIES ${ith_rhi_vulkan_test_libraries}
         LABELS gpu)
-    if(IRONTHORN_BUILD_TOOLS)
+    if(ITH_BUILD_SHADER_COMPILER)
         target_compile_definitions(ith_rhi_vulkan_tests PRIVATE ITH_TEST_HAS_SHADER_COMPILER=1)
         ith_copy_shader_compiler_runtime(ith_rhi_vulkan_tests)
     endif()

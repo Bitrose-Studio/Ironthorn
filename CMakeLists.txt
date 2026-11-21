@@ -23,16 +23,24 @@ option(IRONTHORN_WARNINGS_AS_ERRORS "Treat warnings in Ironthorn targets as erro
 option(IRONTHORN_ENABLE_SANITIZERS "Build with AddressSanitizer and UndefinedBehaviorSanitizer (Clang/GCC)" OFF)
 option(IRONTHORN_ENABLE_TSAN "Build with ThreadSanitizer (Clang/GCC, not with IRONTHORN_ENABLE_SANITIZERS)" OFF)
 
-# Sanitizer builds leave the tools out: their prebuilt libraries are not instrumented, so only
-# the thin wrapper around them would be checked (docs/development/building.md).
-if(IRONTHORN_BUILD_TOOLS AND (IRONTHORN_ENABLE_SANITIZERS OR IRONTHORN_ENABLE_TSAN))
-    message(STATUS "Sanitizers are on: building without the tools (IRONTHORN_BUILD_TOOLS=OFF).")
-    set(IRONTHORN_BUILD_TOOLS OFF)
+# The shader compiler (Slang and DXC) is the one part of the tools that sanitizer builds leave
+# out: its prebuilt libraries are not instrumented, so only the thin wrapper around them would be
+# checked. Everything that needs it - the shader_compiler module, its tests, the shaders samples
+# and tests embed at build time, scene_player - is built only when ITH_BUILD_SHADER_COMPILER is
+# on. The other tools modules are built and checked (docs/development/building.md).
+if(IRONTHORN_BUILD_TOOLS AND NOT (IRONTHORN_ENABLE_SANITIZERS OR IRONTHORN_ENABLE_TSAN))
+    set(ITH_BUILD_SHADER_COMPILER ON)
+else()
+    set(ITH_BUILD_SHADER_COMPILER OFF)
+    if(IRONTHORN_BUILD_TOOLS)
+        message(STATUS "Sanitizers are on: building the tools without the shader compiler.")
+    endif()
 endif()
 
-# Editor modules may depend on every kind, so the editor is built only with the client and tools.
-if(IRONTHORN_BUILD_EDITOR AND NOT (IRONTHORN_BUILD_CLIENT AND IRONTHORN_BUILD_TOOLS))
-    message(STATUS "The client or tools modules are off: building without the editor (IRONTHORN_BUILD_EDITOR=OFF).")
+# Editor modules may depend on every kind, so the editor is built only with the client and tools,
+# the shader compiler included.
+if(IRONTHORN_BUILD_EDITOR AND NOT (IRONTHORN_BUILD_CLIENT AND ITH_BUILD_SHADER_COMPILER))
+    message(STATUS "The client modules or the shader compiler are off: building without the editor (IRONTHORN_BUILD_EDITOR=OFF).")
     set(IRONTHORN_BUILD_EDITOR OFF)
 endif()
 
