@@ -19,8 +19,9 @@
 //   });
 //
 // Code is generated with column-major matrix layout, as SPIR-V 1.6 and as DXIL Shader Model 6.6.
-// SPIR-V is checked by the SPIR-V validator bundled with Slang; DXIL is validated and signed by
-// DXC.
+// SPIR-V keeps the entry point's name (not "main"), and is optimized and checked by the SPIR-V
+// tools in Slang's glslang library, without which it can't be generated; DXIL is validated and
+// signed by DXC.
 
 #include "ith/foundation/Expected.h"
 

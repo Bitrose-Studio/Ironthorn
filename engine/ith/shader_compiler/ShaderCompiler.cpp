@@ -71,20 +71,25 @@ Expected<std::vector<std::byte>> ShaderCompiler::compile(const ShaderRequest& re
     target.profile = globalSession.findProfile(dxil ? "sm_6_6" : "spirv_1_6");
     ITH_ASSERT_MSG(target.profile != SLANG_PROFILE_UNKNOWN, "this Slang release doesn't know the engine's profile");
 
-    // SPIR-V is checked by the SPIR-V validator in Slang's glslang library; DXIL is validated and
-    // signed by DXC as part of code generation. Slang only warns when it can't load that library,
-    // so the tests include SPIR-V that must fail validation.
-    slang::CompilerOptionEntry validateSpirv;
-    validateSpirv.name = slang::CompilerOptionName::ValidateWithDownstreamCompiler;
-    validateSpirv.value.intValue0 = 1;
+    // SPIR-V is optimized and checked by the SPIR-V tools in Slang's glslang library, which the
+    // SPIR-V target can't do without: without the library, SPIR-V compilation fails. DXIL is
+    // validated and signed by DXC as part of code generation. The tests include SPIR-V that must
+    // fail validation.
+    // SPIR-V keeps the entry point's own name, as DXIL does, instead of Slang's default "main":
+    // the RHI creates pipelines by that name.
+    std::array<slang::CompilerOptionEntry, 2> spirvOptions{};
+    spirvOptions[0].name = slang::CompilerOptionName::ValidateWithDownstreamCompiler;
+    spirvOptions[0].value.intValue0 = 1;
+    spirvOptions[1].name = slang::CompilerOptionName::VulkanUseEntryPointName;
+    spirvOptions[1].value.intValue0 = 1;
 
     slang::SessionDesc sessionDesc;
     sessionDesc.targets = &target;
     sessionDesc.targetCount = 1;
     sessionDesc.defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR;
     if (!dxil) {
-        sessionDesc.compilerOptionEntries = &validateSpirv;
-        sessionDesc.compilerOptionEntryCount = 1;
+        sessionDesc.compilerOptionEntries = spirvOptions.data();
+        sessionDesc.compilerOptionEntryCount = static_cast<std::uint32_t>(spirvOptions.size());
     }
 
     Slang::ComPtr<slang::ISession> session;
