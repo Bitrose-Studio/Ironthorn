@@ -722,6 +722,30 @@ if(TARGET ith_asset_importers AND IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMP
     set_tests_properties(gltf_import_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
 endif()
 
+# Layered configuration (ADR-0035): the merge patch, layers and skipped files, typed sections with
+# defaults and warnings, minimal-difference writes, whole files, generations and reload, and the
+# engine layer the build copies next to the executables. Test settings types are reflected into
+# ith_test_config.
+add_library(ith_test_config STATIC)
+target_include_directories(ith_test_config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/config")
+target_link_libraries(ith_test_config
+    PUBLIC ith::build_options ith::reflection
+    PRIVATE ith::runtime_options)
+set_target_properties(ith_test_config PROPERTIES
+    FOLDER "Ironthorn/Tests"
+    COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+ith_reflect_target(ith_test_config
+    MODULE test_config
+    KIND runtime
+    INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/config"
+    HEADERS config/ConfigTypes.h)
+ith_add_test_suite(config
+    SOURCES
+        config/ConfigTests.cpp
+        config/ConfigTypes.h
+    LIBRARIES ith::config ith_test_config)
+add_dependencies(ith_config_tests ith_engine_config)
+
 # The file system (ADR-0035): path helpers, reads, atomic writes with their fault points, file
 # information, listings, directories, remove, move and the known folders, each test in its own
 # temporary folder.

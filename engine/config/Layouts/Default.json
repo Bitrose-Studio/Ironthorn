@@ -1,0 +1,35 @@
+{
+  "format": "ith.editor_layout",
+  "version": 1,
+  "data": {
+    "root": {
+      "split": "vertical",
+      "ratio": 0.72,
+      "first": {
+        "split": "horizontal",
+        "ratio": 0.78,
+        "first": {
+          "tabs": ["ith.viewport.1"],
+          "active": "ith.viewport.1"
+        },
+        "second": {
+          "split": "vertical",
+          "ratio": 0.45,
+          "first": {
+            "tabs": ["ith.outliner"],
+            "active": "ith.outliner"
+          },
+          "second": {
+            "tabs": ["ith.details"],
+            "active": "ith.details"
+          }
+        }
+      },
+      "second": {
+        "tabs": ["ith.content_browser", "ith.output_log"],
+        "active": "ith.content_browser"
+      }
+    },
+    "floating": []
+  }
+}

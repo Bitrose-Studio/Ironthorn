@@ -16,6 +16,7 @@ add_subdirectory(ith/rhi_vulkan)
 add_subdirectory(ith/rhi_select)
 add_subdirectory(ith/reflection)
 add_subdirectory(ith/serialization)
+add_subdirectory(ith/config)
 add_subdirectory(ith/ecs)
 add_subdirectory(ith/level)
 add_subdirectory(ith/assets)
@@ -28,3 +29,19 @@ if(ITH_BUILD_SHADER_COMPILER)
 endif()
 add_subdirectory(ith/asset_database)
 add_subdirectory(ith/asset_importers)
+
+# The engine's configuration layer (ADR-0035 rule 12): engine/config is copied to Config/ next to
+# the executables of every configuration, so applications find it at <exe>/Config/. Files removed
+# from engine/config disappear from the copy at the next build.
+file(GLOB_RECURSE ith_engine_config_files CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/config/*")
+set(ith_engine_config_stamp "${CMAKE_BINARY_DIR}/engine_config/$<CONFIG>/copied.stamp")
+add_custom_command(
+    OUTPUT "${ith_engine_config_stamp}"
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/Config"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/config" "${CMAKE_BINARY_DIR}/bin/$<CONFIG>/Config"
+    COMMAND ${CMAKE_COMMAND} -E touch "${ith_engine_config_stamp}"
+    DEPENDS ${ith_engine_config_files}
+    COMMENT "Copying the engine configuration next to the executables"
+    VERBATIM)
+add_custom_target(ith_engine_config ALL DEPENDS "${ith_engine_config_stamp}")
+set_target_properties(ith_engine_config PROPERTIES FOLDER "Ironthorn/Engine")
