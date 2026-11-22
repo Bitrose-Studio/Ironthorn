@@ -1,7 +1,8 @@
 # ADR-0014: ECS storage and the world
 
 - **Status:** Accepted
-- **Amended by:** [ADR-0030](0030-ecs-hooks-registration-and-immutable-components.md)
+- **Amended by:** [ADR-0030](0030-ecs-hooks-registration-and-immutable-components.md),
+  [ADR-0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md)
 - **Date:** 2026-11-20
 - **Related:** [ADR-0001](0001-cpp-language-and-safety-rules.md) (no exceptions, no RTTI,
   generational handles, jobs), [ADR-0004](0004-modules-and-layering.md) (`core` layer, no

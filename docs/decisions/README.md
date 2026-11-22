@@ -18,7 +18,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0011](0011-shader-language-and-pipeline.md) | Shader language and pipeline | Accepted, amended by [0023](0023-build-time-shaders-for-samples-and-tests.md) |
 | [0012](0012-windowing-and-event-loop.md) | Windowing and the platform event loop | Accepted, amended by [0025](0025-job-system.md), [0027](0027-input-rules-completed.md) |
 | [0013](0013-input.md) | Input: events, state, routing and consumption | Accepted, amended by [0027](0027-input-rules-completed.md) |
-| [0014](0014-ecs-storage-and-world.md) | ECS storage and the world | Accepted, amended by [0030](0030-ecs-hooks-registration-and-immutable-components.md) |
+| [0014](0014-ecs-storage-and-world.md) | ECS storage and the world | Accepted, amended by [0030](0030-ecs-hooks-registration-and-immutable-components.md), [0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md) |
 | [0015](0015-asset-identity-and-reimport.md) | Asset identity and non-destructive reimport | Accepted, amended by [0024](0024-asset-document-envelope-and-extension.md) |
 | [0016](0016-gameplay-model-on-the-ecs.md) | Gameplay model on the ECS | Accepted |
 | [0017](0017-runtime-and-editor-separation.md) | Runtime and editor separation | Accepted |
@@ -35,6 +35,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0028](0028-render-graph-v1.md) | Render graph v1 | Accepted |
 | [0029](0029-editor-ui-toolkit.md) | Editor UI toolkit | Accepted |
 | [0030](0030-ecs-hooks-registration-and-immutable-components.md) | ECS: component hooks registration and immutable components (amends 0014, 0018) | Accepted |
+| [0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md) | ECS: hierarchy, enabled state and transform propagation completed (amends 0014) | Accepted |
 
 ## Planned
 
