@@ -40,8 +40,9 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0033](0033-reflection-property-paths-and-patches.md) | Reflection property paths and patches (amends 0015, 0018, 0020) | Accepted, amended by [0037](0037-editor-commands-transactions-selection-and-automation.md) |
 | [0034](0034-level-documents.md) | Level documents (amends 0015, 0024, 0031, 0032) | Accepted |
 | [0035](0035-file-system-configuration-and-main-thread-queue.md) | File system, layered configuration and the main-thread queue (amends 0025, 0027, 0029) | Accepted, amended by [0036](0036-file-system-windows-atomic-replace-corrected.md) |
-| [0036](0036-file-system-windows-atomic-replace-corrected.md) | File system: Windows atomic replace corrected after the first implementation (amends 0035) | Accepted |
+| [0036](0036-file-system-windows-atomic-replace-corrected.md) | File system: Windows atomic replace corrected after the first implementation (amends 0035) | Accepted, amended by [0038](0038-file-system-windows-read-retry-during-replace.md) |
 | [0037](0037-editor-commands-transactions-selection-and-automation.md) | Editor commands, transactions, selection and automation (amends 0008, 0032, 0033) | Accepted |
+| [0038](0038-file-system-windows-read-retry-during-replace.md) | File system: Windows read retry while a replace is in flight (amends 0036) | Accepted |
 
 ## Planned
 

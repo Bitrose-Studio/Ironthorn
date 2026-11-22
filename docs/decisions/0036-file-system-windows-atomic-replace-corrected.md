@@ -1,6 +1,7 @@
 # ADR-0036: File system: Windows atomic replace corrected after the first implementation
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0038](0038-file-system-windows-read-retry-during-replace.md)
 - **Date:** 2026-11-22
 - **Related:** amends [ADR-0035](0035-file-system-configuration-and-main-thread-queue.md) rules 2
   (`readFile`) and 3 (`writeFileAtomic` on Windows); [ADR-0001](0001-cpp-language-and-safety-rules.md)
