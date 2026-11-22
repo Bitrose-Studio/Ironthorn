@@ -783,9 +783,11 @@ The owner settled the questions this spec raised (decided 2026-11-21).
 4. **The highest context that maps an action fully replaces lower contexts' keys for that
    action** (3.7 step 2). Contexts at the same priority as that context still contribute.
 5. **Event volume.** `Ongoing` and `Triggered` events are sent every frame they occur (3.8).
-6. **Config file location and name** for the `ith.input_bindings` document in each layer stay
-   open until a configuration-layout ADR exists. Only the format name and content are fixed by
-   this spec.
+6. **Config file location and name** for the `ith.input_bindings` document in each layer:
+   settled by [ADR-0035](../decisions/0035-file-system-configuration-and-main-thread-queue.md)
+   rule 21. Each configuration layer holds it as the whole file `Input.json`; the application reads
+   each layer's text and passes it to `InputBindingConfig::setLayer`, so this layer keeps its own
+   merge and doesn't depend on the `config` module.
 7. **The click that captures the mouse** in a game viewport (ADR-0013 rule 11) is consumed by
    the capture and never fires a game action.
 8. **Requirements on `core/input`**, accepted and built into it:

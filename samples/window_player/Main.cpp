@@ -16,6 +16,7 @@
 // window stays invisible: a Wayland window appears only once something is presented to it.
 
 #include "ith/foundation/Version.h"
+#include "ith/jobs/JobSystem.h"
 #include "ith/platform/Platform.h"
 #include "ith/rhi/CommandList.h"
 #include "ith/rhi/Device.h"
@@ -237,6 +238,9 @@ int main(int argc, char** argv) { // NOLINT(misc-const-correctness): the signatu
     }
     int status = 0;
     {
+        // Declared after the Platform, so it goes first: no wake reaches a Platform that shuts down.
+        ith::JobSystem jobs;
+        jobs.setMainThreadWake([](void* /*context*/) { ith::Platform::wake(); }, nullptr);
         ith::Expected<ith::Window> window = platform->createWindow({.title = "Ironthorn window player"});
         if (!window) {
             return fail(window.error());
@@ -264,6 +268,8 @@ int main(int argc, char** argv) { // NOLINT(misc-const-correctness): the signatu
                     resizeOnEvent(*renderer, *window, event);
                 }
             }
+            // The frame order of ADR-0035 rule 22: events, then main-thread jobs, then update and render.
+            jobs.runMainThreadJobs();
             ++frames;
             if (renderer) {
                 // The swapchain waits for vertical blank, which paces the loop.

@@ -4,6 +4,7 @@
 #include "ith/jobs/JobSystem.h"
 
 #include "ith/foundation/Mutex.h"
+#include "ith/jobs/Progress.h"
 #include "ith/jobs/Watchdog.h"
 
 #include "AssertCapture.h"
@@ -579,4 +580,47 @@ TEST_CASE("JobSystem: stops the process when parked continuations exhaust the fo
     parked.store(true);
     jobs.wait(after);
     FAIL("the pool-exhaustion check did not stop the process");
+}
+
+TEST_CASE("JobSystem: the main-thread wake hook runs after every main-thread post and progress update") {
+    JobSystem jobs(workers(1, 1));
+    std::atomic<int> wakes = 0;
+    jobs.setMainThreadWake([](void* context) { ++*static_cast<std::atomic<int>*>(context); }, &wakes);
+
+    // A post from the main thread, from a background job, and a continuation that lands on the
+    // main thread each wake it once.
+    jobs.postToMainThread("Direct", [] {});
+    CHECK(wakes.load() == 1);
+    JobCounter background;
+    jobs.submit(JobLane::Background, "Post", [&] { jobs.postToMainThread("Result", [] {}); }, &background);
+    jobs.wait(background);
+    CHECK(wakes.load() == 2);
+    JobCounter before;
+    JobCounter after;
+    jobs.submit(JobLane::Foreground, "Before", [] {}, &before);
+    jobs.submitAfter(before, JobLane::MainThread, "After", [] {}, &after);
+    jobs.wait(after);
+    CHECK(wakes.load() == 3);
+    static_cast<void>(jobs.runMainThreadJobs()); // the waits may have run some of them already
+
+    // Work on other lanes doesn't wake the main thread; progress made with the JobSystem does.
+    JobCounter other;
+    jobs.submit(JobLane::Background, "Quiet", [] {}, &other);
+    jobs.wait(other);
+    CHECK(wakes.load() == 3);
+    ith::Progress progress(jobs);
+    progress.addWork(2);
+    progress.complete();
+    CHECK(wakes.load() == 5);
+    ith::Progress silent;
+    silent.addWork(1);
+    CHECK(wakes.load() == 5);
+
+    // jobs.wakeMainThread() calls it directly; a null hook removes it.
+    jobs.wakeMainThread();
+    CHECK(wakes.load() == 6);
+    jobs.setMainThreadWake(nullptr, nullptr);
+    jobs.postToMainThread("Unwoken", [] {});
+    CHECK(wakes.load() == 6);
+    CHECK(jobs.runMainThreadJobs() == 1);
 }

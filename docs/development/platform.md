@@ -35,6 +35,7 @@ while (running) {
                 break;
         }
     }
+    jobs.runMainThreadJobs();   // results of background work (ADR-0035 rule 22)
     // simulate and render
 }
 ```
@@ -52,6 +53,14 @@ while (running) {
   with a timestamp in `std::chrono::steady_clock` nanoseconds, comparable with frame times, and
   the id of its window (`kNoWindow` for application events). The span is valid until the next
   pump. No callback reaches engine code.
+- **Waiting while idle.** `waitEvents(timeout)` is the pump after a wait: until an event the
+  platform reports arrives, `Platform::wake()` is called, or the timeout passes (events it doesn't
+  report, such as device bookkeeping, don't end the wait). The editor uses it to stop rendering
+  frames nobody looks at (ADR-0029 rule 12). `Platform::wake()` is static and thread-safe: it
+  queues one internal event, however often it is called before the next pump, and every pump
+  drops it. It does nothing when no `Platform` exists. Connect it to
+  `JobSystem::setMainThreadWake` ([jobs guide](jobs.md#the-main-thread-queue-in-the-frame)), and
+  let the `JobSystem` go before the `Platform`.
 - **Closing a window is a request.** `WindowCloseRequested` leaves the window open; the
   application destroys it, or asks to save first. Closing the last window does not quit by
   itself. `QuitRequested` comes from the operating system (Ctrl+C, the session ending).
@@ -121,7 +130,10 @@ documented in `ith/platform_events/Event.h`.
 
 The `platform` tests push SDL events into the queue to check the translation, and drive a SDL
 virtual gamepad for connect, buttons, axes, outputs and disconnect, all on the `offscreen`
-driver.
+driver. `tests/platform/WakeTests.cpp` checks that `waitEvents` times out, that `wake()`
+ends a wait from another thread and coalesces, and that a main-thread post from a background job
+ends `waitEvents(1 s)` within 50 ms; like every platform test it runs through CTest on the
+offscreen driver, never on a desktop.
 
 ## Not here yet
 
@@ -129,6 +141,5 @@ driver.
   editor.
 - **Gyro, accelerometer and touchpad** of gamepads, and **touch and pen** (with Android).
 - **Popup windows, fullscreen, position, minimize and maximize calls**: with the editor shell.
-- **Posting work to the main thread** from other threads, routing SDL's allocations to the engine
-  allocator, and handling mobile lifecycle events in an event watch (Android); until then
-  `EnteringBackground` may arrive too late to act on.
+- **Routing SDL's allocations** to the engine allocator, and handling mobile lifecycle events in
+  an event watch (Android); until then `EnteringBackground` may arrive too late to act on.

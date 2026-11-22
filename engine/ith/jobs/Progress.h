@@ -10,11 +10,23 @@
 //   // on the main thread:
 //   const ith::Progress::Snapshot now = progress.snapshot();
 //   drawBar(now.fraction());
+//
+// A Progress made with a JobSystem calls its main-thread wake hook on every update, so an editor
+// that waits for events while idle redraws the bar (ADR-0035 rule 23):
+//
+//   ith::Progress progress(jobs);
 
 #include <atomic>
 #include <cstdint>
 
 namespace ith {
+
+class JobSystem;
+
+namespace detail {
+// Calls jobs.wakeMainThread(); defined in JobSystem.cpp, so this header needs no JobSystem.
+void wakeMainThread(const JobSystem& jobs);
+} // namespace detail
 
 // An atomic pair of counts: items done and items in total. Both live in one 64-bit atomic, so
 // a snapshot never shows more done than the total that was added before it. Owned by the
@@ -31,16 +43,26 @@ public:
 
     Progress() = default;
 
+    // A Progress whose updates call the main-thread wake hook of `jobs`, which must outlive it.
+    explicit Progress(const JobSystem& jobs) : m_jobs(&jobs) {}
+
     Progress(const Progress&) = delete;
     Progress& operator=(const Progress&) = delete;
     Progress(Progress&&) = delete;
     Progress& operator=(Progress&&) = delete;
+    ~Progress() = default;
 
     // Adds `items` to the total. The total must stay below 2^32.
-    void addWork(std::uint32_t items) { m_state.fetch_add(static_cast<std::uint64_t>(items) << 32u); }
+    void addWork(std::uint32_t items) {
+        m_state.fetch_add(static_cast<std::uint64_t>(items) << 32u);
+        wake();
+    }
 
     // Adds `items` to the done count. The done count must not exceed the total.
-    void complete(std::uint32_t items = 1) { m_state.fetch_add(items); }
+    void complete(std::uint32_t items = 1) {
+        m_state.fetch_add(items);
+        wake();
+    }
 
     Snapshot snapshot() const {
         const std::uint64_t state = m_state.load();
@@ -52,6 +74,13 @@ public:
     void reset() { m_state.store(0); }
 
 private:
+    void wake() const {
+        if (m_jobs != nullptr) {
+            detail::wakeMainThread(*m_jobs);
+        }
+    }
+
+    const JobSystem* m_jobs = nullptr;
     std::atomic<std::uint64_t> m_state{0}; // Total in the high 32 bits, done in the low 32.
 };
 

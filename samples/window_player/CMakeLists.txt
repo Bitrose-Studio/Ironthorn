@@ -3,7 +3,7 @@
 ith_add_application(window_player
     KIND player
     SOURCES Main.cpp
-    MODULES foundation platform rhi rhi_select)
+    MODULES foundation jobs platform rhi rhi_select)
 
 # Runs headless on SDL's offscreen video driver, so it needs no display.
 if(IRONTHORN_BUILD_TESTS AND TARGET window_player)

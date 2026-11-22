@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -502,6 +503,9 @@ Expected<Platform> Platform::create(const PlatformDesc& desc) {
     // Gamepads are optional: without them the application still gets its windows, keyboard and
     // mouse, and the gamepad functions report "platform.gamepad_not_found".
     static_cast<void>(SDL_InitSubSystem(SDL_INIT_GAMEPAD));
+    // The event Platform::wake() pushes. Without one (none left to register) wake() does nothing.
+    state.wakePending.store(false);
+    state.wakeEventType.store(SDL_RegisterEvents(1));
 
     Platform platform;
     platform.m_owner = true;
@@ -539,6 +543,7 @@ Platform::~Platform() {
     ITH_ASSERT_MSG(detail::isMainThread(), detail::kNotMainThread);
     ITH_ASSERT_MSG(state.windowCount.load(std::memory_order_relaxed) == 0,
                    "every Window must be destroyed before the Platform");
+    state.wakeEventType.store(0);
     // SDL_Quit closes the windows and gamepads that are left, so none is alive afterwards.
     SDL_Quit();
     state.windowCount.store(0, std::memory_order_relaxed);
@@ -572,7 +577,44 @@ Expected<Window> Platform::createWindow(const WindowDesc& desc) {
 
 std::span<const Event> Platform::pumpEvents() {
     assertUsable();
+    return collectEvents(nullptr, nullptr);
+}
 
+std::span<const Event> Platform::waitEvents(std::chrono::milliseconds timeout) {
+    assertUsable();
+    constexpr std::int64_t kMaxTimeoutMs = std::numeric_limits<std::int32_t>::max();
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(std::clamp<std::int64_t>(timeout.count(), 0, kMaxTimeoutMs));
+    // Events the platform doesn't translate (device and display bookkeeping) don't end the wait.
+    for (;;) {
+        const auto left = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+        const auto milliseconds = static_cast<std::int32_t>(std::clamp<std::int64_t>(left.count(), 0, kMaxTimeoutMs));
+        SDL_Event first;
+        if (!SDL_WaitEventTimeout(&first, milliseconds)) {
+            return collectEvents(nullptr, nullptr);
+        }
+        bool woke = false;
+        const std::span<const Event> events = collectEvents(&first, &woke);
+        if (!events.empty() || woke || milliseconds == 0) {
+            return events;
+        }
+    }
+}
+
+void Platform::wake() noexcept {
+    detail::PlatformState& state = detail::platformState();
+    const std::uint32_t type = state.wakeEventType.load();
+    if (type == 0 || state.wakePending.exchange(true)) {
+        return;
+    }
+    SDL_Event event{};
+    event.type = type;
+    if (!SDL_PushEvent(&event)) {
+        state.wakePending.store(false); // the queue is full: it will be pumped anyway
+    }
+}
+
+std::span<const Event> Platform::collectEvents(const void* first, bool* woke) {
     m_events.clear();
     m_text.clear();
 
@@ -586,8 +628,22 @@ std::span<const Event> Platform::pumpEvents() {
 
     std::vector<TextRange> textRanges;
 
+    const std::uint32_t wakeType = detail::platformState().wakeEventType.load();
     SDL_Event event;
-    while (SDL_PollEvent(&event)) {
+    bool have = first != nullptr;
+    if (have) {
+        event = *static_cast<const SDL_Event*>(first);
+    } else {
+        have = SDL_PollEvent(&event);
+    }
+    for (; have; have = SDL_PollEvent(&event)) {
+        if (event.type == wakeType) {
+            detail::platformState().wakePending.store(false);
+            if (woke != nullptr) {
+                *woke = true;
+            }
+            continue;
+        }
         std::optional<Translated> translated = translate(event, m_modifiers);
         if (!translated) {
             continue;

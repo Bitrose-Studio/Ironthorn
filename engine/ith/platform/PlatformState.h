@@ -22,6 +22,12 @@ struct PlatformState {
     // Windows alive. Changed only on the main thread; ~Platform resets it, because shutting the
     // windowing library down closes every window.
     std::atomic<std::int32_t> windowCount = 0;
+    // The library event type Platform::wake() pushes, registered by Platform::create; 0 when no
+    // Platform exists.
+    std::atomic<std::uint32_t> wakeEventType = 0;
+    // True from a wake() that pushed the event until a pump takes it, so a burst of wakes pushes
+    // one event.
+    std::atomic<bool> wakePending = false;
 };
 
 PlatformState& platformState();

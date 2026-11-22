@@ -3,6 +3,7 @@
 #include "ith/foundation/Assert.h"
 #include "ith/foundation/Compiler.h"
 #include "ith/foundation/Mutex.h"
+#include "ith/jobs/Progress.h"
 #include "ith/jobs/Thread.h"
 #include "ith/jobs/Watchdog.h"
 
@@ -297,6 +298,19 @@ struct JobSystem::State {
     const std::thread::id mainThread;
     std::atomic<bool> shutdownRequested{false};
 
+    // The main-thread wake hook (ADR-0035 rule 23). It is called while the mutex is held, so once
+    // setMainThreadWake returns no call of the hook it replaced is still running.
+    Mutex wakeMutex;
+    void (*wakeHook)(void*) ITH_GUARDED_BY(wakeMutex) = nullptr;
+    void* wakeContext ITH_GUARDED_BY(wakeMutex) = nullptr;
+
+    void wakeMainThread() {
+        const MutexLock lock(wakeMutex);
+        if (wakeHook != nullptr) {
+            wakeHook(wakeContext);
+        }
+    }
+
     // Sleeping waiters wait on the epoch; sleepingWaiters lets signalWaiters skip the notify
     // when nobody sleeps. A waiter increments sleepingWaiters and then checks its condition; a
     // signaller makes the condition true and then reads sleepingWaiters with a
@@ -321,6 +335,10 @@ struct JobSystem::State {
 
     void enqueue(Job* job) {
         Lane& target = lane(job->lane);
+        if (job->lane == JobLane::MainThread) {
+            mainThreadEnqueue(target, job);
+            return;
+        }
         const bool ownLane = isWorker() && g_thread.workerLane == job->lane;
         target.push(job, ownLane ? g_thread.workerIndex : target.nextQueue.fetch_add(1, std::memory_order_relaxed));
         if (target.idleWorkers.fetch_add(0) > 0) {
@@ -333,6 +351,14 @@ struct JobSystem::State {
             // asleep.
             signalWaiters();
         }
+    }
+
+    // Main-thread jobs: no worker runs them, but the main thread may sleep in a wait for them or in
+    // the application's event wait, which the hook ends.
+    void mainThreadEnqueue(Lane& target, Job* job) {
+        target.push(job, 0);
+        signalWaiters();
+        wakeMainThread();
     }
 
     void run(Job* job) {
@@ -726,6 +752,20 @@ bool JobSystem::isMainThread() const {
 
 bool JobSystem::shutdownRequested() const {
     return m_state->shutdownRequested.load();
+}
+
+void JobSystem::setMainThreadWake(void (*hook)(void*), void* context) {
+    const MutexLock lock(m_state->wakeMutex);
+    m_state->wakeHook = hook;
+    m_state->wakeContext = context;
+}
+
+void JobSystem::wakeMainThread() const {
+    m_state->wakeMainThread();
+}
+
+void detail::wakeMainThread(const JobSystem& jobs) {
+    jobs.wakeMainThread();
 }
 
 detail::Job* JobSystem::acquireJob(JobLane lane, const char* name, JobCounter* counter) {

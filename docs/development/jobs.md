@@ -66,6 +66,35 @@ jobs.wait(counter);                                     // the main thread helps
 - `postToMainThread(name, job)` is `submit` on `JobLane::MainThread`.
   `runMainThreadJobs()` runs the jobs queued before the call; jobs they post run next time.
 
+### The main-thread queue in the frame
+
+The application's loop drains the main-thread queue itself, once per frame, in this order
+([ADR-0035](../decisions/0035-file-system-configuration-and-main-thread-queue.md) rule 22): events
+(`pumpEvents()`, or `waitEvents(timeout)` while idle), then `jobs.runMainThreadJobs()`, then
+update and render. `platform` doesn't drain it: servers and tools have no `platform`. A server
+calls `runMainThreadJobs()` at the start of its tick. There is no time budget per frame yet.
+
+An application that idles waits for events with a timeout. The wake hook ends that wait when a
+result is posted (rule 23):
+
+```cpp
+ith::JobSystem jobs;   // after the Platform, so it is destroyed first
+jobs.setMainThreadWake([](void* /*context*/) { ith::Platform::wake(); }, nullptr);
+while (running) {
+    const auto events = idle ? platform.waitEvents(std::chrono::milliseconds(100)) : platform.pumpEvents();
+    // handle events
+    jobs.runMainThreadJobs();
+    // update, render
+}
+```
+
+- `setMainThreadWake(hook, context)` registers a hook called after every main-thread post
+  (`postToMainThread`, and main-thread continuations when they are queued) and every update of a
+  `Progress` made with the JobSystem (`ith::Progress progress(jobs)`), from the posting thread.
+  It must be thread-safe and must not block or post. A null hook removes it; calls are
+  serialized with `setMainThreadWake`, so after it returns no call of the old hook runs.
+- `wakeMainThread()` calls the hook directly.
+
 ### parallelFor
 
 ```cpp
@@ -150,7 +179,9 @@ for (std::size_t index = 0; index < files.size(); ++index) {
 ```
 
 - **Cancellation is cooperative.** Queued jobs still run; they see the flag and return.
-- **Progress** is one atomic done/total pair; the editor reads `snapshot()` once per frame.
+- **Progress** is one atomic done/total pair; the editor reads `snapshot()` once per frame. A
+  `Progress` made with the JobSystem (`ith::Progress progress(jobs)`) calls the main-thread wake
+  hook on every update, so an idle editor redraws its progress bar.
 - **Jobs return nothing.** Results, `ith::Expected` errors included, go to storage the caller
   owns. `FirstError` keeps the error with the lowest order (index), so the reported error
   doesn't depend on timing.
@@ -187,6 +218,10 @@ while it drains; nothing is dropped.
   zero-worker lanes helped by any waiter, a busy main thread that isn't a deadlock). The CTests
   `jobs_watchdog` and `jobs_pool_exhausted` deadlock a job system on purpose and pass when the
   watchdog, or the pool-exhaustion check, stops it.
+- The wake hook: called once per main-thread post (from the main thread, a background job and a
+  main-thread continuation) and per update of a `Progress` made with the JobSystem, not for other
+  lanes, and not after it is removed. `tests/platform/WakeTests.cpp` checks it end to end with
+  `Platform::wake` on the offscreen driver.
 - `ith_jobs_benchmark` (CTest `jobs_benchmark`, label `benchmark`, run by CI on
   linux-clang-release) prints the empty-job overhead at 1, 4 and 8 workers, the speed-up of a
   1M-item `parallelFor`, continuation-chain latency and wake-up latency. It never fails on its

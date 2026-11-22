@@ -26,7 +26,7 @@ endfunction()
 ith_add_application(scene_player
     KIND player
     SOURCES Main.cpp Scenes.h Scenes.cpp
-    MODULES foundation math platform rhi rhi_select render_graph)
+    MODULES foundation jobs math platform rhi rhi_select render_graph)
 ith_scene_player_shaders(scene_player)
 
 # Runs headless on SDL's offscreen video driver, without rendering; the GPU test draws the scenes.

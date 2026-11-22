@@ -139,8 +139,25 @@ public:
     // second. Nested waits inside jobs stack up on helping threads, so prefer continuations.
     void wait(JobCounter& counter);
 
+    // Registers `hook`, called with `context` after every main-thread post (postToMainThread, and
+    // main-thread continuations as they are queued) and every update of a Progress made with
+    // this JobSystem, from the thread that posts (ADR-0035 rule 23). The application connects it to
+    // Platform::wake(), so an event wait ends when a result is ready:
+    //
+    //   jobs.setMainThreadWake([](void* /*context*/) { ith::Platform::wake(); }, nullptr);
+    //
+    // The hook must be thread-safe and must not block, post jobs or call this function. A null hook
+    // removes it. Calls are serialized with this function: once it returns, no call of the previous
+    // hook is running, so the application can remove the hook before destroying what it calls.
+    void setMainThreadWake(void (*hook)(void*), void* context);
+
+    // Calls the main-thread wake hook, if one is set. Thread-safe.
+    void wakeMainThread() const;
+
     // Runs the main-thread jobs queued before the call, in submission order, and returns how
     // many ran. Jobs they post run on the next call. Main thread only, outside any job.
+    // The application's loop calls it once per frame, after pumpEvents() or waitEvents() and
+    // before it updates and renders (ADR-0035 rule 22); a server calls it at the start of its tick.
     std::uint32_t runMainThreadJobs();
 
     // The number of worker threads of `lane` (0 for JobLane::MainThread).

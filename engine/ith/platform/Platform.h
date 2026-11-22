@@ -16,8 +16,12 @@
 //               running = false;
 //           }
 //       }
+//       jobs.runMainThreadJobs();     // results of background work (ADR-0035 rule 22)
 //       // simulate, render
 //   }
+//
+// An idle application calls waitEvents(timeout) instead of pumpEvents(); connecting
+// Platform::wake() to JobSystem::setMainThreadWake ends the wait when a job posts a result.
 //
 // SDL is the backend; none of its types appear in this module's headers. An application creates
 // one Platform; engine and game code never create one (Play In Editor uses the editor's).
@@ -31,6 +35,7 @@
 #include "ith/platform/Window.h"
 #include "ith/platform_events/Event.h"
 
+#include <chrono>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -85,6 +90,24 @@ public:
     // Precondition (asserted): called on the main thread.
     std::span<const Event> pumpEvents() ITH_LIFETIMEBOUND;
 
+    // pumpEvents() that first waits until an event arrives, wake() is called or `timeout` passes,
+    // for an application that idles (ADR-0029 rule 12): the editor waits instead of rendering
+    // frames nobody looks at. Returns at once when events are already queued; events the platform
+    // doesn't report (device and display bookkeeping) don't end the wait. The span may be
+    // empty (a timeout, or only a wake). A negative timeout counts as zero; timeouts are rounded
+    // down to milliseconds and capped at about 24 days.
+    //
+    // Precondition (asserted): called on the main thread.
+    std::span<const Event> waitEvents(std::chrono::milliseconds timeout) ITH_LIFETIMEBOUND;
+
+    // Ends a waitEvents() in progress early, or makes the next one return at once, by queueing an
+    // internal event that pumps drop. Thread-safe, never blocks, and does nothing when no Platform
+    // exists. Wakes that come before the next pump are coalesced into one event. Connect it to
+    // JobSystem::setMainThreadWake so main-thread jobs end the wait (ADR-0035 rule 23); remove the
+    // hook, or destroy the JobSystem, before destroying the Platform, so no wake runs while it shuts
+    // down.
+    static void wake() noexcept;
+
     // When the last pumpEvents() finished collecting events, in std::chrono::steady_clock
     // nanoseconds: the frame's input time, later than every timestamp of its events. 0 before the
     // first pump.
@@ -136,6 +159,10 @@ private:
 
     // Asserts that this Platform owns the platform layer and that the caller is on the main thread.
     void assertUsable() const;
+
+    // Collects this frame's events, starting with `first` (an SDL event) when it is not null, and
+    // sets `*woke` when one of them was a wake.
+    std::span<const Event> collectEvents(const void* first, bool* woke);
 
     bool m_owner = false;
     // Added to the library's event timestamps to put them on std::chrono::steady_clock.
