@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <optional>
 #include <ostream>
 #include <string>
@@ -23,7 +24,9 @@
 #include <thread>
 #include <vector>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -108,6 +111,74 @@ std::optional<fs::FileKind> kindOf(const std::string& path) {
 std::filesystem::path nativeOf(const std::string& path) {
     return std::filesystem::path(std::u8string(path.begin(), path.end()));
 }
+
+// A file opened for reading the way readFile opens it (on Windows with read, write and delete
+// sharing), held open until destroyed.
+class ReaderHandle {
+public:
+    explicit ReaderHandle(const std::string& path) {
+#ifdef _WIN32
+        m_handle =
+            CreateFileW(nativeOf(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+#else
+        m_descriptor = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+#endif
+    }
+
+    ReaderHandle(const ReaderHandle&) = delete;
+    ReaderHandle& operator=(const ReaderHandle&) = delete;
+    ReaderHandle(ReaderHandle&&) = delete;
+    ReaderHandle& operator=(ReaderHandle&&) = delete;
+
+    ~ReaderHandle() {
+#ifdef _WIN32
+        if (valid()) {
+            CloseHandle(m_handle);
+        }
+#else
+        if (valid()) {
+            ::close(m_descriptor);
+        }
+#endif
+    }
+
+    [[nodiscard]] bool valid() const {
+#ifdef _WIN32
+        return m_handle != INVALID_HANDLE_VALUE;
+#else
+        return m_descriptor >= 0;
+#endif
+    }
+
+    // Everything from the start of the file.
+    [[nodiscard]] std::string readAll() const {
+        std::string text;
+        char buffer[256];
+#ifdef _WIN32
+        LARGE_INTEGER zero{};
+        SetFilePointerEx(m_handle, zero, nullptr, FILE_BEGIN);
+        DWORD read = 0;
+        while (ReadFile(m_handle, buffer, sizeof(buffer), &read, nullptr) != FALSE && read > 0) {
+            text.append(buffer, read);
+        }
+#else
+        ::lseek(m_descriptor, 0, SEEK_SET);
+        for (ssize_t read = ::read(m_descriptor, buffer, sizeof(buffer)); read > 0;
+             read = ::read(m_descriptor, buffer, sizeof(buffer))) {
+            text.append(buffer, static_cast<std::size_t>(read));
+        }
+#endif
+        return text;
+    }
+
+private:
+#ifdef _WIN32
+    HANDLE m_handle = INVALID_HANDLE_VALUE;
+#else
+    int m_descriptor = -1;
+#endif
+};
 
 } // namespace
 
@@ -207,30 +278,77 @@ TEST_SUITE("file_system.files") {
     }
 #endif
 
+    TEST_CASE("a replacement goes through while a reader holds the file open") {
+        // Readers open with delete sharing (readFile does), so they never hold up a replacement:
+        // the writer doesn't wait and the reader keeps reading the old content.
+        const TempDirectory directory;
+        const std::string file = directory.path("held.bin");
+        REQUIRE(fs::writeFileAtomic(file, "old content").hasValue());
+        const ReaderHandle reader(file);
+        REQUIRE(reader.valid());
+        const auto start = std::chrono::steady_clock::now();
+        const ith::Expected<void> written = fs::writeFileAtomic(file, "new content");
+        CHECK(errorCode(written).empty());
+        CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(150));
+        CHECK(reader.readAll() == "old content");
+        CHECK(readText(file) == "new content");
+        CHECK(namesIn(directory.path()) == std::vector<std::string>{"held.bin"});
+    }
+
     TEST_CASE("readers see the old or the new file, never a partial one") {
+        // Two readers keep the file open almost all the time while it is replaced. A write that a
+        // virus scanner holds up past the retries (fs.busy) is tried once more; the test above shows
+        // that the readers themselves never hold one up.
+        constexpr int kWrites = 100;
+        constexpr int kReaders = 2;
         const TempDirectory directory;
         const std::string file = directory.path("shared.bin");
         constexpr std::size_t kSize = 64 * 1024;
         REQUIRE(fs::writeFileAtomic(file, std::string(kSize, 'a')).hasValue());
         std::atomic<bool> done = false;
         std::atomic<int> badReads = 0;
-        std::thread reader([&] {
-            while (!done.load()) {
-                const ith::Expected<std::string> text = fs::readFile(file, kSize);
-                if (!text || text->size() != kSize || (text->find_first_not_of((*text)[0]) != std::string::npos)) {
-                    ++badReads;
-                }
+        std::mutex errorsMutex;
+        std::vector<std::string> errors;
+        const auto note = [&](const std::string& error) {
+            const std::lock_guard lock(errorsMutex);
+            if (errors.size() < 10) {
+                errors.push_back(error);
             }
-        });
+        };
+        std::vector<std::thread> readers;
+        for (int reader = 0; reader < kReaders; ++reader) {
+            readers.emplace_back([&] {
+                while (!done.load()) {
+                    const ith::Expected<std::string> text = fs::readFile(file, kSize);
+                    if (!text) {
+                        ++badReads;
+                        note("read: " + text.error().code + " " + text.error().message);
+                    } else if (text->size() != kSize || text->find_first_not_of((*text)[0]) != std::string::npos) {
+                        ++badReads;
+                        note("read: a partial or mixed file");
+                    }
+                }
+            });
+        }
         int failedWrites = 0;
-        for (int index = 0; index < 100; ++index) {
-            const char fill = index % 2 == 0 ? 'b' : 'a';
-            const ith::Expected<void> written =
-                fs::writeFileAtomic(file, std::string(kSize, fill), {.durability = fs::Durability::Atomic});
-            failedWrites += written ? 0 : 1;
+        for (int index = 0; index < kWrites; ++index) {
+            const std::string bytes(kSize, index % 2 == 0 ? 'b' : 'a');
+            ith::Expected<void> written = fs::writeFileAtomic(file, bytes, {.durability = fs::Durability::Atomic});
+            if (!written && written.error().code == "fs.busy") {
+                written = fs::writeFileAtomic(file, bytes, {.durability = fs::Durability::Atomic});
+            }
+            if (!written) {
+                ++failedWrites;
+                note("write: " + written.error().code + " " + written.error().message);
+            }
         }
         done = true;
-        reader.join();
+        for (std::thread& reader : readers) {
+            reader.join();
+        }
+        for (const std::string& error : errors) {
+            MESSAGE(error);
+        }
         CHECK(failedWrites == 0);
         CHECK(badReads.load() == 0);
         CHECK(namesIn(directory.path()) == std::vector<std::string>{"shared.bin"});

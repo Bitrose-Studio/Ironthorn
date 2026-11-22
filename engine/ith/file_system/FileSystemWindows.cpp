@@ -12,14 +12,20 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace ith::fs {
 namespace {
 
 using detail::pathError;
+
+// How often readFile looks again for a file that isn't found (see there).
+constexpr int kNotFoundRetries = 3;
 
 // Closes a file or directory handle.
 class FileHandle {
@@ -36,6 +42,12 @@ public:
     [[nodiscard]] HANDLE get() const noexcept { return m_handle; }
 
     [[nodiscard]] bool valid() const noexcept { return m_handle != INVALID_HANDLE_VALUE; }
+
+    // Closes the handle it holds and takes `handle`.
+    void reset(HANDLE handle) noexcept {
+        static_cast<void>(close());
+        m_handle = handle;
+    }
 
     // Closes the handle now; false when CloseHandle fails.
     bool close() noexcept {
@@ -301,17 +313,44 @@ private:
     bool m_kept = false;
 };
 
-// Renames `temporary` over `target`, retrying sharing violations and access denials for about
-// 200 ms: virus scanners and the search indexer open new files for a moment.
-Expected<void> replaceWithRetry(const std::wstring& temporary, const NativePath& target, DWORD flags) {
+// Renames the open file `file` over `target` with POSIX semantics (Windows 10 1809 and later, NTFS):
+// the target's name is replaced even while readers hold it open with delete sharing, and they keep
+// reading the old content. 0 on success, else the error.
+DWORD replaceByHandle(HANDLE file, const std::wstring& target) {
+    const std::size_t nameBytes = target.size() * sizeof(wchar_t);
+    const std::size_t size = offsetof(FILE_RENAME_INFO, FileName) + nameBytes + sizeof(wchar_t);
+    std::vector<std::byte> buffer(size);
+    auto* rename =
+        reinterpret_cast<FILE_RENAME_INFO*>(buffer.data()); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+    rename->Flags = FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
+    rename->RootDirectory = nullptr;
+    rename->FileNameLength = static_cast<DWORD>(nameBytes);
+    std::memcpy(rename->FileName, target.c_str(), nameBytes + sizeof(wchar_t));
+    if (SetFileInformationByHandle(file, FileRenameInfoEx, rename, static_cast<DWORD>(size)) != FALSE) {
+        return 0;
+    }
+    return GetLastError();
+}
+
+// True for the errors of a file system or Windows version that has no POSIX rename.
+bool isPosixRenameUnsupported(DWORD error) noexcept {
+    return error == ERROR_INVALID_PARAMETER || error == ERROR_NOT_SUPPORTED || error == ERROR_INVALID_FUNCTION ||
+           error == ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+// Calls `attempt` (0 on success, else the error) until it succeeds, retrying sharing violations and
+// access denials for about 200 ms: virus scanners, the search indexer and other programs open files
+// for a moment without delete sharing.
+template <typename Attempt>
+Expected<void> replaceWithRetry(const NativePath& target, Attempt attempt) {
     constexpr auto kRetryTime = std::chrono::milliseconds(200);
     const auto start = std::chrono::steady_clock::now();
     DWORD delay = 1;
     for (;;) {
-        if (MoveFileExW(temporary.c_str(), target.wide.c_str(), flags) != FALSE) {
+        const DWORD error = attempt();
+        if (error == 0) {
             return {};
         }
-        const DWORD error = GetLastError();
         if (error != ERROR_SHARING_VIOLATION && error != ERROR_ACCESS_DENIED) {
             return windowsError("can't replace", target.utf8, error);
         }
@@ -351,9 +390,18 @@ Expected<std::string> readFile(std::string_view path, std::size_t maxSize) {
     if (!native) {
         return makeUnexpected(std::move(native).error());
     }
-    const FileHandle file(CreateFileW(native->wide.c_str(), GENERIC_READ,
-                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-                                      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+    const auto open = [&] {
+        return CreateFileW(native->wide.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    };
+    FileHandle file(open());
+    // A writer's POSIX rename (writeFileAtomic) removes the old name a moment before the new file
+    // takes it, so a reader racing it can find nothing there; it looks again a few times.
+    for (int attempt = 0; !file.valid() && GetLastError() == ERROR_FILE_NOT_FOUND && attempt < kNotFoundRetries;
+         ++attempt) {
+        SwitchToThread();
+        file.reset(open());
+    }
     if (!file.valid()) {
         const DWORD error = GetLastError();
         const DWORD attributes = GetFileAttributesW(native->wide.c_str());
@@ -414,8 +462,11 @@ Expected<void> writeFileAtomic(std::string_view path, std::string_view bytes, co
     const bool durable = options.durability == Durability::Durable;
     TemporaryFile temporary(std::move(temporaryPath->wide));
     {
-        FileHandle file(CreateFileW(temporary.path().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                                    FILE_ATTRIBUTE_NORMAL, nullptr));
+        // DELETE access for the rename through the handle. Read and delete sharing, because the
+        // handle stays open for a moment after the rename, when readers may already open the name.
+        FileHandle file(CreateFileW(temporary.path().c_str(), GENERIC_WRITE | DELETE,
+                                    FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL,
+                                    nullptr));
         if (!file.valid()) {
             const DWORD error = GetLastError();
             temporary.keep(); // nothing was created
@@ -439,17 +490,44 @@ Expected<void> writeFileAtomic(std::string_view path, std::string_view bytes, co
         if (detail::faultAt(detail::kFaultAfterFlush)) {
             return detail::injectedFault(temporaryUtf8);
         }
+        if (detail::faultAt(detail::kFaultBeforeRename)) {
+            return detail::injectedFault(temporaryUtf8);
+        }
+        // The rename through the open handle: POSIX semantics replace the target even while readers
+        // hold it open with delete sharing, which MoveFileExW can't do.
+        bool unsupported = false;
+        Expected<void> replaced = replaceWithRetry(*target, [&] {
+            const DWORD error = replaceByHandle(file.get(), target->wide);
+            unsupported = isPosixRenameUnsupported(error);
+            return unsupported ? 0 : error;
+        });
+        if (!replaced) {
+            return replaced;
+        }
+        if (!unsupported) {
+            temporary.keep();
+            if (!file.close()) {
+                return windowsError("can't close", target->utf8, GetLastError());
+            }
+            return {};
+        }
         if (!file.close()) {
             return windowsError("can't close", temporaryUtf8, GetLastError());
         }
     }
-    if (detail::faultAt(detail::kFaultBeforeRename)) {
-        return detail::injectedFault(temporaryUtf8);
-    }
+    // Without POSIX renames (FAT, some network shares, older Windows): MoveFileExW, which fails
+    // while a reader holds the target and is retried like the rename above.
     const auto flags = static_cast<DWORD>(
         durable ? MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
                 : MOVEFILE_REPLACE_EXISTING); // NOLINT(bugprone-signed-bitwise): Win32 flag macros are int
-    if (Expected<void> replaced = replaceWithRetry(temporary.path(), *target, flags); !replaced) {
+    if (Expected<void> replaced = replaceWithRetry(*target,
+                                                   [&] {
+                                                       return MoveFileExW(temporary.path().c_str(),
+                                                                          target->wide.c_str(), flags) != FALSE
+                                                                  ? DWORD{0}
+                                                                  : GetLastError();
+                                                   });
+        !replaced) {
         return replaced;
     }
     temporary.keep();

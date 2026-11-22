@@ -49,7 +49,7 @@ Three roots are recognized: `/`, a drive root `C:/` and a UNC root `//server/sha
 
 | Function | What it does |
 |---|---|
-| `readFile(path, maxSize)` | The whole file. The size is checked before anything is allocated (`fs.too_large`). On Windows the file is opened with read, write and delete sharing, so a reader never blocks a replacement. |
+| `readFile(path, maxSize)` | The whole file. The size is checked before anything is allocated (`fs.too_large`). On Windows the file is opened with read, write and delete sharing, so a reader never blocks a replacement, and a file that isn't found is looked for again up to three times (see below). |
 | `writeFileAtomic(path, bytes, options)` | Readers see the old file or the new one, never a partial one. See below. |
 | `fileInfo(path)` | Kind, size and modification time (nanoseconds since 1970 UTC), or `nullopt` when nothing is there. A final link is reported as a link, with its target's kind and size. |
 | `listDirectory(path)` | One level: name, kind, size and `validName`. |
@@ -74,17 +74,32 @@ is removed on every failure; `isTemporaryFileName()` lets scans report the ones 
 
 | Step | POSIX | Windows |
 |---|---|---|
-| Create | `open` with `O_CREAT \| O_EXCL \| O_CLOEXEC` | `CreateFileW` with `CREATE_NEW` |
+| Create | `open` with `O_CREAT \| O_EXCL \| O_CLOEXEC` | `CreateFileW` with `CREATE_NEW`, `GENERIC_WRITE \| DELETE` access, read and delete sharing |
 | Write | a loop that retries `EINTR` and short writes | `WriteFile` in a loop |
 | Keep permissions | the existing target's permission bits (`fchmod`) | (attributes are not copied) |
 | Flush (`Durable`) | `fsync` | `FlushFileBuffers` |
-| Replace | `rename` | `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, plus `MOVEFILE_WRITE_THROUGH` when durable |
+| Replace | `rename` | `SetFileInformationByHandle` with `FileRenameInfoEx`, `FILE_RENAME_FLAG_REPLACE_IF_EXISTS \| FILE_RENAME_FLAG_POSIX_SEMANTICS`, through the open handle; where that is refused, `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, plus `MOVEFILE_WRITE_THROUGH` when durable |
 | After (`Durable`) | `fsync` of the folder, and of the parent of every folder the call created | nothing: Windows documents no directory flush |
 
 - `Durability::Durable` (the default) is for what the user made: levels, sidecars, settings.
   `Durability::Atomic` skips the flushes, for data that can be rebuilt, such as derived-data cache
   entries. The module claims no more than these calls give; durability across a real power loss
   isn't tested.
+- **Readers don't hold up a replacement on Windows.** `MoveFileExW` can't replace a file that
+  another handle has open, even with delete sharing; it fails with access denied for as long as a
+  reader holds the file, so a file that is read in a loop could not be saved. The rename with POSIX
+  semantics (Windows 10 and later, on NTFS) replaces the name while readers hold the old file,
+  and they keep reading the old content, as on POSIX. Where it is refused (`ERROR_INVALID_PARAMETER`,
+  `ERROR_NOT_SUPPORTED`, `ERROR_INVALID_FUNCTION` or `ERROR_CALL_NOT_IMPLEMENTED`: FAT, some
+  network shares, older Windows), `MoveFileExW` is used, with the old behaviour.
+- **The POSIX rename removes the old name a moment before the new file takes it**, so a reader
+  that opens the name at that instant can find nothing. `readFile` therefore looks again for a
+  file it doesn't find, up to three times with a yield in between, before it reports
+  `fs.not_found`.
+- **Durability on Windows:** with `Durable` the temporary file's data is flushed before the
+  rename. The rename itself is not forced to the disk: Windows documents no directory flush, and
+  `MOVEFILE_WRITE_THROUGH` (on the fallback path) is documented only for moves done as copy and
+  delete.
 - On Windows, a virus scanner or the search indexer may hold a new file for a moment. A sharing
   violation or access denial on the replacement is retried with a growing delay for about
   200 ms, then fails with `fs.busy`. A read-only target that the file system refuses to replace
@@ -153,7 +168,9 @@ Tests, tools and samples are not checked.
 - the fault points: a test-only, thread-local `fs::testing::setWriteFault` (not in Shipping
   builds) fails a write after the temporary write, after the flush and before the rename, with
   both durabilities; the old content stays whole and no temporary file remains;
-- a reader thread that never sees a partial file while another thread replaces it 100 times;
+- a replacement that goes through at once while a reader holds the file open (the reader keeps
+  the old content), and two reader threads that never see a partial file while another thread
+  replaces it 100 times;
 - long paths (over 400 characters) and names outside ASCII; a busy target on Windows (`fs.busy`
   after the retries); permission bits kept and names that are not UTF-8 in listings on Linux;
 - `fileInfo`, `listDirectory`, links (skipped on Windows without the symbolic-link privilege),

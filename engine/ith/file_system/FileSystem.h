@@ -95,15 +95,19 @@ inline constexpr std::string_view kTemporaryMarker = ".tmp-";
 // The whole file as bytes, following symbolic links. Fails with "fs.too_large" when the file is
 // larger than `maxSize` (checked before anything is allocated), "fs.is_a_directory", or the
 // codes above. On Windows the file is opened with read, write and delete sharing, so a reader
-// never blocks an atomic replacement or a rename by another thread or process.
+// never blocks an atomic replacement or a rename by another thread or process, and a file that
+// isn't found is looked for again up to three times: the POSIX rename of a concurrent
+// writeFileAtomic leaves the name empty for an instant.
 [[nodiscard]] Expected<std::string> readFile(std::string_view path, std::size_t maxSize);
 
 // Replaces the file at `path` with `bytes` so that readers see the old file or the new one, never
 // a partial one: the bytes go to "<name>.tmp-<uuid>" in the same directory, which is then renamed
 // over the target. With Durability::Durable the temporary file is flushed before the rename, and on
-// POSIX the directory (and every directory the call created) is flushed after it; on Windows the
-// rename is asked to write through, which is all Windows documents. On POSIX an existing target's
-// permission bits are kept. On Windows a replacement refused by a sharing violation or access
+// POSIX the directory (and every directory the call created) is flushed after it; Windows documents
+// no flush of a rename. On Windows the rename goes through the temporary file's handle with POSIX
+// semantics, so readers holding the target open don't hold it up; where the file system refuses
+// that, MoveFileExW is used, which fails while a reader holds the target (and is retried). On
+// POSIX an existing target's permission bits are kept. On Windows a replacement refused by a sharing violation or access
 // denial (a scanner or indexer holding the file) is retried for about 200 ms before failing with
 // "fs.busy"; a read-only target whose file system refuses the replacement fails with
 // "fs.access_denied" at once. Fails with "fs.is_a_directory" when `path` is a directory,
@@ -161,9 +165,10 @@ enum class WriteFault : std::uint8_t {
     None,
     // After the bytes were written to the temporary file, before the flush.
     AfterTemporaryWrite,
-    // After the flush (the place of it with Durability::Atomic), before the file is closed.
+    // After the flush (the place of it with Durability::Atomic).
     AfterFlush,
-    // After the temporary file was closed, right before the rename.
+    // Right before the rename (on POSIX after the temporary file was closed; on Windows the rename
+    // goes through its open handle).
     BeforeRename,
 };
 
