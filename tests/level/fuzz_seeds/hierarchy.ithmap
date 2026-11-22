@@ -1,0 +1,50 @@
+{
+  "format": "ith.level",
+  "version": 1,
+  "id": "6c0d5b0e-8a51-4c33-9e7f-3f6f0a1b2c3d",
+  "data": {
+    "entities": [
+      {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "components": {
+          "ith::Disabled": {},
+          "ith::LocalTransform": {
+            "value": {
+              "translation": {
+                "x": 10,
+                "y": 0,
+                "z": -2.5
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000002",
+        "components": {
+          "ith::ChildOf": {
+            "parent": "00000000-0000-0000-0000-000000000001",
+            "despawnWithParent": true
+          },
+          "ith::LocalTransform": {
+            "value": {
+              "scale": {
+                "x": 2,
+                "y": 2,
+                "z": 2
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000003",
+        "components": {
+          "ith::ChildOf": {
+            "parent": "00000000-0000-0000-0000-000000000002"
+          }
+        }
+      }
+    ]
+  }
+}

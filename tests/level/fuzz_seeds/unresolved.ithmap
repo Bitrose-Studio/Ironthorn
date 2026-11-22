@@ -1,0 +1,48 @@
+{
+  "format": "ith.level",
+  "version": 1,
+  "id": "6c0d5b0e-8a51-4c33-9e7f-3f6f0a1b2c3d",
+  "data": {
+    "entities": [
+      {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "components": {
+          "game::Missing": {
+            "a": [
+              1,
+              2.50,
+              {
+                "b": null
+              }
+            ]
+          },
+          "ith::test::level::Light": {
+            "intensity": "bright",
+            "unknown": 1
+          },
+          "ith::test::level::Scratch": {
+            "value": 3
+          }
+        },
+        "editor": {
+          "game::EditorThing": [
+            true
+          ]
+        },
+        "prefab": "00000000-0000-0000-0000-000000000009"
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000002",
+        "components": {
+          "ith::ChildOf": {
+            "parent": "00000000-0000-0000-0000-000000000009"
+          },
+          "ith::test::level::Target": {
+            "entity": "00000000-0000-0000-0000-000000000008"
+          }
+        }
+      }
+    ],
+    "resources": {}
+  }
+}

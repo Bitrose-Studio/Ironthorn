@@ -1,0 +1,65 @@
+{
+  "format": "ith.level",
+  "version": 1,
+  "id": "6c0d5b0e-8a51-4c33-9e7f-3f6f0a1b2c3d",
+  "data": {
+    "entities": [
+      {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "components": {
+          "ith::test::level::Light": {
+            "intensity": 2.5,
+            "color": {
+              "x": 1,
+              "y": 0.5,
+              "z": 0
+            },
+            "label": "lamp",
+            "shape": "Spot",
+            "range": 0.1,
+            "flicker": [
+              0.5,
+              1
+            ]
+          },
+          "ith::test::level::Marker": {},
+          "ith::test::level::Sealed": {
+            "value": 18446744073709551615
+          },
+          "ith::test::level::Target": {
+            "entity": "00000000-0000-0000-0000-000000000002",
+            "others": [
+              "00000000-0000-0000-0000-000000000001",
+              "00000000-0000-0000-0000-000000000000"
+            ],
+            "route": [
+              {
+                "to": "00000000-0000-0000-0000-000000000002",
+                "wait": 1.5
+              }
+            ]
+          }
+        },
+        "editor": {
+          "ith::test::level::EditorColor": {
+            "hue": 0.25
+          },
+          "ith::test::level::EditorNote": {
+            "text": "by the door"
+          }
+        }
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000002",
+        "components": {
+          "ith::test::level::OldName": {
+            "value": 3
+          },
+          "ith::test::level::Probe": {
+            "value": -1
+          }
+        }
+      }
+    ]
+  }
+}

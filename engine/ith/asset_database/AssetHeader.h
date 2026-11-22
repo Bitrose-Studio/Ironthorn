@@ -20,6 +20,7 @@
 
 #include "ith/assets/AssetId.h"
 #include "ith/foundation/Expected.h"
+#include "ith/level/LevelFormat.h"
 #include "ith/serialization/Error.h"
 
 #include <cstdint>
@@ -31,12 +32,8 @@ namespace ith {
 // The file extension of native assets other than levels.
 inline constexpr std::string_view kNativeAssetExtension = ".ithasset";
 
-// The file extension of levels.
+// The file extension of levels, whose document format is kLevelFormat (ith/level/LevelFormat.h).
 inline constexpr std::string_view kLevelExtension = ".ithmap";
-
-// The document format of levels: the only format an ".ithmap" file holds, and one an ".ithasset"
-// file never holds.
-inline constexpr std::string_view kLevelFormat = "ith.level";
 
 // True when `path` (UTF-8, '/'-separated) has a native asset extension, in any ASCII case.
 [[nodiscard]] bool isNativeAssetPath(std::string_view path);

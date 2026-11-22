@@ -218,6 +218,11 @@ public:
     // The number of live entities.
     [[nodiscard]] std::size_t entityCount() const noexcept { return m_entityCount; }
 
+    // True while a query, forEachRoot or forEachComponent iterates this world, a system runs on it
+    // or a hook runs: the times when structural changes are refused. For callers that must check
+    // before they start a change made of several steps, such as loading a level.
+    [[nodiscard]] bool isIterating() const noexcept { return m_iterationDepth != 0; }
+
     // The entity whose StableId is `id`, or the null handle when no live entity has it (StableId.h).
     // Constant time on average.
     [[nodiscard]] Entity findByStableId(const Uuid& id) const;

@@ -25,6 +25,7 @@ ith_add_module(asset_database
         foundation
         assets
         serialization
+        level
     PRIVATE_LIBRARIES
         ith::xxhash
     REFLECT)

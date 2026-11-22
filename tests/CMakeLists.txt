@@ -499,6 +499,54 @@ if(IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
     set_tests_properties(ecs_dynamic_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
 endif()
 
+# Component types for the level tests and fuzz target, reflected like an engine module's, with an
+# editor module for the EditorOnly ones.
+add_library(ith_test_level_components STATIC)
+target_include_directories(ith_test_level_components PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/level")
+target_link_libraries(ith_test_level_components
+    PUBLIC ith::build_options ith::reflection ith::math
+    PRIVATE ith::runtime_options)
+set_target_properties(ith_test_level_components PROPERTIES
+    FOLDER "Ironthorn/Tests"
+    COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+ith_reflect_target(ith_test_level_components
+    MODULE test_level
+    KIND runtime
+    INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/level"
+    HEADERS level/LevelComponents.h)
+ith_reflect_target(ith_test_level_components
+    MODULE test_level_editor
+    KIND editor
+    INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/level"
+    HEADERS level/EditorLevelComponents.h)
+
+# Level documents (ADR-0034): layout and stable bytes, a 10,000-entity round trip, the hierarchy,
+# references, validation errors, unresolved components, the entity mapping, hooks and stripped
+# editor sections.
+ith_add_test_suite(level
+    SOURCES level/LevelTests.cpp
+    LIBRARIES ith::level ith_test_level_components)
+
+# A libFuzzer target for loadLevel, in Clang sanitizer builds only, with a short smoke run like the
+# others, seeded with sample levels (level/fuzz_seeds) and the JSON dictionary.
+if(IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+        AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_executable(ith_level_fuzz level/LevelLoadFuzz.cpp)
+    target_link_libraries(ith_level_fuzz PRIVATE ith::level ith_test_level_components)
+    target_compile_options(ith_level_fuzz PRIVATE -fsanitize=fuzzer)
+    target_link_options(ith_level_fuzz PRIVATE -fsanitize=fuzzer)
+    set_target_properties(ith_level_fuzz PROPERTIES
+        FOLDER "Ironthorn/Tests"
+        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    set(corpus "${CMAKE_CURRENT_BINARY_DIR}/level_fuzz_corpus")
+    file(MAKE_DIRECTORY "${corpus}")
+    add_test(NAME level_fuzz
+        COMMAND ith_level_fuzz -runs=20000 -max_len=4096 -malloc_limit_mb=512
+            -dict=${CMAKE_CURRENT_SOURCE_DIR}/serialization/fuzz_seeds/json.dict
+            "${corpus}" "${CMAKE_CURRENT_SOURCE_DIR}/level/fuzz_seeds")
+    set_tests_properties(level_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
+endif()
+
 # The ECS benchmark (docs/development/ecs.md). Its test only prints numbers and never fails on
 # them; the "benchmark" label keeps it out of normal test runs, which exclude that label.
 add_executable(ith_ecs_benchmark ecs/EcsBenchmark.cpp)
