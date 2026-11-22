@@ -6,6 +6,7 @@
 
 add_subdirectory(ith/foundation)
 add_subdirectory(ith/math)
+add_subdirectory(ith/file_system)
 add_subdirectory(ith/platform_events)
 add_subdirectory(ith/platform)
 add_subdirectory(ith/jobs)

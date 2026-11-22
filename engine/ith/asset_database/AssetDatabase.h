@@ -41,7 +41,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <functional>
 #include <map>
 #include <string>
@@ -135,13 +134,14 @@ struct ImportReport {
 
 class AssetDatabase {
 public:
-    // A database for the project in `projectDirectory`, whose assets are in its "Content" folder
-    // and whose derived-data cache is DerivedDataCache::projectDirectory(projectDirectory). It is
-    // empty until scan(). `importers` must outlive it.
-    AssetDatabase(const std::filesystem::path& projectDirectory, const ImporterRegistry& importers);
+    // A database for the project in `projectDirectory` (a UTF-8 path, see ith/file_system), whose
+    // assets are in its "Content" folder and whose derived-data cache is
+    // DerivedDataCache::projectDirectory(projectDirectory). It is empty until scan(). `importers`
+    // must outlive it.
+    AssetDatabase(std::string_view projectDirectory, const ImporterRegistry& importers);
 
-    // The project's Content folder.
-    [[nodiscard]] const std::filesystem::path& contentDirectory() const noexcept { return m_contentDirectory; }
+    // The project's Content folder, normalized UTF-8.
+    [[nodiscard]] const std::string& contentDirectory() const noexcept { return m_contentDirectory; }
 
     // The project's derived-data cache.
     [[nodiscard]] const DerivedDataCache& derivedDataCache() const noexcept { return m_cache; }
@@ -214,7 +214,7 @@ private:
     void erase(AssetId id);
     [[nodiscard]] Expected<void> checkTarget(const AssetRecord& record, const std::string& newPath) const;
 
-    std::filesystem::path m_contentDirectory;
+    std::string m_contentDirectory;
     DerivedDataCache m_cache;
     const ImporterRegistry& m_importers;
     std::unordered_map<AssetId, AssetRecord> m_records;

@@ -1,12 +1,13 @@
 #include "ith/asset_database/DerivedDataCache.h"
 
-#include "ith/asset_database/FileIo.h"
+#include "ith/file_system/FileSystem.h"
+#include "ith/file_system/Path.h"
 #include "ith/serialization/BinaryArchive.h"
 #include "ith/serialization/Json.h"
 
 #include <array>
+#include <optional>
 #include <string>
-#include <system_error>
 #include <utility>
 
 namespace ith {
@@ -69,33 +70,27 @@ Expected<Hash128> derivedDataKey(const DerivedDataInputs& inputs) {
     return hash128(bytes);
 }
 
-DerivedDataCache::DerivedDataCache(std::filesystem::path directory) : m_directory(std::move(directory)) {}
+DerivedDataCache::DerivedDataCache(std::string_view directory) : m_directory(fs::normalizePath(directory)) {}
 
-std::filesystem::path DerivedDataCache::projectDirectory(const std::filesystem::path& project) {
-    return project / "Intermediate" / "DerivedData";
+std::string DerivedDataCache::projectDirectory(std::string_view project) {
+    return fs::joinPath(project, "Intermediate/DerivedData");
 }
 
-std::filesystem::path DerivedDataCache::entryPath(const Hash128& key) const {
+std::string DerivedDataCache::entryPath(const Hash128& key) const {
     const std::string name = key.toString();
-    return m_directory / name.substr(0, 2) / (name + ".ddc");
+    return fs::joinPath(m_directory, name.substr(0, 2) + "/" + name + ".ddc");
 }
 
 Expected<bool> DerivedDataCache::get(const Hash128& key, const serialization::DocumentFormat& format,
                                      const TypeInfo& type, void* target) const {
-    const std::filesystem::path path = entryPath(key);
-    std::error_code error;
-    if (!std::filesystem::exists(path, error)) {
-        if (error) {
-            return detail::asset_files::ioError("can't check the cache entry", path, error);
-        }
-        return false;
-    }
-    Expected<std::string> bytes = detail::asset_files::readFile(path, kMaxEntrySize);
+    const std::string path = entryPath(key);
+    Expected<std::string> bytes = fs::readFile(path, kMaxEntrySize);
     if (!bytes) {
-        if (bytes.error().code == "asset.too_large") {
-            return false; // no entry this cache writes is that large
+        const std::string& code = bytes.error().code;
+        if (code == "fs.not_found" || code == "fs.too_large") {
+            return false; // no entry, or none this cache writes: that large
         }
-        return makeUnexpected(std::move(bytes).error());
+        return makeError("asset.io", std::move(bytes).error().message);
     }
     const std::span<const std::byte> blob = std::as_bytes(std::span<const char>(bytes->data(), bytes->size()));
     return serialization::readBinary(blob, format, type, target).hasValue();
@@ -111,18 +106,21 @@ Expected<void> DerivedDataCache::put(const Hash128& key, const serialization::Do
         return makeError("asset.cache_write", "the entry has " + std::to_string(blob->size()) +
                                                   " bytes; the limit is " + std::to_string(kMaxEntrySize));
     }
-    const std::filesystem::path path = entryPath(key);
-    Expected<void> written = detail::asset_files::writeFileAtomically(
-        path, std::string_view(reinterpret_cast<const char*>(blob->data()), blob->size()));
-    if (!written) {
-        // On Windows the rename over an entry fails while another thread or process has it open
-        // (get(), or a concurrent put() of the same key). The entry that is there is as good.
-        std::error_code error;
-        if (std::filesystem::exists(path, error)) {
+    const std::string path = entryPath(key);
+    Expected<void> written =
+        fs::writeFileAtomic(path, std::string_view(reinterpret_cast<const char*>(blob->data()), blob->size()),
+                            {.durability = fs::Durability::Atomic});
+    if (written) {
+        return {};
+    }
+    // On Windows the rename over an entry fails while another process has it open without delete
+    // sharing. Entries are addressed by their inputs, so the entry that is there is as good.
+    if (written.error().code == "fs.busy") {
+        if (Expected<std::optional<fs::FileInfo>> info = fs::fileInfo(path); info && info->has_value()) {
             return {};
         }
     }
-    return written;
+    return makeError("asset.io", std::move(written).error().message);
 }
 
 } // namespace ith

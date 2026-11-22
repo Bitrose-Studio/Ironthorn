@@ -139,11 +139,11 @@ TEST_SUITE("asset_database.ddc") {
 
     TEST_CASE("entries round-trip, and missing or damaged entries are misses") {
         const TempProject project;
-        const ith::DerivedDataCache cache(ith::DerivedDataCache::projectDirectory(project.directory()));
-        CHECK(cache.directory() == project.directory() / "Intermediate" / "DerivedData");
+        const ith::DerivedDataCache cache(ith::DerivedDataCache::projectDirectory(project.root()));
+        CHECK(cache.directory() == project.root() + "/Intermediate/DerivedData");
         const ith::Hash128 key = ith::hash128("key");
         const std::string name = key.toString();
-        CHECK(cache.entryPath(key) == cache.directory() / name.substr(0, 2) / (name + ".ddc"));
+        CHECK(cache.entryPath(key) == cache.directory() + "/" + name.substr(0, 2) + "/" + name + ".ddc");
 
         ith::ImportedAssetData read;
         const ith::Expected<bool> miss = cache.get(key, ith::kImportedAssetFormat, read);
@@ -165,13 +165,12 @@ TEST_SUITE("asset_database.ddc") {
         CHECK(untouched.objects.size() == 1);
 
         const ith::Expected<std::string> blob =
-            ith::detail::asset_files::readFile(cache.entryPath(key), ith::DerivedDataCache::kMaxEntrySize);
+            ith::fs::readFile(cache.entryPath(key), ith::DerivedDataCache::kMaxEntrySize);
         REQUIRE(blob.hasValue());
         if (!blob) {
             return;
         }
-        REQUIRE(ith::detail::asset_files::writeFileAtomically(cache.entryPath(key), blob->substr(0, blob->size() - 1))
-                    .hasValue());
+        REQUIRE(ith::fs::writeFileAtomic(cache.entryPath(key), blob->substr(0, blob->size() - 1)).hasValue());
         CHECK_FALSE(cache.get(key, ith::kImportedAssetFormat, untouched).valueOr(true));
         CHECK(untouched.objects.size() == 1);
 
@@ -184,12 +183,14 @@ TEST_SUITE("asset_database.ddc") {
         // On Windows a file open for reading can't be renamed over; the existing entry, addressed
         // by the same inputs, is kept. Elsewhere the entry is simply replaced.
         const TempProject project;
-        const ith::DerivedDataCache cache(ith::DerivedDataCache::projectDirectory(project.directory()));
+        const ith::DerivedDataCache cache(ith::DerivedDataCache::projectDirectory(project.root()));
         const ith::Hash128 key = ith::hash128("open");
         const ith::ImportedAssetData data = sampleData();
         REQUIRE(cache.put(key, ith::kImportedAssetFormat, data).hasValue());
         {
-            std::ifstream held(cache.entryPath(key), std::ios::binary);
+            const std::string entryFile = cache.entryPath(key);
+            std::ifstream held(std::filesystem::path(std::u8string(entryFile.begin(), entryFile.end())),
+                               std::ios::binary);
             REQUIRE(held.is_open());
             CHECK(cache.put(key, ith::kImportedAssetFormat, data).hasValue());
         }
@@ -199,7 +200,8 @@ TEST_SUITE("asset_database.ddc") {
         // No temporary file is left behind.
         std::error_code error;
         int files = 0;
-        for (std::filesystem::recursive_directory_iterator entry(cache.directory(), error);
+        for (std::filesystem::recursive_directory_iterator entry(project.directory() / "Intermediate" / "DerivedData",
+                                                                 error);
              !error && entry != std::filesystem::recursive_directory_iterator(); entry.increment(error)) {
             files += entry->is_regular_file(error) ? 1 : 0;
         }

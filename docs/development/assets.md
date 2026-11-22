@@ -159,8 +159,10 @@ const auto moved = database.move(report->id, "Vehicles/Ship.gltf");
   outside the editor keeps its id when it is imported before a rescan; a copy whose original is
   still in place gets a new one. A sidecar in another case (`rock.png.meta` next to `Rock.png`) is
   a conflict, not something to overwrite. A failed import changes nothing.
-- Writes go to a temporary file that is renamed over the target, so a reader never sees half a
-  file. They are not flushed to the disk, so a power loss can lose the latest write.
+- File access goes through the `file_system` module ([guide](file-system.md)). Sidecars, id
+  rewrites and native assets are written with `fs::writeFileAtomic` and `Durability::Durable`: a
+  reader never sees half a file, and the new content is flushed to the disk before the call
+  returns. Paths are UTF-8 (`AssetDatabase` takes the project folder as a UTF-8 path).
 - The database is single-threaded (the editor's main thread). It keeps no files open.
 
 ## Importers
@@ -262,9 +264,10 @@ import to build the cache key, and `import()` only on a cache miss.
   importer id and version, the settings, the overrides, the platform (`"any"` for importer output)
   and the output format's version and schema hash, each length-prefixed.
 - Hashes are XXH3-128 (`Hash128.h`). The function is private to `Hash128.cpp`.
-- Writes are atomic (a temporary file renamed over the entry), so the cache is thread-safe. When
-  an entry can't be replaced because someone has it open (Windows), the existing entry, made from
-  the same inputs, is kept.
+- Writes are atomic but not flushed (`fs::Durability::Atomic`): a power loss can lose an entry,
+  which is rebuilt, and imports don't pay a flush per entry. The cache is thread-safe. When an
+  entry can't be replaced because another program has it open (Windows, `fs.busy`), the existing
+  entry, made from the same inputs, is kept.
 
 ## Tests
 
@@ -302,5 +305,3 @@ import to build the cache key, and `import()` only on a cache miss.
 - One envelope for every reader: `readText` and `writeText` read and write the `id` of asset
   documents (the input action and context assets use it), but the sidecar and native header
   readers still parse their own envelope, and the envelope has no fuzz target of its own (ADR-0024).
-- Durable writes (flushing files and folders to the disk) need a file-system module in the
-  platform layer; the `platform` module is a client module, which tools modules can't use.

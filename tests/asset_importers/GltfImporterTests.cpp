@@ -259,7 +259,7 @@ struct Fixture {
 
     Fixture() {
         importers.add(std::make_unique<ith::GltfImporter>());
-        database = std::make_unique<ith::AssetDatabase>(project.directory(), importers);
+        database = std::make_unique<ith::AssetDatabase>(project.root(), importers);
     }
 
     ith::ImportReport import(std::string_view path) {
@@ -934,17 +934,17 @@ TEST_SUITE("asset_importers.gltf_limits") {
 TEST_SUITE("asset_importers.gltf_seeds") {
     // The fuzz seeds are valid files, so the fuzzer starts from inputs that import.
     TEST_CASE("the fuzz seeds import") {
-        const std::filesystem::path seeds = "tests/asset_importers/fuzz_seeds/gltf";
+        const std::string seeds = "tests/asset_importers/fuzz_seeds/gltf/";
         const ith::GltfImporter importer;
         for (const char* name : {"embedded.gltf", "triangle.glb"}) {
             CAPTURE(name);
-            const auto file = ith::detail::asset_files::readFile(seeds / name, std::size_t{1} << 20);
+            const auto file = ith::fs::readFile(seeds + name, std::size_t{1} << 20);
             REQUIRE(file.hasValue());
             const ith::ImportOutput output = importOk(file.valueOr(std::string()));
             CHECK(namesOf(output) == std::vector<std::string>{"mesh Triangle", "mesh Root/Body", "material Steel"});
             CHECK(output.references == std::vector<std::string>{"Rock Color.png"});
         }
-        const auto external = ith::detail::asset_files::readFile(seeds / "external.gltf", std::size_t{1} << 20);
+        const auto external = ith::fs::readFile(seeds + "external.gltf", std::size_t{1} << 20);
         REQUIRE(external.hasValue());
         const std::string text = external.valueOr(std::string());
         CHECK(importer.dependencies(bytesOf(text), importer.defaultSettings()).valueOr(std::vector<std::string>{}) ==

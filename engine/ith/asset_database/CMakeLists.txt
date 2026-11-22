@@ -12,8 +12,6 @@ ith_add_module(asset_database
         AssetHeader.cpp
         DerivedDataCache.h
         DerivedDataCache.cpp
-        FileIo.h
-        FileIo.cpp
         Hash128.h
         Hash128.cpp
         ImportedAssetData.h
@@ -23,6 +21,7 @@ ith_add_module(asset_database
         Sidecar.cpp
     DEPENDS
         foundation
+        file_system
         assets
         serialization
         level

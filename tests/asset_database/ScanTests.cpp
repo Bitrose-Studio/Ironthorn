@@ -41,7 +41,7 @@ struct Fixture {
 
     Fixture() {
         importers.add(std::make_unique<ObjectsImporter>());
-        database = std::make_unique<ith::AssetDatabase>(project.directory(), importers);
+        database = std::make_unique<ith::AssetDatabase>(project.root(), importers);
     }
 
     ith::AssetId import(std::string_view path, std::string_view source = "mesh Hull\n") {
@@ -59,7 +59,7 @@ struct Fixture {
 
     // A fresh database over the same project, scanned: what another session would see.
     ith::AssetDatabase rescanned() const {
-        ith::AssetDatabase fresh(project.directory(), importers);
+        ith::AssetDatabase fresh(project.root(), importers);
         CHECK(fresh.scan().hasValue());
         return fresh;
     }
@@ -144,7 +144,7 @@ TEST_SUITE("asset_database.scan") {
     TEST_CASE("a scan fails when Content can't be listed") {
         TempProject project;
         ith::ImporterRegistry importers;
-        ith::AssetDatabase database(project.directory() / "Nowhere", importers);
+        ith::AssetDatabase database(project.root() + "/Nowhere", importers);
         const auto problems = database.scan();
         REQUIRE_FALSE(problems.hasValue());
         if (!problems) {

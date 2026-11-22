@@ -1,27 +1,48 @@
 #include "ith/asset_database/AssetDatabase.h"
 
 #include "ith/asset_database/AssetHeader.h"
-#include "ith/asset_database/FileIo.h"
 #include "ith/asset_database/ImportedAssetData.h"
+#include "ith/file_system/FileSystem.h"
+#include "ith/file_system/Path.h"
 #include "ith/foundation/StringUtils.h"
-#include "ith/foundation/Uuid.h"
 #include "ith/serialization/BinaryArchive.h"
 #include "ith/serialization/Document.h"
 
 #include <algorithm>
 #include <array>
 #include <optional>
-#include <system_error>
 #include <unordered_set>
 
 namespace ith {
 namespace {
 
-using detail::asset_files::fromUtf8;
-using detail::asset_files::ioError;
-using detail::asset_files::readFile;
-using detail::asset_files::toUtf8Checked;
-using detail::asset_files::writeFileAtomically;
+// A file system error as the database's own: "asset.too_large" for "fs.too_large", "asset.io" for
+// the rest, with the file system's message.
+Unexpected<Error> fromFileSystem(Error error) {
+    return makeError(error.code == "fs.too_large" ? "asset.too_large" : "asset.io", std::move(error.message));
+}
+
+// The whole file at `path`, or "asset.too_large" above `maxSize`, or "asset.io".
+Expected<std::string> readFile(const std::string& path, std::size_t maxSize) {
+    Expected<std::string> bytes = fs::readFile(path, maxSize);
+    if (!bytes) {
+        return fromFileSystem(std::move(bytes).error());
+    }
+    return bytes;
+}
+
+// Replaces the file at `path` durably: sidecars, id rewrites and native assets are the user's data.
+Expected<void> writeFileAtomically(const std::string& path, std::string_view bytes) {
+    if (Expected<void> written = fs::writeFileAtomic(path, bytes); !written) {
+        return fromFileSystem(std::move(written).error());
+    }
+    return {};
+}
+
+// The file `relative` to the Content folder `content`.
+std::string inContent(const std::string& content, std::string_view relative) {
+    return fs::joinPath(content, relative);
+}
 
 // Importer output doesn't depend on the target platform; cooking passes the real one.
 constexpr std::string_view kImportPlatform = "any";
@@ -50,16 +71,6 @@ std::string_view fileName(std::string_view path) {
     return slash == std::string_view::npos ? path : path.substr(slash + 1);
 }
 
-// True for "<name>.tmp-<uuid>", a temporary file writeFileAtomically() left behind.
-bool isTemporaryFile(std::string_view path) {
-    constexpr std::size_t kUuidLength = 36;
-    const std::string_view name = fileName(path);
-    const std::size_t marker = detail::asset_files::kTemporaryMarker.size();
-    return name.size() > marker + kUuidLength &&
-           name.substr(name.size() - kUuidLength - marker, marker) == detail::asset_files::kTemporaryMarker &&
-           Uuid::parse(name.substr(name.size() - kUuidLength)).hasValue();
-}
-
 // True when `segment`'s part before its first '.' is a device name Windows reserves in every folder.
 bool isReservedDeviceName(std::string_view segment) {
     const std::string stem = toLowerAscii(segment.substr(0, segment.find('.')));
@@ -83,35 +94,38 @@ bool isValidSegment(std::string_view segment) {
 // The name in `directory` that equals `name` ignoring ASCII case: `name` itself when it exists,
 // otherwise a variant, otherwise nullopt (also when `directory` doesn't exist). Names that are not
 // valid Unicode are skipped; scan() reports them.
-Expected<std::optional<std::string>> findCaseVariant(const std::filesystem::path& directory, std::string_view name) {
-    std::error_code error;
-    if (!std::filesystem::is_directory(directory, error)) {
+Expected<std::optional<std::string>> findCaseVariant(const std::string& directory, std::string_view name) {
+    Expected<std::optional<fs::FileInfo>> info = fs::fileInfo(directory);
+    if (!info) {
+        return fromFileSystem(std::move(info).error());
+    }
+    if (!info->has_value() ||
+        ((*info)->kind != fs::FileKind::Directory && (*info)->kind != fs::FileKind::DirectoryLink)) {
         return std::optional<std::string>();
     }
+    Expected<std::vector<fs::DirectoryEntry>> entries = fs::listDirectory(directory);
+    if (!entries) {
+        return fromFileSystem(std::move(entries).error());
+    }
     std::optional<std::string> variant;
-    for (std::filesystem::directory_iterator entry(directory, error);
-         !error && entry != std::filesystem::directory_iterator(); entry.increment(error)) {
-        std::optional<std::string> entryName = toUtf8Checked(entry->path().filename());
-        if (!entryName) {
+    for (fs::DirectoryEntry& entry : *entries) {
+        if (!entry.validName) {
             continue;
         }
-        if (*entryName == name) {
-            return entryName;
+        if (entry.name == name) {
+            return std::optional<std::string>(std::move(entry.name));
         }
-        if (!variant && equalsIgnoreCaseAscii(*entryName, name)) {
-            variant = std::move(entryName);
+        if (!variant && equalsIgnoreCaseAscii(entry.name, name)) {
+            variant = std::move(entry.name);
         }
-    }
-    if (error) {
-        return ioError("can't list", directory, error);
     }
     return variant;
 }
 
 // True when every segment of `path` exists in the Content folder with exactly this case, which a
 // case-insensitive file system doesn't check by itself.
-Expected<bool> existsExactly(const std::filesystem::path& content, std::string_view path) {
-    std::filesystem::path directory = content;
+Expected<bool> existsExactly(const std::string& content, std::string_view path) {
+    std::string directory = content;
     for (const std::string_view segment : split(path, '/')) {
         Expected<std::optional<std::string>> variant = findCaseVariant(directory, segment);
         if (!variant) {
@@ -120,7 +134,7 @@ Expected<bool> existsExactly(const std::filesystem::path& content, std::string_v
         if (!variant->has_value() || **variant != segment) {
             return false;
         }
-        directory /= fromUtf8(segment);
+        directory = fs::joinPath(directory, segment);
     }
     return true;
 }
@@ -160,39 +174,31 @@ struct ContentListing {
 // with its sub-folders. A sub-folder that can't be listed and a name that isn't valid Unicode are
 // problems; only Content itself failing to list is an error. Symbolic links to files count as
 // files; links to folders are not followed and dangling links are skipped.
-Expected<void> listFolder(const std::filesystem::path& directory, const std::string& relative,
-                          ContentListing& listing) {
-    std::error_code error;
-    std::filesystem::directory_iterator entry(directory, error);
-    for (; !error && entry != std::filesystem::directory_iterator(); entry.increment(error)) {
-        const std::optional<std::string> name = toUtf8Checked(entry->path().filename());
-        if (!name) {
+Expected<void> listFolder(const std::string& directory, const std::string& relative, ContentListing& listing) {
+    Expected<std::vector<fs::DirectoryEntry>> entries = fs::listDirectory(directory);
+    if (!entries) {
+        return fromFileSystem(std::move(entries).error());
+    }
+    for (const fs::DirectoryEntry& entry : *entries) {
+        if (!entry.validName) {
             listing.problems.push_back(invalidFile(relative, "a name in this folder is not valid Unicode"));
             continue;
         }
-        const std::string path = relative.empty() ? *name : relative + '/' + *name;
-        std::error_code typeError;
-        const std::filesystem::file_status status = entry->symlink_status(typeError);
-        const bool isLink = std::filesystem::is_symlink(status);
-        const bool isFile = isLink ? entry->is_regular_file(typeError) : std::filesystem::is_regular_file(status);
-        const bool isFolder = !isLink && std::filesystem::is_directory(status);
+        const std::string path = relative.empty() ? entry.name : relative + '/' + entry.name;
         listing.paths.push_back(path);
-        if (isFile) {
+        if (entry.kind == fs::FileKind::File || entry.kind == fs::FileKind::FileLink) {
             listing.files.push_back(path);
         }
-        if (isFolder) {
-            if (Expected<void> listed = listFolder(entry->path(), path, listing); !listed) {
+        if (entry.kind == fs::FileKind::Directory) {
+            if (Expected<void> listed = listFolder(fs::joinPath(directory, entry.name), path, listing); !listed) {
                 listing.problems.push_back(invalidFile(path, listed.error().message));
             }
         }
     }
-    if (error) {
-        return ioError("can't list", directory, error);
-    }
     return {};
 }
 
-Expected<ContentListing> listContent(const std::filesystem::path& content) {
+Expected<ContentListing> listContent(const std::string& content) {
     ContentListing listing;
     if (Expected<void> listed = listFolder(content, {}, listing); !listed) {
         return makeUnexpected(std::move(listed).error());
@@ -203,9 +209,9 @@ Expected<ContentListing> listContent(const std::filesystem::path& content) {
 }
 
 // The imported asset at `path`, read from its sidecar, or the error that keeps it out.
-Expected<Candidate> readImported(const std::filesystem::path& content, const std::string& path) {
+Expected<Candidate> readImported(const std::string& content, const std::string& path) {
     const std::string sidecarPath = sidecarOf(path);
-    Expected<std::string> text = readFile(content / fromUtf8(sidecarPath), kMaxSidecarSize);
+    Expected<std::string> text = readFile(inContent(content, sidecarPath), kMaxSidecarSize);
     if (!text) {
         return makeError(text.error().code, "'" + sidecarPath + "': " + text.error().message);
     }
@@ -223,8 +229,8 @@ Expected<Candidate> readImported(const std::filesystem::path& content, const std
 }
 
 // The native asset at `path`, or the error that keeps it out.
-Expected<Candidate> readNative(const std::filesystem::path& content, const std::string& path) {
-    Expected<std::string> text = readFile(content / fromUtf8(path), serialization::kMaxTextSize);
+Expected<Candidate> readNative(const std::string& content, const std::string& path) {
+    Expected<std::string> text = readFile(inContent(content, path), serialization::kMaxTextSize);
     if (!text) {
         return makeError(text.error().code, "'" + path + "': " + text.error().message);
     }
@@ -237,7 +243,7 @@ Expected<Candidate> readNative(const std::filesystem::path& content, const std::
 }
 
 // Gives `candidate` the id `newId` and writes it to its sidecar or header.
-Expected<void> writeNewId(const std::filesystem::path& content, Candidate& candidate, AssetId newId) {
+Expected<void> writeNewId(const std::string& content, Candidate& candidate, AssetId newId) {
     std::string target = candidate.record.path;
     Expected<std::string, serialization::Error> rewritten = [&] {
         if (candidate.sidecar) {
@@ -251,7 +257,7 @@ Expected<void> writeNewId(const std::filesystem::path& content, Candidate& candi
     if (!rewritten) {
         return fromSerialization(rewritten.error());
     }
-    if (Expected<void> written = writeFileAtomically(content / fromUtf8(target), *rewritten); !written) {
+    if (Expected<void> written = writeFileAtomically(inContent(content, target), *rewritten); !written) {
         return written;
     }
     if (candidate.sidecar) {
@@ -280,7 +286,7 @@ void checkSidecar(const std::string& path, const std::unordered_set<std::string_
 }
 
 // The assets among `files` (sorted), adding the problems of the others to `problems`.
-std::vector<Candidate> findCandidates(const std::filesystem::path& content, const ImporterRegistry& importers,
+std::vector<Candidate> findCandidates(const std::string& content, const ImporterRegistry& importers,
                                       const std::vector<std::string>& files, std::vector<AssetProblem>& problems) {
     const std::unordered_set<std::string_view> fileSet(files.begin(), files.end());
     std::unordered_map<std::string, std::string_view> fileByLowercase;
@@ -289,7 +295,7 @@ std::vector<Candidate> findCandidates(const std::filesystem::path& content, cons
     }
     std::vector<Candidate> candidates;
     for (const std::string& path : files) {
-        if (isTemporaryFile(path)) {
+        if (fs::isTemporaryFileName(path)) {
             problems.push_back(invalidFile(path, "a temporary file left by an interrupted write; delete it"));
             continue;
         }
@@ -327,7 +333,7 @@ std::vector<Candidate> findCandidates(const std::filesystem::path& content, cons
 // "asset.not_found" for a missing file and "asset.path_conflict" for a sidecar in another case:
 // writing ours would replace it on a case-insensitive file system (losing its id) and add a second
 // one on a case-sensitive file system.
-Expected<bool> findSidecarForImport(const std::filesystem::path& content, std::string_view path) {
+Expected<bool> findSidecarForImport(const std::string& content, std::string_view path) {
     Expected<bool> exists = existsExactly(content, path);
     if (!exists || !*exists) {
         return exists ? makeError("asset.not_found", "no file '" + std::string(path) + "' in Content")
@@ -339,7 +345,7 @@ Expected<bool> findSidecarForImport(const std::filesystem::path& content, std::s
         return hasSidecar;
     }
     Expected<std::optional<std::string>> variant =
-        findCaseVariant((content / fromUtf8(sidecarPath)).parent_path(), fileName(sidecarPath));
+        findCaseVariant(std::string(fs::parentPath(inContent(content, sidecarPath))), fileName(sidecarPath));
     if (!variant) {
         return makeUnexpected(std::move(variant).error());
     }
@@ -373,7 +379,7 @@ struct Dependency {
 // source's folder), "asset.invalid_path", "asset.not_found" (also for a name in another case),
 // "asset.too_large" (too many files, or more than kMaxSourceFileSize together with the source) or
 // "asset.io".
-Expected<std::vector<Dependency>> readDependencies(const std::filesystem::path& content, std::string_view path,
+Expected<std::vector<Dependency>> readDependencies(const std::string& content, std::string_view path,
                                                    const Importer& importer, const std::string& source,
                                                    const serialization::Value& settings) {
     Expected<std::vector<std::string>> names = importer.dependencies(bytesOf(source), settings);
@@ -406,7 +412,7 @@ Expected<std::vector<Dependency>> readDependencies(const std::filesystem::path& 
             return makeError("asset.not_found", "'" + std::string(path) + "' needs '" + file +
                                                     "', which doesn't exist (names are compared case sensitively)");
         }
-        Expected<std::string> bytes = readFile(content / fromUtf8(file), kMaxSourceFileSize - total);
+        Expected<std::string> bytes = readFile(inContent(content, file), kMaxSourceFileSize - total);
         if (!bytes) {
             return makeUnexpected(std::move(bytes).error());
         }
@@ -517,8 +523,8 @@ std::vector<std::pair<std::string, std::string>> findCaseConflicts(const std::ve
     return conflicts;
 }
 
-AssetDatabase::AssetDatabase(const std::filesystem::path& projectDirectory, const ImporterRegistry& importers)
-    : m_contentDirectory(projectDirectory / "Content"),
+AssetDatabase::AssetDatabase(std::string_view projectDirectory, const ImporterRegistry& importers)
+    : m_contentDirectory(fs::joinPath(projectDirectory, "Content")),
       m_cache(DerivedDataCache::projectDirectory(projectDirectory)),
       m_importers(importers) {}
 
@@ -665,7 +671,7 @@ Expected<ImportReport> AssetDatabase::import(std::string_view path) {
         return makeUnexpected(std::move(hasSidecar).error());
     }
     const std::string sidecarPath = sidecarOf(path);
-    const std::filesystem::path sidecarFile = m_contentDirectory / fromUtf8(sidecarPath);
+    const std::string sidecarFile = inContent(m_contentDirectory, sidecarPath);
 
     ImportReport report;
     Sidecar sidecar;
@@ -709,7 +715,7 @@ Expected<ImportReport> AssetDatabase::import(std::string_view path) {
         report.created = true;
     }
 
-    Expected<std::string> source = readFile(m_contentDirectory / fromUtf8(path), kMaxSourceFileSize);
+    Expected<std::string> source = readFile(inContent(m_contentDirectory, path), kMaxSourceFileSize);
     if (!source) {
         return makeUnexpected(std::move(source).error());
     }
@@ -786,7 +792,7 @@ Expected<void> AssetDatabase::checkTarget(const AssetRecord& record, const std::
     const bool caseOfItself = equalsIgnoreCaseAscii(newPath, record.path);
     const std::string ownName(fileName(record.path));
     const std::vector<std::string_view> segments = split(newPath, '/');
-    std::filesystem::path directory = m_contentDirectory;
+    std::string directory = m_contentDirectory;
     for (std::size_t index = 0; index < segments.size(); ++index) {
         const bool last = index + 1 == segments.size();
         // Each name to check, with the record's own file of that name.
@@ -807,7 +813,7 @@ Expected<void> AssetDatabase::checkTarget(const AssetRecord& record, const std::
             return makeError("asset.path_conflict",
                              "'" + newPath + "' conflicts with '" + **variant + "', which exists in the same folder");
         }
-        directory /= fromUtf8(segments[index]);
+        directory = fs::joinPath(directory, segments[index]);
     }
     return {};
 }
@@ -832,34 +838,29 @@ Expected<void> AssetDatabase::move(AssetId id, std::string_view newPath) {
         return available;
     }
 
-    const std::filesystem::path oldFile = m_contentDirectory / fromUtf8(record->path);
-    const std::filesystem::path newFile = m_contentDirectory / fromUtf8(target);
-    std::error_code error;
-    std::filesystem::create_directories(newFile.parent_path(), error);
-    if (error) {
-        return ioError("can't create the folder", newFile.parent_path(), error);
+    const std::string oldFile = inContent(m_contentDirectory, record->path);
+    const std::string newFile = inContent(m_contentDirectory, target);
+    if (Expected<void> created = fs::createDirectories(fs::parentPath(newFile)); !created) {
+        return fromFileSystem(std::move(created).error());
     }
-    std::filesystem::rename(oldFile, newFile, error);
-    if (error) {
-        return ioError("can't move", oldFile, error);
+    if (Expected<void> renamed = fs::move(oldFile, newFile); !renamed) {
+        return fromFileSystem(std::move(renamed).error());
     }
     AssetRecord moved = *record;
     moved.path = target;
     if (record->imported) {
-        const std::filesystem::path oldSidecar = m_contentDirectory / fromUtf8(sidecarOf(record->path));
-        const std::filesystem::path newSidecar = m_contentDirectory / fromUtf8(sidecarOf(target));
-        std::filesystem::rename(oldSidecar, newSidecar, error);
-        if (error) {
-            std::error_code rollback;
-            std::filesystem::rename(newFile, oldFile, rollback);
-            if (!rollback) {
-                return ioError("can't move", oldSidecar, error);
+        const std::string oldSidecar = inContent(m_contentDirectory, sidecarOf(record->path));
+        const std::string newSidecar = inContent(m_contentDirectory, sidecarOf(target));
+        if (Expected<void> renamed = fs::move(oldSidecar, newSidecar); !renamed) {
+            Expected<void> rollback = fs::move(newFile, oldFile);
+            if (rollback) {
+                return fromFileSystem(std::move(renamed).error());
             }
             // The file is at the new path and its sidecar at the old one: say so, and keep the
             // record where the file is.
             const std::string message = "'" + record->path + "' moved to '" + target + "', but its sidecar '" +
-                                        sidecarOf(record->path) + "' couldn't follow (" + error.message() +
-                                        ") and the file couldn't be moved back (" + rollback.message() +
+                                        sidecarOf(record->path) + "' couldn't follow (" + renamed.error().message +
+                                        ") and the file couldn't be moved back (" + rollback.error().message +
                                         "); move the sidecar to '" + sidecarOf(target) + "'";
             insert(std::move(moved));
             return makeError("asset.io", message);
@@ -889,20 +890,21 @@ Expected<void> AssetDatabase::remove(AssetId id) {
     if (record == nullptr) {
         return notFound(id);
     }
-    const std::filesystem::path file = m_contentDirectory / fromUtf8(record->path);
-    std::error_code error;
-    std::filesystem::remove(file, error);
-    if (error) {
-        return ioError("can't delete", file, error);
+    // A file that is already gone counts as deleted.
+    const auto removeFile = [](const std::string& path) -> Expected<void> {
+        if (Expected<void> removed = fs::remove(path); !removed && removed.error().code != "fs.not_found") {
+            return fromFileSystem(std::move(removed).error());
+        }
+        return {};
+    };
+    if (Expected<void> removed = removeFile(inContent(m_contentDirectory, record->path)); !removed) {
+        return removed;
     }
     const bool imported = record->imported;
-    const std::filesystem::path sidecar = m_contentDirectory / fromUtf8(sidecarOf(record->path));
+    const std::string sidecar = inContent(m_contentDirectory, sidecarOf(record->path));
     erase(id);
     if (imported) {
-        std::filesystem::remove(sidecar, error);
-        if (error) {
-            return ioError("can't delete the sidecar", sidecar, error);
-        }
+        return removeFile(sidecar);
     }
     return {};
 }

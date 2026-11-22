@@ -60,7 +60,7 @@ struct Fixture {
 
     explicit Fixture(std::uint32_t importerVersion = 1) {
         importers.add(std::make_unique<ObjectsImporter>(&calls, importerVersion));
-        database = std::make_unique<ith::AssetDatabase>(project.directory(), importers);
+        database = std::make_unique<ith::AssetDatabase>(project.root(), importers);
     }
 
     ith::ImportReport import(std::string_view path) {
@@ -249,7 +249,7 @@ TEST_SUITE("asset_database.import") {
         {
             ith::ImporterRegistry importers;
             importers.add(std::make_unique<ObjectsImporter>(&calls, 1));
-            ith::AssetDatabase database(project.directory(), importers);
+            ith::AssetDatabase database(project.root(), importers);
             const auto report = database.import("Ship.objects");
             REQUIRE(report.hasValue());
             id = report ? report->id : ith::AssetId();
@@ -257,7 +257,7 @@ TEST_SUITE("asset_database.import") {
         }
         ith::ImporterRegistry importers;
         importers.add(std::make_unique<ObjectsImporter>(&calls, 2));
-        ith::AssetDatabase database(project.directory(), importers);
+        ith::AssetDatabase database(project.root(), importers);
         REQUIRE(database.scan().hasValue());
         const auto report = database.reimport(id);
         REQUIRE(report.hasValue());
@@ -423,12 +423,12 @@ TEST_SUITE("asset_database.import") {
     TEST_CASE("files larger than the limit are refused before they are read") {
         const TempProject project;
         project.write("Big.bin", std::string(100, 'x'));
-        const auto small = ith::detail::asset_files::readFile(project.content("Big.bin"), 99);
+        const auto small = ith::fs::readFile(project.contentPath("Big.bin"), 99);
         REQUIRE_FALSE(small.hasValue());
         if (!small) {
-            CHECK(small.error().code == "asset.too_large");
+            CHECK(small.error().code == "fs.too_large");
         }
-        CHECK(ith::detail::asset_files::readFile(project.content("Big.bin"), 100).hasValue());
-        CHECK(ith::detail::asset_files::readFile(project.content("None.bin"), 100).error().code == "asset.io");
+        CHECK(ith::fs::readFile(project.contentPath("Big.bin"), 100).hasValue());
+        CHECK(ith::fs::readFile(project.contentPath("None.bin"), 100).error().code == "fs.not_found");
     }
 }

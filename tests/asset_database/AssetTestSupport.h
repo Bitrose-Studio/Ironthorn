@@ -14,8 +14,9 @@
 //
 // Each object's payload is its text after " = ", followed by "@<scale>" from the settings.
 
-#include "ith/asset_database/FileIo.h"
 #include "ith/asset_database/Importer.h"
+#include "ith/file_system/FileSystem.h"
+#include "ith/file_system/Path.h"
 #include "ith/foundation/StringUtils.h"
 #include "ith/foundation/Uuid.h"
 
@@ -61,20 +62,34 @@ public:
 
     [[nodiscard]] const std::filesystem::path& directory() const { return m_directory; }
 
+    // The project folder as a UTF-8 path, as AssetDatabase and ith::fs take it.
+    [[nodiscard]] std::string root() const { return utf8(m_directory); }
+
     // The file at `path` relative to Content.
     [[nodiscard]] std::filesystem::path content(std::string_view path) const {
-        return m_directory / "Content" / detail::asset_files::fromUtf8(path);
+        return m_directory / "Content" / std::filesystem::path(std::u8string(path.begin(), path.end()));
+    }
+
+    // content(path) as a UTF-8 path.
+    [[nodiscard]] std::string contentPath(std::string_view path) const {
+        return fs::joinPath(root(), "Content/" + std::string(path));
     }
 
     // Writes a file relative to Content, creating its folders.
     void write(std::string_view path, std::string_view text) const {
-        CHECK(detail::asset_files::writeFileAtomically(content(path), text).hasValue());
+        CHECK(fs::writeFileAtomic(contentPath(path), text).hasValue());
     }
 
     // The text of a file relative to Content, or nullopt when it can't be read.
     [[nodiscard]] std::optional<std::string> read(std::string_view path) const {
-        Expected<std::string> text = detail::asset_files::readFile(content(path), std::size_t{1} << 30);
+        Expected<std::string> text = fs::readFile(contentPath(path), std::size_t{1} << 30);
         return text ? std::optional<std::string>(*text) : std::nullopt;
+    }
+
+    // A std::filesystem path as UTF-8 with '/' separators.
+    [[nodiscard]] static std::string utf8(const std::filesystem::path& path) {
+        const std::u8string text = path.generic_u8string();
+        return {text.begin(), text.end()};
     }
 
     // True when a file exists at `path` with exactly this name (case included).

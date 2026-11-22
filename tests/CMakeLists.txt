@@ -594,6 +594,15 @@ set_tests_properties(glm_includes_refuses_direct_include PROPERTIES
     LABELS "lint"
     PASS_REGULAR_EXPRESSION "tests/layering/IncludesGlm.cpp includes \"glm/glm.hpp\".*tests/layering/IncludesGlm.cpp includes <glm/vec3.hpp>")
 
+# The file_io_confined check must refuse file I/O outside engine/ith/file_system (ADR-0035 rule
+# 10); the fixture is never compiled.
+add_test(NAME file_io_confined_refuses_file_io
+    COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}" "-DDIRECTORIES=tests/layering"
+        -P "${PROJECT_SOURCE_DIR}/cmake/CheckFileIo.cmake")
+set_tests_properties(file_io_confined_refuses_file_io PROPERTIES
+    LABELS "lint"
+    PASS_REGULAR_EXPRESSION "UsesFileIo.cpp includes <filesystem>.*UsesFileIo.cpp includes <fstream>.*UsesFileIo.cpp calls fopen.*UsesFileIo.cpp calls CreateFileW")
+
 ith_add_layering_failure_test(upward_layer
     MODULES "low:core:runtime=high|high:framework:runtime="
     EXPECT "low [(]layer 2[)] depends on high [(]layer 4[)], a higher layer")
@@ -712,6 +721,15 @@ if(TARGET ith_asset_importers AND IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMP
             "${corpus}" "${CMAKE_CURRENT_SOURCE_DIR}/asset_importers/fuzz_seeds/gltf")
     set_tests_properties(gltf_import_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
 endif()
+
+# The file system (ADR-0035): path helpers, reads, atomic writes with their fault points, file
+# information, listings, directories, remove, move and the known folders, each test in its own
+# temporary folder.
+ith_add_test_suite(file_system
+    SOURCES
+        file_system/FileSystemTests.cpp
+        file_system/PathTests.cpp
+    LIBRARIES ith::file_system Threads::Threads)
 
 # The job system (ADR-0025): deterministic tests without workers, functional and stress tests
 # with workers, the wait rules and shutdown. The stress tests are sized for Debug and the

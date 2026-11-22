@@ -16,8 +16,9 @@
 //       static_cast<void>(cache.put(*key, kImportedFormat, value));
 //   }
 //
-// The cache is thread-safe: it holds no state but its directory, writes are atomic (a temporary
-// file renamed over the entry) and a damaged or outdated entry reads as a miss. A shared cache
+// The cache is thread-safe: it holds no state but its directory (a UTF-8 path, see
+// ith/file_system), writes are atomic but not flushed (fs::Durability::Atomic: a power loss can
+// lose an entry, which is rebuilt) and a damaged or outdated entry reads as a miss. A shared cache
 // comes later behind the same interface.
 
 #include "ith/asset_database/Hash128.h"
@@ -29,8 +30,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace ith {
@@ -66,13 +67,13 @@ public:
     static constexpr std::size_t kMaxEntrySize = std::size_t{1} << 30;
 
     // A cache in `directory`, which is created when the first entry is written.
-    explicit DerivedDataCache(std::filesystem::path directory);
+    explicit DerivedDataCache(std::string_view directory);
 
     // The cache directory of the project in `project`: "Intermediate/DerivedData" inside
     // it. Projects keep "Intermediate/" out of version control.
-    [[nodiscard]] static std::filesystem::path projectDirectory(const std::filesystem::path& project);
+    [[nodiscard]] static std::string projectDirectory(std::string_view project);
 
-    [[nodiscard]] const std::filesystem::path& directory() const noexcept { return m_directory; }
+    [[nodiscard]] const std::string& directory() const noexcept { return m_directory; }
 
     // Reads the entry `key` into `target`, a value of `type`. Returns true on a hit, false on a
     // miss: no entry, or an entry that isn't a valid blob of `format` and `type` (damaged, or
@@ -103,10 +104,10 @@ public:
     }
 
     // The file of the entry `key`: "<directory>/<first two digits>/<32 hex digits>.ddc".
-    [[nodiscard]] std::filesystem::path entryPath(const Hash128& key) const;
+    [[nodiscard]] std::string entryPath(const Hash128& key) const;
 
 private:
-    std::filesystem::path m_directory;
+    std::string m_directory;
 };
 
 } // namespace ith

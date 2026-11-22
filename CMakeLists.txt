@@ -85,4 +85,10 @@ if(IRONTHORN_BUILD_TESTS)
         COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}" "-DSKIP=tests/layering"
             -P "${PROJECT_SOURCE_DIR}/cmake/CheckGlmIncludes.cmake")
     set_tests_properties(glm_includes PROPERTIES LABELS "lint")
+
+    # File I/O under engine/ith goes through the file_system module (ADR-0035 rule 10).
+    add_test(NAME file_io_confined
+        COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/CheckFileIo.cmake")
+    set_tests_properties(file_io_confined PROPERTIES LABELS "lint")
 endif()
