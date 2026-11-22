@@ -1,7 +1,8 @@
 # ADR-0020: Serialization: rules completed after the first implementation
 
 - **Status:** Accepted
-- **Amended by:** [ADR-0024](0024-asset-document-envelope-and-extension.md)
+- **Amended by:** [ADR-0024](0024-asset-document-envelope-and-extension.md),
+  [ADR-0032](0032-entity-references-stable-ids-and-world-copy.md)
 - **Date:** 2026-11-21
 - **Related:** amends [ADR-0010](0010-serialization.md) (serialization);
   [ADR-0015](0015-asset-identity-and-reimport.md) (derived-data cache key),

@@ -2,7 +2,8 @@
 
 - **Status:** Accepted
 - **Amended by:** [ADR-0019](0019-reflection-rules-corrected.md),
-  [ADR-0030](0030-ecs-hooks-registration-and-immutable-components.md)
+  [ADR-0030](0030-ecs-hooks-registration-and-immutable-components.md),
+  [ADR-0032](0032-entity-references-stable-ids-and-world-copy.md)
 - **Date:** 2026-11-20
 - **Related:** [ADR-0001](0001-cpp-language-and-safety-rules.md) (no RTTI in runtime modules,
   generated reflection), [ADR-0004](0004-modules-and-layering.md) (reflection in `core`),
