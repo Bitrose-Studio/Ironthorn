@@ -94,6 +94,28 @@ bool isValidFormat(const DocumentFormat& format) noexcept;
 // An error with a code and message; the caller adds the source, path and position.
 Error makeError(std::string code, std::string message);
 
+// The entity mapping rules (Document.h, EntityMapping): whether `mapping` can write or read
+// entities, the message of the error when it can't, and the conversions, which keep the null
+// handle and the nil Uuid to themselves without calling the mapping.
+inline constexpr const char* kNoEntityMappingMessage =
+    "an Entity is a runtime handle; it is saved only through an EntityMapping";
+
+constexpr bool canWriteEntities(const EntityMapping* mapping) noexcept {
+    return mapping != nullptr && mapping->toId != nullptr;
+}
+
+constexpr bool canReadEntities(const EntityMapping* mapping) noexcept {
+    return mapping != nullptr && mapping->toEntity != nullptr;
+}
+
+inline Uuid entityToId(const EntityMapping& mapping, Entity entity) {
+    return entity.isNull() ? Uuid() : mapping.toId(mapping.context, entity);
+}
+
+inline Entity idToEntity(const EntityMapping& mapping, const Uuid& id) {
+    return id.isNil() ? Entity() : mapping.toEntity(mapping.context, id);
+}
+
 // The name of a type for messages: "float", "ith::test::Health", "std::vector<int32>".
 std::string describe(const TypeInfo& type);
 

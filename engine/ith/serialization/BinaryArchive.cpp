@@ -61,6 +61,7 @@ private:
             case TypeKind::String:
                 return hash; // a uint32 length and the bytes
             case TypeKind::Uuid:
+            case TypeKind::Entity: // written as the Uuid its mapping gives
                 return hashCombine(hash, 2 * sizeof(std::uint64_t));
             case TypeKind::Enum:
                 hash = hashCombine(hash, type.size);
@@ -124,6 +125,7 @@ private:
             case TypeKind::DynamicArray:
                 return sizeof(std::uint32_t);
             case TypeKind::Uuid:
+            case TypeKind::Entity:
                 return 2 * sizeof(std::uint64_t);
             case TypeKind::Optional:
                 return 1;
@@ -161,6 +163,8 @@ bool isValidEnumValue(const TypeInfo& type, std::int64_t value) noexcept {
 
 class BinaryWriter {
 public:
+    explicit BinaryWriter(const EntityMapping* entities) noexcept : m_entities(entities) {}
+
     bool write(const TypeInfo& type, const void* object, std::size_t depth) {
         switch (type.kind) {
             case TypeKind::Bool:
@@ -178,14 +182,15 @@ public:
                 append(text.data(), text.size());
                 return true;
             }
-            case TypeKind::Uuid: {
-                const auto& id = *static_cast<const Uuid*>(object);
-                const std::uint64_t high = id.high();
-                const std::uint64_t low = id.low();
-                append(&high, sizeof(high));
-                append(&low, sizeof(low));
+            case TypeKind::Uuid:
+                writeUuid(*static_cast<const Uuid*>(object));
                 return true;
-            }
+            case TypeKind::Entity:
+                if (!detail::canWriteEntities(m_entities)) {
+                    return fail("serialization.no_entity_mapping", detail::kNoEntityMappingMessage);
+                }
+                writeUuid(detail::entityToId(*m_entities, *static_cast<const Entity*>(object)));
+                return true;
             case TypeKind::Enum:
                 if (!isValidEnumValue(type, readEnumValue(type, object))) {
                     return fail("serialization.invalid_enum", std::to_string(readEnumValue(type, object)) +
@@ -222,6 +227,13 @@ private:
     bool writeByte(std::uint8_t value) {
         append(&value, 1);
         return true;
+    }
+
+    void writeUuid(const Uuid& id) {
+        const std::uint64_t high = id.high();
+        const std::uint64_t low = id.low();
+        append(&high, sizeof(high));
+        append(&low, sizeof(low));
     }
 
     bool writeCount(std::size_t count) {
@@ -288,6 +300,7 @@ private:
         return true;
     }
 
+    const EntityMapping* m_entities;
     std::vector<std::byte> m_bytes;
     detail::PathBuilder m_path;
     MinimumSizes m_sizes;
@@ -296,8 +309,8 @@ private:
 
 class BinaryReader {
 public:
-    BinaryReader(std::span<const std::byte> data, std::size_t allocationBudget)
-        : m_data(data), m_budget(allocationBudget) {}
+    BinaryReader(std::span<const std::byte> data, std::size_t allocationBudget, const EntityMapping* entities)
+        : m_data(data), m_budget(allocationBudget), m_entities(entities) {}
 
     bool read(const TypeInfo& type, void* object, std::size_t depth) {
         switch (type.kind) {
@@ -315,13 +328,17 @@ public:
                 return take(object, type.size);
             case TypeKind::String:
                 return readString(object);
-            case TypeKind::Uuid: {
-                std::uint64_t high = 0;
-                std::uint64_t low = 0;
-                if (!take(&high, sizeof(high)) || !take(&low, sizeof(low))) {
+            case TypeKind::Uuid:
+                return readUuid(*static_cast<Uuid*>(object));
+            case TypeKind::Entity: {
+                if (!detail::canReadEntities(m_entities)) {
+                    return fail("serialization.no_entity_mapping", detail::kNoEntityMappingMessage);
+                }
+                Uuid id;
+                if (!readUuid(id)) {
                     return false;
                 }
-                *static_cast<Uuid*>(object) = Uuid(high, low);
+                *static_cast<Entity*>(object) = detail::idToEntity(*m_entities, id);
                 return true;
             }
             case TypeKind::Enum: {
@@ -381,6 +398,16 @@ public:
     Error takeError() { return std::move(m_error); }
 
 private:
+    bool readUuid(Uuid& id) {
+        std::uint64_t high = 0;
+        std::uint64_t low = 0;
+        if (!take(&high, sizeof(high)) || !take(&low, sizeof(low))) {
+            return false;
+        }
+        id = Uuid(high, low);
+        return true;
+    }
+
     bool readZeroOrOne(std::uint8_t& value, const char* what) {
         const std::size_t at = m_position;
         if (!take(&value, 1)) {
@@ -495,6 +522,7 @@ private:
     std::span<const std::byte> m_data;
     std::size_t m_position = 0;
     detail::AllocationBudget m_budget;
+    const EntityMapping* m_entities;
     detail::PathBuilder m_path;
     MinimumSizes m_sizes;
     Error m_error;
@@ -513,7 +541,7 @@ std::uint64_t schemaHash(const TypeInfo& type) {
 }
 
 Expected<std::vector<std::byte>, Error> writeBinary(const DocumentFormat& format, const TypeInfo& type,
-                                                    const void* object) {
+                                                    const void* object, const EntityMapping* entities) {
     if (!detail::isValidFormat(format)) {
         return makeUnexpected(makeError("serialization.invalid_format", "the DocumentFormat is invalid"));
     }
@@ -521,7 +549,7 @@ Expected<std::vector<std::byte>, Error> writeBinary(const DocumentFormat& format
         return makeUnexpected(makeError("serialization.not_saved",
                                         std::string(type.name) + " is Transient or EditorOnly and can't be cooked"));
     }
-    BinaryWriter writer;
+    BinaryWriter writer(entities);
     std::vector<std::byte>& blob = writer.bytes();
     const std::size_t headerSize = paddedHeaderSize(format.name.size());
     blob.resize(headerSize);
@@ -545,7 +573,7 @@ Expected<std::vector<std::byte>, Error> writeBinary(const DocumentFormat& format
 Expected<void, Error> readBinary(std::span<const std::byte> data, const DocumentFormat& format, const TypeInfo& type,
                                  void* target, const BinaryReadOptions& options) {
     const std::string_view source = options.source;
-    BinaryReader reader(data, allocationBudget(data.size(), options.allocationBudget));
+    BinaryReader reader(data, allocationBudget(data.size(), options.allocationBudget), options.entities);
     if (!detail::isValidFormat(format)) {
         reader.failHeader("serialization.invalid_format", "the DocumentFormat is invalid");
         return withSource(reader.takeError(), source);

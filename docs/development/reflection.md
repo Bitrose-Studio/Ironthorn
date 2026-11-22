@@ -70,15 +70,33 @@ ITH_ENUM(DamageKind, Tooltip = "How damage is dealt")
 ### Field types
 
 - `bool`, `std::int8_t` to `std::int64_t`, `std::uint8_t` to `std::uint64_t`, `float`,
-  `double`, `std::string` and `ith::Uuid`;
+  `double`, `std::string`, `ith::Uuid` and `ith::Entity` (see [Entity fields](#entity-fields));
 - the math types `ith::Vec2/3/4`, `IVec2/3/4`, `UVec2/3/4`, `DVec3`, `Quat`, `Mat3`, `Mat4` and
   `Transform`, described by hand as structs of their components (`x, y, z, w`), columns
   (`c0` to `c3`) or parts ([math guide](math.md#layout-reflection-the-ecs-and-the-gpu));
 - reflected enums and reflected structs (composition);
 - `std::array<T, N>`, `std::vector<T>` and `std::optional<T>` of these.
 
-Any other field type is a compile error in the generated file. Handles, asset references and
-gameplay tags join the list as those modules arrive.
+Any other field type is a compile error in the generated file. Asset references and gameplay
+tags join the list as those modules arrive.
+
+### Entity fields
+
+An `ith::Entity` (`ith/foundation/Entity.h`) is a runtime handle, reflected as the leaf kind
+`TypeKind::Entity` ([ADR-0032](../decisions/0032-entity-references-stable-ids-and-world-copy.md)):
+
+- `ith::remapEntities(type, value, map)` (`ith/reflection/Entities.h`) replaces every `Entity`
+  a value reaches through its reflected fields, nested structs, arrays, vectors and optionals,
+  Transient and EditorOnly fields included. World copy, Keep Simulation Changes and level files
+  translate handles with it. `ith::EntityMap` is a function pointer and a context; nothing is
+  allocated.
+- **Reflect every `Entity` field** of a component or resource. An unreflected one is copied bit
+  for bit, so after a world copy it still points into the source world.
+- `TypeInfo::containsEntities` is false only for types that can't hold an `Entity`, and the
+  walker skips those at once. A field whose type is another reflected struct counts as holding
+  one, because that struct's record isn't known at compile time.
+- The archives never write a handle's bits: they need an entity mapping ([serialization
+  guide](serialization.md#entity-fields)).
 
 ### Syntax rules
 

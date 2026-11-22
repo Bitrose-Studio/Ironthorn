@@ -50,6 +50,9 @@ enum class TypeKind : std::uint8_t {
     FixedArray,      // std::array<T, N>
     DynamicArray,    // std::vector<T>
     Optional,        // std::optional<T>, a container of zero or one element
+    // ith::Entity, a runtime handle (ADR-0032). Last, so that the values of the kinds before it,
+    // which binary schema hashes cover, never change.
+    Entity,
 };
 
 // The role an ITH_TYPE type plays. Every other kind of type has the role None.
@@ -151,6 +154,13 @@ struct TypeInfo {
     // (std::is_trivially_copyable), so type-erased storage can move them without calling `move`
     // and `destroy`.
     bool triviallyCopyable = false;
+    // True when a value of the type may hold an ith::Entity: the type is Entity, or a container
+    // whose element type has the flag, or a reflected struct with a reflected field that may reach
+    // one (ADR-0032). False guarantees that the value holds none, so ith::remapEntities returns at
+    // once. A struct field whose type is another ITH_TYPE struct counts as reaching an Entity,
+    // because its record lives in another translation unit and can't be read at compile time;
+    // the walker then visits it and finds out. Hand-written records leave it false.
+    bool containsEntities = false;
 
     // Default-constructs a value in uninitialized, suitably aligned memory.
     void (*construct)(void* memory) = nullptr;

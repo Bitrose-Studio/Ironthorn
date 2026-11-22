@@ -1,9 +1,12 @@
 #pragma once
 
-// ith::Entity: the handle of an entity in a World (ADR-0014).
+// ith::Entity: the handle of an entity in a World (ADR-0014, ADR-0032).
 //
 //   const ith::Entity player = world.spawn(Position{}, Health{});
 //   if (world.isAlive(player)) { ... }
+//
+// Worlds live in the ecs module. The handle lives here, below reflection, so that reflection can
+// describe Entity fields (TypeKind::Entity) and remap them (ith/reflection/Entities.h).
 //
 // A handle is 64 bits: a 32-bit slot index, a 24-bit generation and an 8-bit world id. When an
 // entity is despawned its slot's generation goes up, so every handle to it becomes stale: a
@@ -11,8 +14,9 @@
 // whose generation would wrap is retired and never reused. World ids start at 1, so the default
 // handle (all zero bits) is the null handle of every world.
 //
-// Handles are runtime-only: they are never saved, sent over the network or used by editor undo.
-// Persistent identity is a stable object id component (ADR-0014 rule 3).
+// Handles are runtime-only: their bits are never saved, sent over the network or used by editor
+// undo. Persistent identity is the StableId component (ADR-0032). An archive writes an Entity
+// field only through an entity mapping, as the stable id it maps to, and refuses it without one.
 //
 // An Entity is a plain value: trivially copyable, comparable and hashable through bits().
 

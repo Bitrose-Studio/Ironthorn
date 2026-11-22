@@ -39,9 +39,9 @@
 
 #include "ith/ecs/Commands.h"
 #include "ith/ecs/ComponentRegistry.h"
-#include "ith/ecs/Entity.h"
 #include "ith/ecs/World.h"
 #include "ith/foundation/Assert.h"
+#include "ith/foundation/Entity.h"
 #include "ith/reflection/TypeInfo.h"
 #include "ith/reflection/TypeOf.h"
 

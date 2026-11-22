@@ -105,7 +105,7 @@ world.despawn(ship);
 - A handle from another world asserts.
 - The default `Entity()` is the null handle; it fails lookups without asserting.
 - Handles are runtime-only. Never save them or send them over the network; persistent identity is
-  a stable id component (ADR-0014 rule 3).
+  a stable id component (ADR-0014 rule 3). The handle type lives in `ith/foundation/Entity.h`.
 
 ## Queries
 

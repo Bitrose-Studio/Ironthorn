@@ -329,10 +329,11 @@ ith_reflect_target(ith_test_reflected
 
 ith_add_test_suite(reflection
     SOURCES
+        reflection/EntitiesTests.cpp
         reflection/RoundTripTests.cpp
         reflection/TypeOfTests.cpp
         reflection/TypeRegistryTests.cpp
-    LIBRARIES ith_test_reflected)
+    LIBRARIES ith_test_reflected ith_test_archive)
 
 # A reflected test component with math fields, generated like an engine module's records.
 add_library(ith_test_math_reflected STATIC)
@@ -383,6 +384,7 @@ ith_reflect_target(ith_test_archive
 ith_add_test_suite(serialization
     SOURCES
         serialization/BinaryArchiveTests.cpp
+        serialization/EntityMappingTests.cpp
         serialization/JsonTests.cpp
         serialization/RoundTripTests.cpp
         serialization/TextArchiveTests.cpp

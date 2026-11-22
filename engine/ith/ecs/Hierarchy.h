@@ -31,7 +31,7 @@
 //   (TransformPropagation.h): parent's world matrix times the local transform. An entity in the
 //   hierarchy without a LocalTransform counts as the identity.
 
-#include "ith/ecs/Entity.h"
+#include "ith/foundation/Entity.h"
 #include "ith/math/Transform.h"
 #include "ith/math/Types.h"
 #include "ith/reflection/Annotations.h"

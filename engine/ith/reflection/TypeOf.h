@@ -8,7 +8,7 @@
 //
 // T is one of:
 // - a leaf type, described here by hand: bool, std::int8_t to std::int64_t, std::uint8_t to
-//   std::uint64_t, float, double, std::string, ith::Uuid;
+//   std::uint64_t, float, double, std::string, ith::Uuid, ith::Entity;
 // - a math type, described here by hand as a struct (ADR-0006): ith::Vec2/3/4, IVec2/3/4,
 //   UVec2/3/4 and DVec3 with the fields x, y, z, w; ith::Quat with x, y, z, w (its storage
 //   order); ith::Mat3 and Mat4 with the columns c0 to c3; ith::Transform with translation,
@@ -26,6 +26,7 @@
 // allocate after the first call for a container type.
 
 #include "ith/foundation/Assert.h"
+#include "ith/foundation/Entity.h"
 #include "ith/foundation/Hash.h"
 #include "ith/foundation/Uuid.h"
 #include "ith/math/Transform.h"
@@ -140,16 +141,40 @@ constexpr TypeInfo makeValueType(TypeKind kind, std::string_view name,
     };
 }
 
-// Builds the record of an ITH_TYPE struct. Used by generated code.
+// Whether a field of type T may hold an Entity, decided at compile time for the generated
+// TypeInfo::containsEntities of the struct that has the field: true for Entity, for a container
+// of such a type, and for any ITH_TYPE struct (its own record can't be read at compile time).
+template <typename T>
+struct MayReachEntities : std::bool_constant<ReflectionAccess::kIsReflectedStruct<T>> {};
+
+template <>
+struct MayReachEntities<Entity> : std::true_type {};
+
+template <typename T, std::size_t N>
+struct MayReachEntities<std::array<T, N>> : MayReachEntities<T> {};
+
+template <typename T>
+struct MayReachEntities<std::vector<T>> : MayReachEntities<T> {};
+
+template <typename T>
+struct MayReachEntities<std::optional<T>> : MayReachEntities<T> {};
+
+template <typename T>
+inline constexpr bool kMayReachEntities = MayReachEntities<T>::value;
+
+// Builds the record of an ITH_TYPE struct. Used by generated code, which passes for
+// `containsEntities` whether any reflected field's type is kMayReachEntities.
 template <typename T>
 constexpr TypeInfo makeStructType(std::uint64_t id, std::string_view name, TypeRole role, ReflectionFlags flags,
-                                  const Attributes& attributes, std::span<const FieldInfo> fields) noexcept {
+                                  const Attributes& attributes, std::span<const FieldInfo> fields,
+                                  bool containsEntities = false) noexcept {
     TypeInfo info = makeValueType<T>(TypeKind::Struct, name, &equalStructs<T>);
     info.id = id;
     info.role = role;
     info.flags = flags;
     info.attributes = attributes;
     info.fields = fields;
+    info.containsEntities = containsEntities;
     return info;
 }
 
@@ -204,15 +229,26 @@ ITH_DETAIL_LEAF_TYPE(double, Float, "double");
 ITH_DETAIL_LEAF_TYPE(std::string, String, "std::string");
 ITH_DETAIL_LEAF_TYPE(Uuid, Uuid, "ith::Uuid");
 
+template <>
+struct TypeOfImpl<Entity> {
+    static constexpr TypeInfo kInfo = [] {
+        TypeInfo info = makeValueType<Entity>(TypeKind::Entity, "ith::Entity", &equalValues<Entity>);
+        info.containsEntities = true;
+        return info;
+    }();
+
+    static const TypeInfo& get() noexcept { return kInfo; }
+};
+
 #undef ITH_DETAIL_LEAF_TYPE
 
 // The leaf records, for registering them with a TypeRegistry.
-inline constexpr std::array<const TypeInfo*, 13> kLeafTypes = {
+inline constexpr std::array<const TypeInfo*, 14> kLeafTypes = {
     &TypeOfImpl<bool>::kInfo,          &TypeOfImpl<std::int8_t>::kInfo,   &TypeOfImpl<std::int16_t>::kInfo,
     &TypeOfImpl<std::int32_t>::kInfo,  &TypeOfImpl<std::int64_t>::kInfo,  &TypeOfImpl<std::uint8_t>::kInfo,
     &TypeOfImpl<std::uint16_t>::kInfo, &TypeOfImpl<std::uint32_t>::kInfo, &TypeOfImpl<std::uint64_t>::kInfo,
     &TypeOfImpl<float>::kInfo,         &TypeOfImpl<double>::kInfo,        &TypeOfImpl<std::string>::kInfo,
-    &TypeOfImpl<Uuid>::kInfo,
+    &TypeOfImpl<Uuid>::kInfo,          &TypeOfImpl<Entity>::kInfo,
 };
 
 // The math types (ADR-0006), described as structs whose fields are their components or columns,
@@ -389,6 +425,7 @@ TypeInfo makeContainerType(TypeKind kind, std::string_view name, std::uint64_t e
     info.id = hashCombine(hashCombine(fnv1a64(name), typeOf<Element>().id), extra);
     info.element = &typeOf<Element>;
     info.container = &kContainerOps<C>;
+    info.containsEntities = typeOf<Element>().containsEntities;
     return info;
 }
 

@@ -24,7 +24,9 @@
 // leaves the target untouched. Binary (cooked) data is never migrated: a blob of another version
 // is refused and must be recooked.
 
+#include "ith/foundation/Entity.h"
 #include "ith/foundation/Expected.h"
+#include "ith/foundation/Uuid.h"
 #include "ith/serialization/Error.h"
 #include "ith/serialization/Value.h"
 
@@ -84,6 +86,24 @@ struct DocumentFormat {
     // migrations[i] moves version minimumVersion + i to minimumVersion + i + 1, so there are
     // exactly version - minimumVersion of them.
     std::span<const Migration> migrations;
+};
+
+// How an archive saves the ith::Entity values it reaches (ADR-0032). A handle is runtime-only, so
+// an archive never writes its bits: it writes the Uuid the mapping gives (in text the Uuid's
+// string, in binary its 16 bytes) and reads an entity back through the mapping. A read or write
+// that reaches a saved Entity without a mapping, or without the function it needs, fails with
+// "serialization.no_entity_mapping". Transient fields are never saved and need no mapping.
+//
+// The null handle is always written as the nil Uuid and the nil Uuid always reads as the null
+// handle, without calling the mapping. The level-documents format defines the mapping that
+// writes entities as their stable ids.
+struct EntityMapping {
+    // Writing: the id that stands for `entity`, which is not null.
+    Uuid (*toId)(void* context, Entity entity) = nullptr;
+    // Reading: the entity that `id`, which is not nil, stands for.
+    Entity (*toEntity)(void* context, const Uuid& id) = nullptr;
+    // Passed to both functions.
+    void* context = nullptr;
 };
 
 } // namespace ith::serialization

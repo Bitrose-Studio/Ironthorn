@@ -6,6 +6,7 @@ ith_add_module(foundation
         Assert.h
         Assert.cpp
         Compiler.h
+        Entity.h
         Expected.h
         FixedTimestep.h
         FixedTimestep.cpp

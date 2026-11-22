@@ -22,7 +22,8 @@
 // their own width, floats are their IEEE bits (so every value, NaN payloads included, reads
 // back bit-identical), bool and the presence byte of an optional are 0 or 1, std::string and
 // std::vector start with a uint32 count (strings are bytes, not checked
-// for UTF-8), ith::Uuid is its high then low 64 bits, an enum is its
+// for UTF-8), ith::Uuid is its high then low 64 bits, an ith::Entity is the Uuid its entity
+// mapping gives (Document.h, EntityMapping; refused without one), an enum is its
 // underlying integer, a struct is its saved fields in declaration order, and a std::array is
 // its elements. Transient and EditorOnly fields are left out: cooked data has no editor data
 // (ADR-0017). A std::vector whose elements encode to zero bytes is refused.
@@ -55,6 +56,9 @@ struct BinaryReadOptions {
     std::string_view source;
     // The bytes the read may allocate; 0 means the default of allocationBudget (Document.h).
     std::size_t allocationBudget = 0;
+    // How Entity values are read (Document.h). Null: a blob that holds a saved Entity fails with
+    // "serialization.no_entity_mapping".
+    const EntityMapping* entities = nullptr;
 };
 
 // A hash of everything the binary encoding of `type` depends on: the ids, kinds and encoded
@@ -67,9 +71,10 @@ struct BinaryReadOptions {
 // with "serialization.not_saved" (the type, or an element type, is Transient or EditorOnly),
 // "serialization.invalid_enum", "serialization.unsupported_type" (a vector of zero-byte
 // elements), "serialization.too_deep" or "serialization.too_large" (a string or vector of more
-// than 2^32 - 1 elements). Precondition (asserted): `format` is valid (Document.h).
+// than 2^32 - 1 elements), or "serialization.no_entity_mapping" (the value holds a saved Entity
+// and `entities` is null). Precondition (asserted): `format` is valid (Document.h).
 Expected<std::vector<std::byte>, Error> writeBinary(const DocumentFormat& format, const TypeInfo& type,
-                                                    const void* object);
+                                                    const void* object, const EntityMapping* entities = nullptr);
 
 // Reads a blob of `format` into the value of `type` at `target`. On failure the target is
 // unchanged. Fails with:
@@ -79,6 +84,8 @@ Expected<std::vector<std::byte>, Error> writeBinary(const DocumentFormat& format
 // - "serialization.invalid_value" (a bool or presence byte that isn't 0 or 1, an enum value
 //   that isn't valid, a nonzero padding byte), "serialization.too_deep",
 //   "serialization.not_saved", "serialization.unsupported_type";
+// - "serialization.no_entity_mapping": the value holds a saved Entity and options.entities is
+//   null;
 // - "serialization.too_large": the value needs more than the allocation budget.
 // Errors carry the byte offset and, inside the payload, the path. Preconditions: `format` is
 // valid (asserted); `target` is a complete, non-const object of `type`.
@@ -87,8 +94,9 @@ Expected<void, Error> readBinary(std::span<const std::byte> data, const Document
 
 // writeBinary for a reflected type T.
 template <typename T>
-Expected<std::vector<std::byte>, Error> writeBinary(const DocumentFormat& format, const T& value) {
-    return writeBinary(format, typeOf<T>(), &value);
+Expected<std::vector<std::byte>, Error> writeBinary(const DocumentFormat& format, const T& value,
+                                                    const EntityMapping* entities = nullptr) {
+    return writeBinary(format, typeOf<T>(), &value, entities);
 }
 
 // readBinary for a reflected type T.

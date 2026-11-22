@@ -41,8 +41,8 @@
 // can be kept and reused. Not thread-safe: use it on the thread that owns the World.
 
 #include "ith/ecs/Archetype.h"
-#include "ith/ecs/Entity.h"
 #include "ith/ecs/Query.h"
+#include "ith/foundation/Entity.h"
 #include "ith/reflection/TypeInfo.h"
 
 #include <cstddef>

@@ -30,6 +30,17 @@ using ith::test::Object;
 
 constexpr serialization::DocumentFormat kFormat{.name = "test.round_trip", .version = 1};
 
+// Saves an entity as a Uuid holding its bits, so that every handle reads back as itself.
+ith::Uuid toId(void* /*context*/, ith::Entity entity) {
+    return {0x1d, entity.bits()};
+}
+
+ith::Entity toEntity(void* /*context*/, const ith::Uuid& id) {
+    return ith::Entity::fromBits(id.low());
+}
+
+constexpr serialization::EntityMapping kEntities{.toId = &toId, .toEntity = &toEntity};
+
 void roundTrip(const ith::TypeInfo& type, std::uint64_t& seed) {
     const std::string name(type.name);
     CAPTURE(name);
@@ -40,28 +51,29 @@ void roundTrip(const ith::TypeInfo& type, std::uint64_t& seed) {
 
     // Text.
     const ith::Expected<std::string, serialization::Error> text =
-        serialization::writeText(kFormat, type, original.get());
+        serialization::writeText(kFormat, type, original.get(), nullptr, &kEntities);
     REQUIRE_MESSAGE(text.hasValue(), text.error().toString());
     const Object fromText(type);
     std::vector<serialization::Error> warnings;
-    const auto readText = serialization::readText(*text, kFormat, type, fromText.get(), {.warnings = &warnings});
+    const auto readText =
+        serialization::readText(*text, kFormat, type, fromText.get(), {.warnings = &warnings, .entities = &kEntities});
     REQUIRE_MESSAGE(readText.hasValue(), readText.error().toString());
     CHECK(warnings.empty());
     CHECK(type.equals(fromText.get(), original.get()));
-    const auto textAgain = serialization::writeText(kFormat, type, fromText.get());
+    const auto textAgain = serialization::writeText(kFormat, type, fromText.get(), nullptr, &kEntities);
     REQUIRE(textAgain.hasValue());
     CHECK(*textAgain == *text);
 
     // Binary, read into an object that already holds other values.
-    const auto blob = serialization::writeBinary(kFormat, type, original.get());
+    const auto blob = serialization::writeBinary(kFormat, type, original.get(), &kEntities);
     REQUIRE_MESSAGE(blob.hasValue(), blob.error().toString());
     const Object fromBinary(type);
     std::uint64_t otherSeed = seed * 7;
     ith::test::fill(type, fromBinary.get(), otherSeed, ith::ReflectionFlags::Transient);
-    const auto readBinary = serialization::readBinary(*blob, kFormat, type, fromBinary.get());
+    const auto readBinary = serialization::readBinary(*blob, kFormat, type, fromBinary.get(), {.entities = &kEntities});
     REQUIRE_MESSAGE(readBinary.hasValue(), readBinary.error().toString());
     CHECK(type.equals(fromBinary.get(), original.get()));
-    const auto blobAgain = serialization::writeBinary(kFormat, type, fromBinary.get());
+    const auto blobAgain = serialization::writeBinary(kFormat, type, fromBinary.get(), &kEntities);
     REQUIRE(blobAgain.hasValue());
     CHECK(*blobAgain == *blob);
 }
@@ -83,9 +95,9 @@ TEST_SUITE("serialization.round_trip") {
             roundTrip(*type, seed);
         }
         // Leaf types, the math types (structs), 3 enums of test_reflected, 9 structs of
-        // test_reflected and 3 of test_archive.
+        // test_reflected and 6 of test_archive.
         CHECK(enums == 3);
-        CHECK(structs == ith::detail::kMathTypes.size() + 12);
+        CHECK(structs == ith::detail::kMathTypes.size() + 15);
         CHECK(registry.types().size() == ith::detail::kLeafTypes.size() + enums + structs);
     }
 
@@ -96,14 +108,16 @@ TEST_SUITE("serialization.round_trip") {
             const std::string name(type->name);
             CAPTURE(name);
             const Object original(*type);
-            const auto text = serialization::writeText(kFormat, *type, original.get());
-            const auto blob = serialization::writeBinary(kFormat, *type, original.get());
+            const auto text = serialization::writeText(kFormat, *type, original.get(), nullptr, &kEntities);
+            const auto blob = serialization::writeBinary(kFormat, *type, original.get(), &kEntities);
             REQUIRE(text.hasValue());
             REQUIRE(blob.hasValue());
             const Object fromText(*type);
             const Object fromBinary(*type);
-            REQUIRE(serialization::readText(*text, kFormat, *type, fromText.get()).hasValue());
-            REQUIRE(serialization::readBinary(*blob, kFormat, *type, fromBinary.get()).hasValue());
+            REQUIRE(
+                serialization::readText(*text, kFormat, *type, fromText.get(), {.entities = &kEntities}).hasValue());
+            REQUIRE(serialization::readBinary(*blob, kFormat, *type, fromBinary.get(), {.entities = &kEntities})
+                        .hasValue());
             CHECK(type->equals(fromText.get(), original.get()));
             CHECK(type->equals(fromBinary.get(), original.get()));
         }

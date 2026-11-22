@@ -182,6 +182,30 @@ const auto read = ith::serialization::readBinary(*blob, kLoadoutFormat, loadout,
   length couldn't be checked against the data.
 - Bulk data laid out for memory mapping comes with the asset formats that need it.
 
+## Entity fields
+
+An `ith::Entity` is a runtime handle, so the archives never write its bits
+([ADR-0032](../decisions/0032-entity-references-stable-ids-and-world-copy.md)). A read or write
+that reaches a saved `Entity` field (one that isn't `Transient`) needs an
+`ith::serialization::EntityMapping` (`Document.h`), or it fails with
+`serialization.no_entity_mapping`:
+
+```cpp
+ith::Uuid toId(void* context, ith::Entity entity) { return static_cast<Level*>(context)->idOf(entity); }
+ith::Entity toEntity(void* context, const ith::Uuid& id) { return static_cast<Level*>(context)->find(id); }
+
+const ith::serialization::EntityMapping mapping{.toId = &toId, .toEntity = &toEntity, .context = &level};
+const auto text = ith::serialization::writeText(kSquadFormat, squad, nullptr, &mapping);
+const auto read = ith::serialization::readText(*text, kSquadFormat, squad, {.entities = &mapping});
+```
+
+- With a mapping, an `Entity` is written as the `ith::Uuid` `toId` gives: its canonical string in
+  text, 16 bytes in binary (the schema hash counts that width). Reading calls `toEntity`.
+- The null handle is always the nil Uuid, and the nil Uuid always reads as the null handle; the
+  mapping isn't called for them.
+- A type that holds no `Entity` needs no mapping. The level-documents format defines the
+  mapping that writes entities as their stable ids.
+
 ## Errors
 
 Every read and write returns `ith::Expected<..., ith::serialization::Error>`. An error has a

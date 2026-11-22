@@ -82,6 +82,9 @@ inline void fill(const TypeInfo& type, void* object, std::uint64_t& seed, Reflec
         case TypeKind::Uuid:
             *static_cast<Uuid*>(object) = Uuid(seed, ~seed);
             break;
+        case TypeKind::Entity:
+            *static_cast<Entity*>(object) = Entity::fromParts(static_cast<std::uint32_t>(seed), 1, 1);
+            break;
         case TypeKind::Enum: {
             REQUIRE_FALSE(type.enumerators.empty());
             const std::int64_t current = readEnumValue(type, object);

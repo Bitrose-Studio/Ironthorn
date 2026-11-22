@@ -22,7 +22,8 @@
 // (a native asset, ADR-0024) also has an "id" before "data". "data" holds the value:
 // - bool as true or false; integers as exact decimal numbers; float and double as the shortest
 //   text that reads back bit-identical (std::to_chars), never infinities or NaN;
-// - std::string as a string, ith::Uuid as its canonical string;
+// - std::string as a string, ith::Uuid as its canonical string, an ith::Entity as the canonical
+//   string of the Uuid its entity mapping gives (Document.h, EntityMapping; refused without one);
 // - an enum as the name of its enumerator; a Flags enum as an array of enumerator names whose
 //   values are ORed together;
 // - a struct as an object of its fields in declaration order, without Transient fields.
@@ -81,6 +82,9 @@ struct TextReadOptions {
     // here when the read succeeds. Null: a document with an "id" is refused. Either mismatch fails
     // with "serialization.not_a_document", whatever `unknownFields` says.
     Uuid* id = nullptr;
+    // How Entity values are read (Document.h). Null: a document whose value holds a saved Entity
+    // fails with "serialization.no_entity_mapping".
+    const EntityMapping* entities = nullptr;
 };
 
 // Writes the value of `type` at `object` as a document of `format` at its current version. With
@@ -89,10 +93,11 @@ struct TextReadOptions {
 // "serialization.invalid_enum" (a value that is no enumerator, or has bits no enumerator has),
 // "serialization.not_saved" (the type, or an element type, is Transient),
 // "serialization.unsupported_type" (an optional of an optional), "serialization.too_deep",
-// "serialization.too_large" or "serialization.write_failed" (a string that is not UTF-8).
+// "serialization.too_large", "serialization.write_failed" (a string that is not UTF-8) or
+// "serialization.no_entity_mapping" (the value holds a saved Entity and `entities` is null).
 // Precondition (asserted): `format` is valid (Document.h).
 Expected<std::string, Error> writeText(const DocumentFormat& format, const TypeInfo& type, const void* object,
-                                       const Uuid* id = nullptr);
+                                       const Uuid* id = nullptr, const EntityMapping* entities = nullptr);
 
 // Reads a document of `format` into the value of `type` at `target`, migrating older versions.
 // On failure the target is unchanged. Fails with the parseJson errors and:
@@ -105,6 +110,7 @@ Expected<std::string, Error> writeText(const DocumentFormat& format, const TypeI
 // - "serialization.duplicate_field": a field given twice, also under its FormerName;
 // - "serialization.unknown_field" with UnknownFields::Fail;
 // - "serialization.not_saved", "serialization.unsupported_type" as for writeText;
+// - "serialization.no_entity_mapping": the value holds a saved Entity and options.entities is null;
 // - "serialization.too_large": the document, its tree or the value exceeds the limits.
 // Preconditions: `format` is valid (asserted); `target` is a complete, non-const object of `type`.
 Expected<void, Error> readText(std::string_view text, const DocumentFormat& format, const TypeInfo& type, void* target,
@@ -124,8 +130,9 @@ Expected<std::string, Error> writeDocument(const DocumentFormat& format, const V
 
 // writeText for a reflected type T.
 template <typename T>
-Expected<std::string, Error> writeText(const DocumentFormat& format, const T& value, const Uuid* id = nullptr) {
-    return writeText(format, typeOf<T>(), &value, id);
+Expected<std::string, Error> writeText(const DocumentFormat& format, const T& value, const Uuid* id = nullptr,
+                                       const EntityMapping* entities = nullptr) {
+    return writeText(format, typeOf<T>(), &value, id, entities);
 }
 
 // readText for a reflected type T.

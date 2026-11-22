@@ -74,6 +74,8 @@ bool flagNames(const TypeInfo& type, std::int64_t value, std::vector<Value>& nam
 // Turns a reflected value into a Value tree.
 class TextWriter {
 public:
+    explicit TextWriter(const EntityMapping* entities) noexcept : m_entities(entities) {}
+
     bool write(const TypeInfo& type, const void* object, Value& out, std::size_t depth) {
         switch (type.kind) {
             case TypeKind::Bool:
@@ -92,6 +94,12 @@ public:
                 return true;
             case TypeKind::Uuid:
                 out = Value::string(static_cast<const Uuid*>(object)->toString());
+                return true;
+            case TypeKind::Entity:
+                if (!detail::canWriteEntities(m_entities)) {
+                    return fail("serialization.no_entity_mapping", detail::kNoEntityMappingMessage);
+                }
+                out = Value::string(detail::entityToId(*m_entities, *static_cast<const Entity*>(object)).toString());
                 return true;
             case TypeKind::Enum:
                 return writeEnum(type, object, out);
@@ -234,6 +242,7 @@ private:
         return true;
     }
 
+    const EntityMapping* m_entities;
     detail::PathBuilder m_path;
     Error m_error;
 };
@@ -241,8 +250,12 @@ private:
 // Reads a Value tree into a reflected value.
 class TextReader {
 public:
-    TextReader(UnknownFields unknownFields, bool collectWarnings, std::size_t allocationBudget)
-        : m_unknownFields(unknownFields), m_collectWarnings(collectWarnings), m_budget(allocationBudget) {}
+    TextReader(UnknownFields unknownFields, bool collectWarnings, std::size_t allocationBudget,
+               const EntityMapping* entities)
+        : m_unknownFields(unknownFields),
+          m_collectWarnings(collectWarnings),
+          m_budget(allocationBudget),
+          m_entities(entities) {}
 
     bool read(const TypeInfo& type, const Value& value, void* object, std::size_t depth) {
         switch (type.kind) {
@@ -267,6 +280,8 @@ public:
                 return true;
             case TypeKind::Uuid:
                 return readUuid(value, object);
+            case TypeKind::Entity:
+                return readEntity(value, object);
             case TypeKind::Enum:
                 return readEnum(type, value, object);
             case TypeKind::Struct:
@@ -357,6 +372,18 @@ private:
             return fail("serialization.invalid_uuid", "'" + detail::printable(value.asString()) + "' is not a UUID");
         }
         *static_cast<Uuid*>(object) = *parsed;
+        return true;
+    }
+
+    bool readEntity(const Value& value, void* object) {
+        if (!detail::canReadEntities(m_entities)) {
+            return fail("serialization.no_entity_mapping", detail::kNoEntityMappingMessage);
+        }
+        Uuid id;
+        if (!readUuid(value, &id)) {
+            return false;
+        }
+        *static_cast<Entity*>(object) = detail::idToEntity(*m_entities, id);
         return true;
     }
 
@@ -498,6 +525,7 @@ private:
     UnknownFields m_unknownFields;
     bool m_collectWarnings;
     detail::AllocationBudget m_budget;
+    const EntityMapping* m_entities;
     std::size_t m_unknownCount = 0;
     Error m_error;
     std::vector<Error> m_warnings;
@@ -704,7 +732,7 @@ Expected<Value, Error> makeEnvelope(const DocumentFormat& format, const Uuid* id
 } // namespace
 
 Expected<std::string, Error> writeText(const DocumentFormat& format, const TypeInfo& type, const void* object,
-                                       const Uuid* id) {
+                                       const Uuid* id, const EntityMapping* entities) {
     Expected<Value, Error> document = makeEnvelope(format, id);
     if (!document) {
         return makeUnexpected(std::move(document).error());
@@ -713,7 +741,7 @@ Expected<std::string, Error> writeText(const DocumentFormat& format, const TypeI
         return makeUnexpected(
             makeError("serialization.not_saved", std::string(type.name) + " is Transient and can't be saved"));
     }
-    TextWriter writer;
+    TextWriter writer(entities);
     // The document object is the first level of nesting.
     if (!writer.write(type, object, document->set("data", Value()), 1)) {
         return makeUnexpected(writer.takeError());
@@ -760,7 +788,7 @@ Expected<void, Error> readText(std::string_view text, const DocumentFormat& form
 
     const detail::TempValue result(type);
     TextReader reader(options.unknownFields, options.warnings != nullptr,
-                      allocationBudget(text.size(), options.allocationBudget));
+                      allocationBudget(text.size(), options.allocationBudget), options.entities);
     if (!reader.read(type, *document->find("data"), result.get(), 1)) {
         return withSource(reader.takeError(), options.source);
     }

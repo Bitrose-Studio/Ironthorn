@@ -4,6 +4,8 @@ ith_add_module(reflection
     LAYER core
     SOURCES
         Annotations.h
+        Entities.h
+        Entities.cpp
         TypeInfo.h
         TypeInfo.cpp
         TypeOf.h

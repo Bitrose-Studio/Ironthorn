@@ -72,7 +72,9 @@ const ::ith::TypeInfo& game::Health::ithTypeInfo() noexcept {
     };
     static constexpr ::ith::TypeInfo kType = ::ith::detail::makeStructType<Self>(
         0x4865173c81f94251ull, "game::Health", ::ith::TypeRole::Component, ::ith::ReflectionFlags::None,
-        {.category = ITH_REFLECTION_TEXT("Combat"), .formerName = "game::Hp"}, kFields);
+        {.category = ITH_REFLECTION_TEXT("Combat"), .formerName = "game::Hp"}, kFields,
+        ::ith::detail::kMayReachEntities<decltype(Self::current)> ||
+            ::ith::detail::kMayReachEntities<decltype(Self::maximum)>);
     return kType;
 }
 
@@ -107,7 +109,9 @@ const ::ith::TypeInfo& game::detail::inner::Tagged::ithTypeInfo() noexcept {
     };
     static constexpr ::ith::TypeInfo kType = ::ith::detail::makeStructType<Self>(
         0xd27ac277f2d2f70aull, "game::detail::inner::Tagged", ::ith::TypeRole::Asset, ::ith::ReflectionFlags::None,
-        {.meta = ITH_REFLECTION_META(kMeta)}, kFields);
+        {.meta = ITH_REFLECTION_META(kMeta)}, kFields,
+        ::ith::detail::kMayReachEntities<decltype(Self::m_number)> ||
+            ::ith::detail::kMayReachEntities<decltype(Self::m_names)>);
     return kType;
 }
 
@@ -117,7 +121,8 @@ const ::ith::TypeInfo& game::Empty::ithTypeInfo() noexcept {
     static_assert(!std::is_polymorphic_v<Self>, "game::Empty: reflected types can't have virtual functions");
     static constexpr ::ith::TypeInfo kType = ::ith::detail::makeStructType<Self>(
         0x9a33a446855144f4ull, "game::Empty", ::ith::TypeRole::Event, ::ith::ReflectionFlags::None,
-        {}, std::span<const ::ith::FieldInfo>());
+        {}, std::span<const ::ith::FieldInfo>(),
+        false);
     return kType;
 }
 
@@ -137,7 +142,8 @@ const ::ith::TypeInfo& game::Owner::ithTypeInfo() noexcept {
     };
     static constexpr ::ith::TypeInfo kType = ::ith::detail::makeStructType<Self>(
         0xdcfc23b7a06a8dc2ull, "game::Owner", ::ith::TypeRole::Component, ::ith::ReflectionFlags::Immutable | ::ith::ReflectionFlags::Transient,
-        {}, kFields);
+        {}, kFields,
+        ::ith::detail::kMayReachEntities<decltype(Self::id)>);
     return kType;
 }
 
@@ -165,7 +171,9 @@ const ::ith::TypeInfo& Global::ithTypeInfo() noexcept {
     };
     static constexpr ::ith::TypeInfo kType = ::ith::detail::makeStructType<Self>(
         0x681c086b8f7afcaeull, "Global", ::ith::TypeRole::Resource, ::ith::ReflectionFlags::None,
-        {}, kFields);
+        {}, kFields,
+        ::ith::detail::kMayReachEntities<decltype(Self::kinds)> ||
+            ::ith::detail::kMayReachEntities<decltype(Self::boxed)>);
     return kType;
 }
 

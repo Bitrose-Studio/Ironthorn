@@ -56,7 +56,7 @@
 
 #include "ith/ecs/Archetype.h"
 #include "ith/ecs/ComponentRegistry.h"
-#include "ith/ecs/Entity.h"
+#include "ith/foundation/Entity.h"
 
 #include <array>
 #include <cstddef>

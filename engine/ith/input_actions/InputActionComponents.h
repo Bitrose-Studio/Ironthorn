@@ -18,7 +18,7 @@
 
 #include "ith/assets/AssetId.h"
 #include "ith/assets/AssetRef.h"
-#include "ith/ecs/Entity.h"
+#include "ith/foundation/Entity.h"
 #include "ith/foundation/Uuid.h"
 #include "ith/input_actions/InputAssetLibrary.h"
 #include "ith/reflection/Annotations.h"

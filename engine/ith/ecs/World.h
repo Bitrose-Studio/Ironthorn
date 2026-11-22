@@ -20,7 +20,7 @@
 // components of the entity that fills its old row, are invalidated by every structural change
 // (spawn, despawn, add, remove, clear). Handles stay valid until the entity is despawned.
 //
-// Handles: see Entity.h. A stale handle (its entity was despawned, or the world was cleared)
+// Handles: see ith/foundation/Entity.h. A stale handle (its entity was despawned, or the world was cleared)
 // fails every lookup: isAlive and has return false, get returns null, add, remove and despawn
 // do nothing. A handle created by another World is a programmer error: it asserts and fails the
 // same way. Generations are never reset, not even by clear(), so a handle from before a level
@@ -100,9 +100,9 @@
 #include "ith/ecs/Commands.h"
 #include "ith/ecs/ComponentRegistry.h"
 #include "ith/ecs/DynamicQuery.h"
-#include "ith/ecs/Entity.h"
 #include "ith/ecs/Hierarchy.h"
 #include "ith/ecs/Query.h"
+#include "ith/foundation/Entity.h"
 #include "ith/foundation/Mutex.h"
 #include "ith/math/Types.h"
 #include "ith/reflection/TypeInfo.h"

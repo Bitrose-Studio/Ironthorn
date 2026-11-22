@@ -12,7 +12,7 @@
 // Not thread-safe: an archetype belongs to one World, which one thread uses at a time.
 
 #include "ith/ecs/ComponentRegistry.h"
-#include "ith/ecs/Entity.h"
+#include "ith/foundation/Entity.h"
 #include "ith/reflection/TypeInfo.h"
 
 #include <bitset>

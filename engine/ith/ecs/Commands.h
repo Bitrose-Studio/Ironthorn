@@ -35,8 +35,8 @@
 // A buffer refers to its World and must not outlive it. Movable, not copyable.
 
 #include "ith/ecs/ComponentRegistry.h"
-#include "ith/ecs/Entity.h"
 #include "ith/ecs/Query.h"
+#include "ith/foundation/Entity.h"
 
 #include <algorithm>
 #include <array>

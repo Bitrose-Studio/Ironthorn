@@ -173,7 +173,17 @@ void writeStruct(std::string& out, const ParsedType& type, const SourceHeader& h
     out += "    static constexpr ::ith::TypeInfo kType = ::ith::detail::makeStructType<Self>(\n";
     out += "        " + idLiteral(type.qualifiedName) + ", \"" + type.qualifiedName +
            "\", ::ith::TypeRole::" + type.attributes.role + ", " + flagsExpression(type.attributes.flags) + ",\n";
-    out += "        " + attributesExpression(type.attributes, "kMeta") + ", " + fields + ");\n";
+    // Whether a value may hold an Entity (TypeInfo::containsEntities), from the field types.
+    std::string containsEntities;
+    for (const ParsedField& field : type.fields) {
+        containsEntities += containsEntities.empty() ? "" : " ||\n            ";
+        containsEntities += "::ith::detail::kMayReachEntities<decltype(Self::" + field.name + ")>";
+    }
+    if (containsEntities.empty()) {
+        containsEntities = "false";
+    }
+    out += "        " + attributesExpression(type.attributes, "kMeta") + ", " + fields + ",\n";
+    out += "        " + containsEntities + ");\n";
     out += "    return kType;\n";
     out += "}\n\n";
 }

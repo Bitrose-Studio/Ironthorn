@@ -12,7 +12,6 @@ ith_add_module(ecs
         ComponentRegistry.h
         ComponentRegistry.cpp
         DynamicQuery.h
-        Entity.h
         Hierarchy.h
         Hooks.h
         Query.h
