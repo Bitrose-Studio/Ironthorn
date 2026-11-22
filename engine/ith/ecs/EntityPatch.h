@@ -1,7 +1,7 @@
 #pragma once
 
-// Entity patches: changes to the components of several entities, applied as one step with
-// World::applyPatches (ADR-0033).
+// Entity patches: changes to the components of several entities, and the spawns and despawns of
+// whole entities, applied as one step with World::applyPatches (ADR-0033, ADR-0037).
 //
 //   const ith::TypeInfo& light = ith::typeOf<game::Light>();
 //   ith::Patch brighter(light);
@@ -16,18 +16,29 @@
 //   ...
 //   static_cast<void>(world.applyPatches(*undo)); // back to what it was
 //
+// A new entity and a child of it, in one call:
+//
+//   const ith::Entity lampSlot = ith::Entity::fromParts(0, 1, 0); // a placeholder
+//   std::vector<ith::EntityPatch> patches(2);
+//   patches[0] = {.op = ith::EntityOp::Spawn, .entity = lampSlot};
+//   patches[0].changes.push_back(ith::ComponentChange::makeAdd(ith::OwnedValue::of(ith::StableId{.id = lampId})));
+//   patches[1] = {.op = ith::EntityOp::Spawn, .entity = ith::Entity::fromParts(1, 1, 0)};
+//   patches[1].changes.push_back(ith::ComponentChange::makeAdd(ith::OwnedValue::of(ith::ChildOf{.parent = lampSlot})));
+//
 // The Details panel, undo, prefab overrides and Keep Simulation Changes describe their edits this
 // way. Patches hold entity handles of the world they are applied to; translate them for another
-// world with ith::remapEntities (Patch.h) on each component patch and value.
+// world with ith::remapEntities (below).
 //
 // Plain values; not thread-safe.
 
 #include "ith/foundation/Entity.h"
+#include "ith/reflection/Entities.h"
 #include "ith/reflection/OwnedValue.h"
 #include "ith/reflection/Patch.h"
 #include "ith/reflection/TypeInfo.h"
 
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -67,10 +78,36 @@ struct ComponentChange {
     }
 };
 
+// What an EntityPatch does to its entity (ADR-0037 rule 8).
+enum class EntityOp : std::uint8_t {
+    Modify,  // apply `changes` to a live entity
+    Spawn,   // create an entity with the Adds in `changes`
+    Despawn, // destroy a live entity that has no children; `changes` is empty
+};
+
 // The changes to one entity, applied in order.
+//
+// Spawn: `entity` is a placeholder, a handle of world id 0 that isn't null (for example
+// Entity::fromParts(n, 1, 0)), distinct from the other Spawns of the call. Every handle of the call
+// equal to it, in the entities, values and placeBefore of the patches, stands for the new entity.
+// The World spawns it, adds its ChildOf first and then the other components in order, then places
+// it. Its changes are Adds only.
+//
+// Despawn: the entity must have no children (a delete detaches or removes them first). Its inverse
+// is a Spawn of every component the World doesn't keep itself, Transient ones included, placed
+// before the sibling that followed it.
 struct EntityPatch {
+    EntityOp op = EntityOp::Modify;
     Entity entity;
     std::vector<ComponentChange> changes;
+    // Modify and Spawn: when set, the entity is placed before this sibling among its parent's
+    // children, or among the roots, after its changes; a null sibling places it at the end.
+    std::optional<Entity> placeBefore;
 };
+
+// Replaces every Entity an entity patch holds, its entity and placeBefore included, with
+// map.function(context, entity), as ith::remapEntities does for one value. Precondition
+// (asserted): map.function is set.
+void remapEntities(EntityPatch& patch, const EntityMap& map);
 
 } // namespace ith

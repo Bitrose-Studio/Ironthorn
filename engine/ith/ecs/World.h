@@ -303,24 +303,40 @@ public:
     // or has none, and while a query iterates (asserted).
     bool remove(Entity entity, const TypeInfo& type);
 
-    // Applies changes to the components of several entities as one step (EntityPatch.h, ADR-0033)
-    // and returns the patches that undo them: the entities in reverse order, each with its
-    // changes in reverse order.
+    // Applies changes to several entities as one step (EntityPatch.h; ADR-0033, ADR-0037): changes
+    // to the components of live entities, spawns and despawns of whole entities, and placements
+    // among siblings. Returns the patches that undo them: the entity patches in reverse order,
+    // each Modify with its changes in reverse order.
     // - First everything is checked, as if the changes were made one after another, without
-    //   changing the world: live entities, component types, components present for Patch and
-    //   Remove, every patch prepared on a copy of the component, and every new ChildOf and StableId
-    //   value as add would check it (a live parent of this world that isn't the entity or below it,
-    //   a unique id that isn't nil). On failure the world is unchanged.
+    //   changing the world: live entities (counting the call's own spawns and despawns), component
+    //   types, components present for Patch and Remove, every patch prepared on a copy of the
+    //   component, every new ChildOf and StableId value as add would check it (a live parent of
+    //   this world that isn't the entity or below it, a unique id that isn't nil), Spawns that take
+    //   Adds only under a placeholder no other Spawn uses, Despawns of entities without children,
+    //   and placements before a live sibling under the same parent. On failure the world is
+    //   unchanged.
     // - Then the changes are made in order: a patch of a mutable component is written in place,
     //   stamping its changed tick without hooks, as a write through get is; a patch of an immutable
     //   component and an Add go through add, which runs the hooks and their commands; a Remove
-    //   goes through remove. Hooks must not remove a component that a later change patches.
+    //   goes through remove; a Spawn creates the entity, adds its ChildOf and then its other
+    //   components; a Despawn goes through despawn. Hooks must not remove a component that a later
+    //   change patches.
+    // - The inverse undoes exactly what the call did to the entities it names: a Spawn is undone by
+    //   a Despawn and a Despawn by a Spawn of every component the World doesn't keep itself, named
+    //   by a placeholder and placed where the entity stood; a Modify that moved its entity puts it
+    //   back before the sibling that followed it; and when the hooks of an Add or Remove changed
+    //   other non-Transient components of the same entity (the LocalTransform that reparenting
+    //   recomputes), the inverse restores their values after undoing the change. Hooks that change
+    //   non-Transient components of other entities make the inverse inexact, and references to a
+    //   despawned entity held by other entities stay stale after it is spawned again.
     // Fails with "ecs.patch.iterating" while a query iterates or a system runs (asserted),
     // "ecs.patch.stale_entity", "ecs.patch.not_a_component" (no type, or one without the
     // Component role), "ecs.patch.world_owned" (Children, DisabledInHierarchy: the World keeps
     // them), "ecs.patch.missing_component", "ecs.patch.refused_value", "reflection.patch.wrong_type"
-    // (a patch of another root type, or an Add value of another type or none), and the errors of
-    // preparePatch. Messages name the entity patch, the change and the type.
+    // (a patch of another root type, or an Add value of another type or none),
+    // "ecs.patch.invalid_spawn", "ecs.patch.invalid_despawn", "ecs.patch.has_children",
+    // "ecs.patch.invalid_place", and the errors of preparePatch. Messages name the entity patch,
+    // the change and the type.
     Expected<std::vector<EntityPatch>> applyPatches(std::span<const EntityPatch> patches);
 
     // Calls `function(const TypeInfo& type, void* value)` for each component of the entity, in an
@@ -549,6 +565,10 @@ private:
 
     // The children list of a live entity, writable whatever its immutability, or null.
     [[nodiscard]] std::vector<Entity>* childrenOf(Entity entity) const;
+
+    // The sibling after a live entity among its parent's children, or among the roots when it has
+    // no parent; null when it is the last.
+    [[nodiscard]] Entity nextSiblingOf(Entity entity) const;
 
     // The entity's world matrix from its ancestors' local transforms; identity for a dead entity.
     [[nodiscard]] Mat4 worldMatrixOf(Entity entity) const;

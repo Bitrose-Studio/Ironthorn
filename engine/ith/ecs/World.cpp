@@ -11,6 +11,7 @@
 #include <atomic>
 #include <bitset>
 #include <cstddef>
+#include <iterator>
 #include <limits>
 #include <ranges>
 #include <utility>
@@ -940,6 +941,23 @@ Entity World::parentOf(Entity entity) const {
 std::vector<Entity>* World::childrenOf(Entity entity) const {
     auto* children = static_cast<Children*>(findComponent(entity, detail::componentIndexOf<Children>()));
     return children != nullptr ? &children->entities : nullptr;
+}
+
+Entity World::nextSiblingOf(Entity entity) const {
+    const Entity parent = parentOf(entity);
+    if (parent.isNull()) {
+        const EntityRecord* record = findRecord(entity);
+        if (record == nullptr || !record->isRoot || record->nextRoot == kNoSlot) {
+            return {};
+        }
+        return Entity::fromParts(record->nextRoot, m_records[record->nextRoot].generation, m_id);
+    }
+    const std::vector<Entity>* children = childrenOf(parent);
+    if (children == nullptr) {
+        return {};
+    }
+    const auto found = std::ranges::find_if(*children, [entity](Entity candidate) { return candidate == entity; });
+    return found == children->end() || std::next(found) == children->end() ? Entity() : *std::next(found);
 }
 
 Mat4 World::worldMatrixOf(Entity entity) const {

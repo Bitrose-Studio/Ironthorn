@@ -311,6 +311,49 @@ if (undo) {
 - Error codes (`ecs.patch.*` and the patch errors) are listed at `World::applyPatches`; messages
   name the entity patch and the change.
 
+#### Spawns, despawns and placement
+
+An entity patch also creates or destroys whole entities, and moves an entity among its siblings
+([ADR-0037](../decisions/0037-editor-commands-transactions-selection-and-automation.md) rule 8),
+so the editor's undo covers create and delete as one step:
+
+```cpp
+const ith::Entity door = ith::Entity::fromParts(0, 1, 0); // placeholders: world id 0, not null
+const ith::Entity hinge = ith::Entity::fromParts(1, 1, 0);
+std::vector<ith::EntityPatch> patches{
+    {.op = ith::EntityOp::Spawn, .entity = door},
+    {.op = ith::EntityOp::Spawn, .entity = hinge},
+    {.op = ith::EntityOp::Despawn, .entity = oldDoor},
+};
+patches[0].changes.push_back(ith::ComponentChange::makeAdd(ith::OwnedValue::of(ith::StableId{.id = doorId})));
+patches[1].changes.push_back(ith::ComponentChange::makeAdd(ith::OwnedValue::of(ith::ChildOf{.parent = door})));
+patches[1].placeBefore = ith::Entity(); // at the end among the door's children
+```
+
+- **`EntityOp::Spawn`**: `entity` is a placeholder, a handle of world id 0 that isn't null and
+  that no other Spawn of the call uses. Every equal handle in the call (entities, values,
+  `placeBefore`) stands for the new entity. Its changes are Adds only; `ChildOf` is added first,
+  then the others in order. Its inverse is a Despawn.
+- **`EntityOp::Despawn`**: refused with `ecs.patch.has_children` while the entity has children,
+  counting the call's earlier changes, so a delete detaches or removes them first in the same call.
+  Its inverse is a Spawn, under a placeholder, of every component the World doesn't keep itself
+  (Transient ones included), placed before the sibling that followed it.
+- **`placeBefore`** (Modify and Spawn): after its changes the entity goes before that sibling under
+  the same parent, or among the roots; a null sibling means the end (`ecs.patch.invalid_place`
+  otherwise). A Modify that moved its entity, by a placement or a `ChildOf` change, is undone back
+  into its old place.
+- **Hook side effects on the same entity are undone exactly.** When the hooks of an Add or Remove
+  change other non-Transient components of that entity (reparenting recomputes `LocalTransform`),
+  the inverse restores their old values after undoing the change, so undo and redo give the same
+  bits every time. The inverse also drops replaces that a later one in it makes pointless, so it
+  doesn't grow over undo and redo.
+
+**Contracts for exact undo.** A hook that changes non-Transient components of *other* entities
+makes an inverse inexact; engine hooks don't, and components the editor edits must not. References
+to a despawned entity held by other entities stay stale after its inverse spawns it again. Systems
+that run in the editor world write only Transient data (`WorldTransform`), so the world changes
+only through patches the editor's undo history records.
+
 ## Resources
 
 Resources are typed singletons of a world: time, input state, match rules, settings. A resource
@@ -757,7 +800,10 @@ spawn and the schedule have no target. Record results with the machine they ran 
   that writes only the changed subtrees, removals included) and `StableIdTests.cpp` (the lookup
   through every change, duplicate and nil ids refused) and `WorldCopyTests.cpp` (values, slots,
   hierarchy and order, remapped entities in components and resources, EditorOnly left out, fresh
-  ticks, no hooks, refusals) and `EntityPatchTests.cpp` (`applyPatches`: writes in place without
+  ticks, no hooks, refusals) and `EntityOpTests.cpp` (Spawns under placeholders, Despawns
+  refused with children and undone into the old place, placements, a spawn, reparent and delete
+  in one call applied all or not at all, and a reparent undone and redone bit for bit without the
+  inverse growing) and `EntityPatchTests.cpp` (`applyPatches`: writes in place without
   hooks, replaces with hooks, adds and removes, inverses that undo, reparenting and its undo,
   refused values and cycles across entities, every error, and failures that change nothing);
 - a randomized model test (`ModelTests.cpp`) that runs thousands of random operations, typed and

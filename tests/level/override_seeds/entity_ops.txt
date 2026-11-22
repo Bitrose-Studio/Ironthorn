@@ -1,0 +1,6 @@
+spawn child
+-ith::ChildOf
+ith::LocalTransform.value.translation.x 4
+spawn
+despawn 3
+despawn 4
