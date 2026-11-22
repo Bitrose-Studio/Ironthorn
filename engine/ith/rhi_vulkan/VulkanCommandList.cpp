@@ -105,10 +105,6 @@ VkAttachmentStoreOp storeOp(StoreOp op) {
     return op == StoreOp::Store ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
 }
 
-std::uint32_t mipSize(std::uint32_t size, std::uint32_t mip) {
-    return std::max(1u, size >> mip);
-}
-
 } // namespace
 
 VulkanCommandList::VulkanCommandList(VulkanBackend& backend, VkCommandPool pool, VkCommandBuffer commands)
@@ -356,18 +352,18 @@ VkBufferImageCopy2 VulkanCommandList::region(const BufferTextureCopy& copy) cons
     const VkImageAspectFlags aspect = (record.aspects & VK_IMAGE_ASPECT_DEPTH_BIT) != 0
                                           ? VkImageAspectFlags{VK_IMAGE_ASPECT_DEPTH_BIT}
                                           : record.aspects;
+    const TexelRegion& box = copy.region;
     return VkBufferImageCopy2{.sType = VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2,
                               .bufferOffset = copy.bufferOffset,
                               .bufferRowLength = copy.rowPitch / record.texelSize,
-                              .bufferImageHeight = mipSize(record.height, copy.mipLevel),
+                              .bufferImageHeight = box.height,
                               .imageSubresource = {.aspectMask = aspect,
                                                    .mipLevel = copy.mipLevel,
                                                    .baseArrayLayer = copy.layer,
                                                    .layerCount = 1},
-                              .imageOffset = {0, 0, 0},
-                              .imageExtent = {.width = mipSize(record.width, copy.mipLevel),
-                                              .height = mipSize(record.height, copy.mipLevel),
-                                              .depth = mipSize(record.depth, copy.mipLevel)}};
+                              .imageOffset = {static_cast<std::int32_t>(box.x), static_cast<std::int32_t>(box.y),
+                                              static_cast<std::int32_t>(box.z)},
+                              .imageExtent = {.width = box.width, .height = box.height, .depth = box.depth}};
 }
 
 void VulkanCommandList::copyBufferToTexture(const BufferTextureCopy& copy) {

@@ -6,6 +6,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -455,6 +456,49 @@ std::optional<Translated> translate(const SDL_Event& event, KeyModifiers& modifi
     }
 }
 
+// The system cursors setCursor() created, by CursorShape; created on first use and destroyed with
+// the Platform. Process-wide like the windowing library, and used on the main thread only.
+std::array<SDL_Cursor*, kCursorShapeCount> g_cursors{};
+
+SDL_SystemCursor systemCursor(CursorShape shape) {
+    switch (shape) {
+        case CursorShape::Arrow:
+            return SDL_SYSTEM_CURSOR_DEFAULT;
+        case CursorShape::TextInput:
+            return SDL_SYSTEM_CURSOR_TEXT;
+        case CursorShape::ResizeAll:
+            return SDL_SYSTEM_CURSOR_MOVE;
+        case CursorShape::ResizeNorthSouth:
+            return SDL_SYSTEM_CURSOR_NS_RESIZE;
+        case CursorShape::ResizeEastWest:
+            return SDL_SYSTEM_CURSOR_EW_RESIZE;
+        case CursorShape::ResizeNorthEastSouthWest:
+            return SDL_SYSTEM_CURSOR_NESW_RESIZE;
+        case CursorShape::ResizeNorthWestSouthEast:
+            return SDL_SYSTEM_CURSOR_NWSE_RESIZE;
+        case CursorShape::Hand:
+            return SDL_SYSTEM_CURSOR_POINTER;
+        case CursorShape::NotAllowed:
+            return SDL_SYSTEM_CURSOR_NOT_ALLOWED;
+        case CursorShape::Wait:
+            return SDL_SYSTEM_CURSOR_WAIT;
+        case CursorShape::Progress:
+            return SDL_SYSTEM_CURSOR_PROGRESS;
+        case CursorShape::Crosshair:
+            return SDL_SYSTEM_CURSOR_CROSSHAIR;
+    }
+    return SDL_SYSTEM_CURSOR_DEFAULT;
+}
+
+void destroyCursors() {
+    for (SDL_Cursor*& cursor : g_cursors) {
+        if (cursor != nullptr) {
+            SDL_DestroyCursor(cursor);
+            cursor = nullptr;
+        }
+    }
+}
+
 // Nanoseconds of std::chrono::steady_clock now.
 std::int64_t steadyNowNs() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -519,6 +563,7 @@ Platform::Platform(Platform&& other) noexcept
       m_clockOffsetNs(other.m_clockOffsetNs),
       m_pumpTimeNs(other.m_pumpTimeNs),
       m_modifiers(other.m_modifiers),
+      m_cursor(other.m_cursor),
       m_events(std::move(other.m_events)),
       m_text(std::move(other.m_text)) {}
 
@@ -529,6 +574,7 @@ Platform& Platform::operator=(Platform&& other) noexcept {
         m_clockOffsetNs = other.m_clockOffsetNs;
         m_pumpTimeNs = other.m_pumpTimeNs;
         m_modifiers = other.m_modifiers;
+        m_cursor = other.m_cursor;
         m_events = std::move(other.m_events);
         m_text = std::move(other.m_text);
     }
@@ -544,6 +590,7 @@ Platform::~Platform() {
     ITH_ASSERT_MSG(state.windowCount.load(std::memory_order_relaxed) == 0,
                    "every Window must be destroyed before the Platform");
     state.wakeEventType.store(0);
+    destroyCursors();
     // SDL_Quit closes the windows and gamepads that are left, so none is alive afterwards.
     SDL_Quit();
     state.windowCount.store(0, std::memory_order_relaxed);
@@ -690,6 +737,44 @@ Expected<void> Platform::setClipboardText(std::string_view text) {
         return sdlError("platform.clipboard_failed", "the clipboard could not be written");
     }
     return {};
+}
+
+Expected<void> Platform::setCursor(CursorShape shape) {
+    assertUsable();
+    const auto index = static_cast<std::size_t>(shape);
+    ITH_ASSERT_MSG(index < kCursorShapeCount, "not a CursorShape");
+    if (index >= kCursorShapeCount) {
+        return makeError("platform.cursor_failed", "not a cursor shape");
+    }
+    if (shape == m_cursor && g_cursors[index] != nullptr) {
+        return {};
+    }
+    if (g_cursors[index] == nullptr) {
+        g_cursors[index] = SDL_CreateSystemCursor(systemCursor(shape));
+        if (g_cursors[index] == nullptr) {
+            return sdlError("platform.cursor_failed", "the system cursor could not be created");
+        }
+    }
+    if (!SDL_SetCursor(g_cursors[index])) {
+        return sdlError("platform.cursor_failed", "the cursor could not be set");
+    }
+    m_cursor = shape;
+    return {};
+}
+
+// NOLINTNEXTLINE(readability-make-member-function-const): showing the cursor is not a const operation
+Expected<void> Platform::setCursorVisible(bool visible) {
+    assertUsable();
+    if (!(visible ? SDL_ShowCursor() : SDL_HideCursor())) {
+        return sdlError("platform.cursor_failed",
+                        visible ? "the cursor could not be shown" : "the cursor could not be hidden");
+    }
+    return {};
+}
+
+bool Platform::cursorVisible() const {
+    assertUsable();
+    return SDL_CursorVisible();
 }
 
 std::string Platform::keyDisplayName(Key key) const {

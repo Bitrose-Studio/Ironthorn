@@ -782,6 +782,83 @@ void copyRoundTrip(Device& device, const TextureDesc& desc, std::uint32_t mip, s
     }
 }
 
+// Fills a texture through a whole-level upload, overwrites a rectangle of it with a second,
+// partial upload, and reads back the whole level and the rectangle alone: only the rectangle
+// changes, and the partial readback holds just its texels.
+void partialCopies(Device& device) {
+    constexpr std::uint32_t kSize = 16;
+    constexpr TexelRegion kRect{.x = 5, .y = 6, .width = 4, .height = 3};
+    constexpr std::uint64_t kRectOffset = std::uint64_t{kTextureCopyRowAlignment} * kSize;
+    constexpr std::uint64_t kBufferSize = kRectOffset * 2;
+    const BufferHandle upload = makeBuffer(device, BufferUsage::CopySrc, MemoryType::Upload, kBufferSize);
+    const BufferHandle readback = makeBuffer(device, BufferUsage::CopyDst, MemoryType::Readback, kBufferSize);
+    const TextureHandle texture = makeTexture(device, {.width = kSize,
+                                                       .height = kSize,
+                                                       .format = Format::R8G8B8A8Unorm,
+                                                       .usage = TextureUsage::CopySrc | TextureUsage::CopyDst,
+                                                       .debugName = "Partial updates"});
+    const std::span<std::byte> source = device.mappedMemory(upload);
+    std::memset(source.data(), 0x11, static_cast<std::size_t>(kRectOffset));
+    std::memset(source.data() + kRectOffset, 0xAB, static_cast<std::size_t>(kRectOffset));
+
+    if (!beginFrame(device)) {
+        return;
+    }
+    CommandList& list = device.openCommandList("Partial copies");
+    list.barrier(TextureBarrier{.texture = texture,
+                                .stagesAfter = PipelineStage::Copy,
+                                .accessAfter = Access::CopyWrite,
+                                .layoutBefore = TextureLayout::Undefined,
+                                .layoutAfter = TextureLayout::CopyDst});
+    list.copyBufferToTexture({.buffer = upload, .rowPitch = kTextureCopyRowAlignment, .texture = texture});
+    list.barrier(TextureBarrier{.texture = texture,
+                                .stagesBefore = PipelineStage::Copy,
+                                .accessBefore = Access::CopyWrite,
+                                .stagesAfter = PipelineStage::Copy,
+                                .accessAfter = Access::CopyWrite,
+                                .layoutBefore = TextureLayout::CopyDst,
+                                .layoutAfter = TextureLayout::CopyDst});
+    list.copyBufferToTexture({.buffer = upload,
+                              .bufferOffset = kRectOffset,
+                              .rowPitch = kTextureCopyRowAlignment,
+                              .texture = texture,
+                              .region = kRect});
+    list.barrier(TextureBarrier{.texture = texture,
+                                .stagesBefore = PipelineStage::Copy,
+                                .accessBefore = Access::CopyWrite,
+                                .stagesAfter = PipelineStage::Copy,
+                                .accessAfter = Access::CopyRead,
+                                .layoutBefore = TextureLayout::CopyDst,
+                                .layoutAfter = TextureLayout::CopySrc});
+    list.copyTextureToBuffer({.buffer = readback, .rowPitch = kTextureCopyRowAlignment, .texture = texture});
+    list.copyTextureToBuffer({.buffer = readback,
+                              .bufferOffset = kRectOffset,
+                              .rowPitch = kTextureCopyRowAlignment,
+                              .texture = texture,
+                              .region = kRect});
+    finish(device, list);
+
+    const std::span<const std::byte> result = device.mappedMemory(readback);
+    const auto byteAt = [&](std::uint64_t offset) { return std::to_integer<int>(result[offset]); };
+    for (std::uint32_t y = 0; y < kSize; ++y) {
+        for (std::uint32_t x = 0; x < kSize; ++x) {
+            CAPTURE(x);
+            CAPTURE(y);
+            const bool inside = x >= kRect.x && x < kRect.x + kRect.width && y >= kRect.y && y < kRect.y + kRect.height;
+            const std::uint64_t texel = std::uint64_t{y} * kTextureCopyRowAlignment + std::uint64_t{x} * 4;
+            for (std::uint64_t channel = 0; channel < 4; ++channel) {
+                CHECK(byteAt(texel + channel) == (inside ? 0xAB : 0x11));
+            }
+        }
+    }
+    for (std::uint32_t row = 0; row < kRect.height; ++row) {
+        CAPTURE(row);
+        for (std::uint64_t byte = 0; byte < kRect.width * 4; ++byte) {
+            CHECK(byteAt(kRectOffset + std::uint64_t{row} * kTextureCopyRowAlignment + byte) == 0xAB);
+        }
+    }
+}
+
 } // namespace
 
 TEST_SUITE("rhi_vulkan.textures") {
@@ -791,6 +868,14 @@ TEST_SUITE("rhi_vulkan.textures") {
             return;
         }
         discardThenClear(*device);
+    }
+
+    TEST_CASE("a partial upload changes only its rectangle, and a partial readback reads only it") {
+        std::optional<Device> device = makeDevice();
+        if (!device) {
+            return;
+        }
+        partialCopies(*device);
     }
 
     TEST_CASE("copies reach mip levels and layers beyond the first, 3D slices and both depth formats") {

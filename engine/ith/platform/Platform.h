@@ -1,7 +1,8 @@
 #pragma once
 
 // The platform layer: initialization, windows, the per-frame event pump with device input
-// (keyboard, text, mouse, gamepads), gamepad output and the clipboard (ADR-0012, ADR-0013).
+// (keyboard, text, mouse, gamepads), gamepad output, the clipboard and the cursor (ADR-0012,
+// ADR-0013).
 //
 //   ith::Expected<ith::Platform> platform = ith::Platform::create();
 //   if (!platform) {
@@ -36,6 +37,7 @@
 #include "ith/platform_events/Event.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -43,6 +45,31 @@
 #include <vector>
 
 namespace ith {
+
+// The operating system's cursor shapes (ADR-0012 rule 8), for Platform::setCursor().
+enum class CursorShape : std::uint8_t {
+    Arrow,
+    // An I-beam, over editable text.
+    TextInput,
+    // Moving something in every direction.
+    ResizeAll,
+    // Resizing along one axis or diagonal: up-down, left-right, up-right to down-left, up-left to
+    // down-right.
+    ResizeNorthSouth,
+    ResizeEastWest,
+    ResizeNorthEastSouthWest,
+    ResizeNorthWestSouthEast,
+    // A pointing hand, over links and buttons that act at once.
+    Hand,
+    NotAllowed,
+    // Busy; Progress is busy while the user may still work.
+    Wait,
+    Progress,
+    Crosshair,
+};
+
+// The number of CursorShape values.
+inline constexpr std::size_t kCursorShapeCount = 12;
 
 struct PlatformDesc {
     // The video driver to use: "windows", "wayland", "x11", or "offscreen", which needs no
@@ -131,6 +158,25 @@ public:
     // clipboard holds C strings, so the text would be cut there).
     Expected<void> setClipboardText(std::string_view text);
 
+    // Sets the mouse cursor's shape over every window of the application. Setting the current
+    // shape again does nothing. Fails with "platform.cursor_failed" and the library's message
+    // when the video driver has no system cursors (the "offscreen" driver); the cursor then keeps
+    // its shape.
+    //
+    // Precondition (asserted): called on the main thread.
+    Expected<void> setCursor(CursorShape shape);
+
+    // The shape of the last setCursor() that succeeded; Arrow before the first.
+    [[nodiscard]] CursorShape cursor() const { return m_cursor; }
+
+    // Shows or hides the mouse cursor over the application's windows; relative mouse mode hides
+    // it on its own (Window::setRelativeMouseMode). Fails with "platform.cursor_failed" and the
+    // library's message.
+    //
+    // Precondition (asserted): called on the main thread.
+    Expected<void> setCursorVisible(bool visible);
+    [[nodiscard]] bool cursorVisible() const;
+
     // The name of a physical key in the user's keyboard layout, for showing bindings: "Z" for
     // Key::W on AZERTY, "Left Shift" for Key::LeftShift. Empty for Key::None and keys the layout
     // doesn't have. English for keys that print nothing; the UI may translate those by Key.
@@ -171,6 +217,7 @@ private:
     std::uint64_t m_pumpTimeNs = 0;
     // The modifiers of the latest key event pumped, for the mouse events after it.
     KeyModifiers m_modifiers = KeyModifiers::None;
+    CursorShape m_cursor = CursorShape::Arrow;
     std::vector<Event> m_events;
     // The text of this frame's events, which their `text` views point into.
     std::string m_text;

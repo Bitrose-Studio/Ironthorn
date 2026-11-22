@@ -369,9 +369,9 @@ void D3D12CommandList::copyLocations(const BufferTextureCopy& copy, D3D12_TEXTUR
     buffer.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
     buffer.PlacedFootprint.Offset = copy.bufferOffset;
     buffer.PlacedFootprint.Footprint = {.Format = record.copyFormat,
-                                        .Width = mipSize(record.width, copy.mipLevel),
-                                        .Height = mipSize(record.height, copy.mipLevel),
-                                        .Depth = mipSize(record.depth, copy.mipLevel),
+                                        .Width = copy.region.width,
+                                        .Height = copy.region.height,
+                                        .Depth = copy.region.depth,
                                         .RowPitch = copy.rowPitch};
 }
 
@@ -379,14 +379,27 @@ void D3D12CommandList::copyBufferToTexture(const BufferTextureCopy& copy) {
     D3D12_TEXTURE_COPY_LOCATION texture{};
     D3D12_TEXTURE_COPY_LOCATION buffer{};
     copyLocations(copy, texture, buffer);
-    m_list->CopyTextureRegion(&texture, 0, 0, 0, &buffer, nullptr);
+    m_list->CopyTextureRegion(&texture, copy.region.x, copy.region.y, copy.region.z, &buffer, nullptr);
 }
 
 void D3D12CommandList::copyTextureToBuffer(const BufferTextureCopy& copy) {
     D3D12_TEXTURE_COPY_LOCATION texture{};
     D3D12_TEXTURE_COPY_LOCATION buffer{};
     copyLocations(copy, texture, buffer);
-    m_list->CopyTextureRegion(&buffer, 0, 0, 0, &texture, nullptr);
+    // A null box copies the whole subresource, which depth formats require (they copy only
+    // whole levels).
+    const TextureRecord& record = m_backend->texture(copy.texture);
+    const TexelRegion& region = copy.region;
+    const bool wholeLevel =
+        region.x == 0 && region.y == 0 && region.z == 0 && region.width == mipSize(record.width, copy.mipLevel) &&
+        region.height == mipSize(record.height, copy.mipLevel) && region.depth == mipSize(record.depth, copy.mipLevel);
+    const D3D12_BOX box{.left = region.x,
+                        .top = region.y,
+                        .front = region.z,
+                        .right = region.x + region.width,
+                        .bottom = region.y + region.height,
+                        .back = region.z + region.depth};
+    m_list->CopyTextureRegion(&buffer, 0, 0, 0, &texture, wholeLevel ? nullptr : &box);
 }
 
 void D3D12CommandList::beginMarker(std::string_view name) {

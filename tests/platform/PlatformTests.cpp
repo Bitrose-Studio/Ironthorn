@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <ostream> // doctest prints std::string_view operands through it
@@ -251,6 +252,30 @@ TEST_CASE("The clipboard round-trips UTF-8 text") {
     // Empty text empties the clipboard.
     REQUIRE(platform.setClipboardText("").hasValue());
     CHECK(platform.clipboardText().empty());
+}
+
+TEST_CASE("Cursor shapes are set where the driver has them, and the cursor shows and hides") {
+    ith::Platform platform = createHeadless();
+    const ith::Window window = createWindow(platform);
+    CHECK(platform.cursor() == ith::CursorShape::Arrow);
+    // The offscreen driver has no system cursors: setting one fails and keeps the shape. A driver
+    // with them takes every shape.
+    for (std::size_t index = 0; index < ith::kCursorShapeCount; ++index) {
+        const auto shape = static_cast<ith::CursorShape>(index);
+        CAPTURE(index);
+        const ith::Expected<void> set = platform.setCursor(shape);
+        if (set) {
+            CHECK(platform.cursor() == shape);
+        } else {
+            CHECK(set.error().code == "platform.cursor_failed");
+            CHECK_FALSE(set.error().message.empty());
+            CHECK(platform.cursor() == ith::CursorShape::Arrow);
+        }
+    }
+    REQUIRE(platform.setCursorVisible(false).hasValue());
+    CHECK_FALSE(platform.cursorVisible());
+    REQUIRE(platform.setCursorVisible(true).hasValue());
+    CHECK(platform.cursorVisible());
 }
 
 TEST_CASE("A moved Platform keeps working") {

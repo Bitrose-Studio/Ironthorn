@@ -108,6 +108,12 @@ device->destroy(*swapchain); // before the window
   images under new handles; if that fails, it returns the error, the old images are stale, and
   the next `beginFrame()` tries again. A zero size, as for a minimized window, makes
   `beginFrame()` draw nothing. `Frame::backbuffer` is valid only until `endFrame()`.
+- **Texture copies** move buffer data into or out of a box of one mip level and layer
+  (`BufferTextureCopy::region`, a `TexelRegion`), with rows `kTextureCopyRowAlignment` (256)
+  bytes aligned and the data at a `kTextureCopyOffsetAlignment` (512) offset, the stricter
+  Direct3D 12 rules. A zero extent reaches to the end of the level, so the default region is the
+  whole level; a font atlas updates only its changed rectangles. Depth formats copy whole levels
+  only, as Direct3D 12 requires.
 - **Mapped memory** of Upload and Readback buffers is persistent and host-coherent, and valid
   until the buffer's `destroy()`.
 - **Errors** are `rhi::Error` with an `ErrorCode` and a message; `codeName()` gives the stable
@@ -339,11 +345,11 @@ versions in `cmake/IronthornDependencies.cmake`. `createVulkanDevice()`
 `tests/rhi_d3d12` (CTest name `rhi_d3d12`, label `gpu`, Windows only) runs devices, resources,
 deferred destruction, clears read back from a render target, discarded render targets (also
 under GPU-based validation when validation is on), copy round trips through buffers and through
-textures at deeper mips, layers, 3D slices and both depth formats, lists recorded on several
-threads while others create and destroy resources, a swapchain on a hidden window, device loss
-and failed timeline signals and, when the tools are built, compute and draw pipelines compiled
-from Slang at run time. It uses WARP, so it runs on hosted CI runners, with validation on. Two
-environment variables change that:
+textures at deeper mips, layers, 3D slices and both depth formats, a partial upload and readback of
+a rectangle, lists recorded on several threads while others create and destroy resources, a
+swapchain on a hidden window, device loss and failed timeline signals and, when the tools are
+built, compute and draw pipelines compiled from Slang at run time. It uses WARP, so it runs on
+hosted CI runners, with validation on. Two environment variables change that:
 
 - `ITH_RHI_TEST_ADAPTER=hardware` runs it on the fastest hardware GPU;
 - `ITH_RHI_TEST_VALIDATION=off` runs it without the debug layer, on a machine without Graphics

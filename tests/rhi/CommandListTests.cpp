@@ -337,6 +337,40 @@ TEST_SUITE("rhi.command_list_checks") {
         endFrame(device);
     }
 
+    TEST_CASE("a texel region lies inside its mip level, its data in the buffer, and depth copies are whole") {
+        NullGpu gpu;
+        Device device = makeDevice(gpu);
+        const BufferHandle source = makeBuffer(device, BufferUsage::CopySrc, MemoryType::Upload, 8192);
+        const TextureHandle color = makeTexture(device, TextureUsage::CopyDst, Format::R8G8B8A8Unorm, 64);
+        const TextureHandle depth =
+            makeTexture(device, TextureUsage::DepthStencil | TextureUsage::CopyDst, Format::D32Float, 8);
+        beginFrame(device);
+        CommandList& list = device.openCommandList("Regions");
+        const ith::test::AssertCapture capture;
+        const auto copy = [&](TextureHandle texture, const TexelRegion& region, std::uint64_t offset = 0) {
+            list.copyBufferToTexture(
+                {.buffer = source, .bufferOffset = offset, .rowPitch = 256, .texture = texture, .region = region});
+        };
+        copy(color, {.x = 60, .width = 8});           // past the right edge
+        copy(color, {.x = 64});                       // starts at the edge: nothing left
+        copy(color, {.y = 10, .height = 60});         // past the bottom
+        copy(color, {.z = 1});                        // a 2D texture has one slice
+        copy(color, {.depth = 2});                    // likewise
+        copy(color, {.width = 4, .height = 4}, 7680); // the rows run past the buffer
+        copy(depth, {.width = 4});                    // part of a depth level
+        copy(depth, {.x = 1});                        // likewise
+        CHECK(capture.count() == 8);
+        CHECK(gpu.commandCount() == 0);
+        copy(color, {.x = 8, .y = 8, .width = 16, .height = 16});             // a rectangle inside
+        copy(color, {.x = 32, .y = 32});                                      // from an offset to the end
+        copy(color, {.x = 0, .y = 63, .width = 64, .height = 1, .depth = 1}); // the last row
+        copy(depth, {});                                                      // a whole depth level
+        CHECK(capture.count() == 8);
+        CHECK(gpu.commandCount() == 4);
+        REQUIRE(device.submit(list).hasValue());
+        endFrame(device);
+    }
+
     TEST_CASE("recording into a submitted list and submitting it twice are asserted") {
         NullGpu gpu;
         Device device = makeDevice(gpu);

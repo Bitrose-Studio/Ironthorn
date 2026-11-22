@@ -73,9 +73,14 @@ while (running) {
   Window handles live as long as the `Window`, display connections as long as the `Platform`.
 - **On Wayland a window appears only once something is presented to it**, so a window without a
   renderer (such as `window_player`'s today) stays invisible there.
+- **Cursor.** `Platform::setCursor(CursorShape)` sets one of the system shapes (arrow, text,
+  resize, hand, not allowed, wait, progress, crosshair) over every window, and
+  `setCursorVisible()` shows or hides it. Shapes are created on first use and kept until the
+  `Platform` goes. The `offscreen` driver has no system cursors, so `setCursor` fails there with
+  `platform.cursor_failed` and the shape stays; callers such as the editor UI ignore that.
 - **Errors** from SDL are `ith::Expected` errors with stable codes (`platform.init_failed`,
   `platform.window_failed`, `platform.clipboard_failed`, `platform.relative_mouse_failed`,
-  `platform.text_input_failed`) and SDL's message. Reading the clipboard
+  `platform.text_input_failed`, `platform.cursor_failed`) and SDL's message. Reading the clipboard
   returns an empty string when there is no text or it can't be read.
 
 ## Video drivers
@@ -140,8 +145,8 @@ platform test it runs through CTest on the offscreen driver, never on a desktop.
 
 ## Not here yet
 
-- **Cursor shapes and file dialogs**: cursors with the editor shell's UI, file dialogs with the
-  editor.
+- **Custom cursor images and file dialogs**: custom images when a tool needs one, file dialogs
+  with the editor.
 - **Gyro, accelerometer and touchpad** of gamepads, and **touch and pen** (with Android).
 - **Popup windows, fullscreen, position, minimize and maximize calls**: with the editor shell.
 - **Routing SDL's allocations** to the engine allocator, and handling mobile lifecycle events in

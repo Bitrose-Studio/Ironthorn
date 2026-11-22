@@ -132,6 +132,7 @@ public:
     virtual void dispatchIndirect(BufferHandle arguments, std::uint64_t offset) = 0;
     virtual void copyBuffer(BufferHandle source, std::uint64_t sourceOffset, BufferHandle destination,
                             std::uint64_t destinationOffset, std::uint64_t size) = 0;
+    // The copy's region has explicit extents: CommandList replaced the zero ones.
     virtual void copyBufferToTexture(const BufferTextureCopy& copy) = 0;
     virtual void copyTextureToBuffer(const BufferTextureCopy& copy) = 0;
     virtual void beginMarker(std::string_view name) = 0;

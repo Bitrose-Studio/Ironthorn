@@ -121,22 +121,39 @@ struct DispatchIndirectArguments {
 inline constexpr std::uint32_t kTextureCopyRowAlignment = 256;
 inline constexpr std::uint32_t kTextureCopyOffsetAlignment = 512;
 
-// Copies between buffer data and one whole mip level of one array layer of a texture, in either
-// direction (CommandList::copyBufferToTexture(), CommandList::copyTextureToBuffer()).
+// A box of texels inside one mip level of a texture, for copies. A zero extent reaches from the
+// offset to the end of the level in that dimension, so the default box is the whole level. z and
+// depth select slices of a 3D texture; other textures have one slice (z 0, depth 0 or 1).
+struct TexelRegion {
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+    std::uint32_t z = 0;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t depth = 0;
+};
+
+// Copies between buffer data and a box of texels of one mip level of one array layer of a
+// texture, in either direction (CommandList::copyBufferToTexture(),
+// CommandList::copyTextureToBuffer()). The buffer holds the box's rows `rowPitch` bytes apart,
+// and the slices of a 3D box one after another.
 struct BufferTextureCopy {
     // A buffer with BufferUsage::CopySrc when it is the source, BufferUsage::CopyDst when it is
     // the destination.
     BufferHandle buffer;
     // A multiple of kTextureCopyOffsetAlignment.
     std::uint64_t bufferOffset = 0;
-    // Bytes from one row of texels to the next: at least width * texel size and a multiple of
-    // kTextureCopyRowAlignment. Rows of a 3D texture's slices follow each other.
+    // Bytes from one row of texels to the next: at least the box's width * texel size and a
+    // multiple of kTextureCopyRowAlignment.
     std::uint32_t rowPitch = 0;
     // A texture with TextureUsage::CopyDst in TextureLayout::CopyDst when it is the destination,
     // TextureUsage::CopySrc in TextureLayout::CopySrc when it is the source.
     TextureHandle texture;
     std::uint32_t mipLevel = 0;
     std::uint32_t layer = 0;
+    // The texels copied, inside the level; the default is the whole level. Depth formats copy
+    // whole levels only, as Direct3D 12 does.
+    TexelRegion region;
 };
 
 class CommandList {
@@ -214,11 +231,13 @@ public:
     // buffers.
     void copyBuffer(BufferHandle source, std::uint64_t sourceOffset, BufferHandle destination,
                     std::uint64_t destinationOffset, std::uint64_t size);
-    // Preconditions: not rendering; see BufferTextureCopy; the data lies inside the buffer.
+    // Copies buffer data into a box of a texture's mip level and layer: a whole level, or a
+    // changed rectangle of it (a font atlas update). Preconditions: not rendering; see
+    // BufferTextureCopy; the data lies inside the buffer.
     void copyBufferToTexture(const BufferTextureCopy& copy);
-    // Copies a texture's mip level and layer into the buffer, laid out as copyBufferToTexture()
-    // reads it, e.g. into a Readback buffer to check rendered pixels. Preconditions: as
-    // copyBufferToTexture(), with the roles of source and destination swapped.
+    // Copies a box of a texture's mip level and layer into the buffer, laid out as
+    // copyBufferToTexture() reads it, e.g. into a Readback buffer to check rendered pixels.
+    // Preconditions: as copyBufferToTexture(), with the roles of source and destination swapped.
     void copyTextureToBuffer(const BufferTextureCopy& copy);
 
     // Opens and closes a named region for GPU debuggers and profilers. Markers nest, and every

@@ -3,6 +3,7 @@
 #include "ith/foundation/Assert.h"
 #include "ith/rhi/Backend.h"
 #include "ith/rhi/DeviceState.h"
+#include "ith/rhi/Format.h"
 #include "ith/rhi/Pipeline.h"
 
 #include <algorithm>
@@ -20,7 +21,7 @@ bool check(bool condition, [[maybe_unused]] const char* message) {
     return condition;
 }
 
-[[maybe_unused]] std::uint32_t mipSize(std::uint32_t size, std::uint32_t mip) {
+std::uint32_t mipSize(std::uint32_t size, std::uint32_t mip) {
     return std::max(1u, size >> mip);
 }
 
@@ -331,6 +332,49 @@ void CommandList::copyBuffer(BufferHandle source, std::uint64_t sourceOffset, Bu
 
 namespace {
 
+// The extents of mip level `mip` of a texture: width, height and depth (the slices of a 3D
+// texture, 1 otherwise).
+struct LevelSize {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t depth = 0;
+};
+
+LevelSize levelSize(const detail::TextureSlot& texture, std::uint32_t mip) {
+    return {.width = mipSize(texture.width, mip),
+            .height = mipSize(texture.height, mip),
+            .depth = texture.dimension == TextureDimension::Texture3D ? mipSize(texture.depth, mip) : 1u};
+}
+
+// `region` with each zero extent replaced by the rest of the level from the offset; an offset at or
+// past the end of the level gives a zero extent, which the checks refuse.
+TexelRegion resolvedRegion(const TexelRegion& region, const LevelSize& level) {
+    const auto extent = [](std::uint32_t offset, std::uint32_t size, std::uint32_t levelExtent) {
+        if (size != 0) {
+            return size;
+        }
+        return offset < levelExtent ? levelExtent - offset : 0u;
+    };
+    return {.x = region.x,
+            .y = region.y,
+            .z = region.z,
+            .width = extent(region.x, region.width, level.width),
+            .height = extent(region.y, region.height, level.height),
+            .depth = extent(region.z, region.depth, level.depth)};
+}
+
+// Whether [offset, offset + size) is a non-empty range inside [0, extent).
+[[maybe_unused]] bool spanInside(std::uint32_t offset, std::uint32_t size, std::uint32_t extent) {
+    return size != 0 && offset < extent && size <= extent - offset;
+}
+
+// The copy as the backends take it: its region with explicit extents.
+BufferTextureCopy resolved(const detail::DeviceState& device, const BufferTextureCopy& copy) {
+    BufferTextureCopy result = copy;
+    result.region = resolvedRegion(copy.region, levelSize(device.textures.data(copy.texture.index()), copy.mipLevel));
+    return result;
+}
+
 // The checks of a copy between buffer data and a texture, in either direction; false when the
 // copy must be dropped.
 [[maybe_unused]] bool textureCopyValid(const detail::DeviceState& device, const BufferTextureCopy& copy,
@@ -350,11 +394,18 @@ namespace {
                "a texture copy names a mip level and layer of the texture")) {
         return false;
     }
-    const std::uint64_t rowBytes =
-        static_cast<std::uint64_t>(mipSize(texture.width, copy.mipLevel)) * formatTexelSize(texture.format);
-    const std::uint64_t rows =
-        static_cast<std::uint64_t>(mipSize(texture.height, copy.mipLevel)) *
-        (texture.dimension == TextureDimension::Texture3D ? mipSize(texture.depth, copy.mipLevel) : 1);
+    const LevelSize level = levelSize(texture, copy.mipLevel);
+    const TexelRegion region = resolvedRegion(copy.region, level);
+    if (!check(spanInside(region.x, region.width, level.width) && spanInside(region.y, region.height, level.height) &&
+                   spanInside(region.z, region.depth, level.depth),
+               "a texture copy's region lies inside the mip level") ||
+        !check(!isDepthFormat(texture.format) ||
+                   (region.x == 0 && region.y == 0 && region.width == level.width && region.height == level.height),
+               "a texture copy of a depth format covers the whole mip level")) {
+        return false;
+    }
+    const std::uint64_t rowBytes = static_cast<std::uint64_t>(region.width) * formatTexelSize(texture.format);
+    const std::uint64_t rows = static_cast<std::uint64_t>(region.height) * region.depth;
     return check(copy.rowPitch >= rowBytes && copy.rowPitch % kTextureCopyRowAlignment == 0,
                  "a texture copy's row pitch covers a row and is a multiple of kTextureCopyRowAlignment") &&
            check(copy.bufferOffset % kTextureCopyOffsetAlignment == 0,
@@ -374,7 +425,7 @@ void CommandList::copyBufferToTexture(const BufferTextureCopy& copy) {
             return;
         }
     }
-    m_backend->copyBufferToTexture(copy);
+    m_backend->copyBufferToTexture(resolved(*m_device, copy));
 }
 
 void CommandList::copyTextureToBuffer(const BufferTextureCopy& copy) {
@@ -387,7 +438,7 @@ void CommandList::copyTextureToBuffer(const BufferTextureCopy& copy) {
             return;
         }
     }
-    m_backend->copyTextureToBuffer(copy);
+    m_backend->copyTextureToBuffer(resolved(*m_device, copy));
 }
 
 void CommandList::beginMarker(std::string_view name) {
