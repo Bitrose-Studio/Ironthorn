@@ -85,7 +85,16 @@
 //   world.forEachRoot([](ith::Entity root) { }); // the roots, in order
 //   world.despawnRecursive(car);                 // the car and everything below it
 //
-// Not yet here (ADR-0014 slice 6): change ticks.
+// Change detection (ADR-0014 rule 9): every component value has an added tick and a changed tick.
+// The World keeps a 32-bit tick that each system run moves on by one. Spawning or adding a value
+// stamps both ticks; replacing it through add stamps its changed tick; and every mutable access
+// stamps the changed tick, whether the caller writes or not: get<T> with a non-const T, the
+// non-const get(entity, type), the non-const forEachComponent, a written query term, and
+// HookContext::value<T> with a non-const T. Reading through const access stamps nothing.
+// Resources have no ticks. Systems (Schedule.h) read the ticks with the query filters ith::Added
+// and ith::Changed, which keep the values added or changed since that system last ran on this
+// World. Ticks are compared relative to the current tick and old ones are clamped periodically, so
+// the 32-bit wraparound never makes an old value look new.
 
 #include "ith/ecs/Archetype.h"
 #include "ith/ecs/Commands.h"
@@ -118,10 +127,20 @@ namespace ith {
 class HookContext;
 class World;
 
-// Writes every WorldTransform of the world (TransformPropagation.h).
+// Writes the WorldTransforms of the world that changes made stale (TransformPropagation.h).
 void propagateTransforms(World& world);
 
 namespace detail {
+
+// Propagation within the current run's tick window (TransformPropagation.cpp).
+void propagateChangedTransforms(World& world);
+
+// The steps of propagateChangedTransforms, with access to the World (TransformPropagation.cpp).
+struct TransformPropagation;
+
+// For tests only: sets the world's tick, so that tests can cross the 32-bit wraparound.
+// Precondition: the world has no entities and no system has run on it.
+void setChangeTickForTesting(World& world, std::uint32_t tick);
 
 // Destroys a resource value through its record and frees its aligned memory.
 struct ResourceDelete {
@@ -193,7 +212,7 @@ public:
 
     // The entity's T, or null when the entity is stale or has no T. The pointer is valid until
     // the next structural change of this world. get<const T> gives read-only access; a non-const
-    // T of an immutable type asserts and gives null.
+    // T marks the value changed, and a non-const T of an immutable type asserts and gives null.
     template <typename T>
     [[nodiscard]] T* get(Entity entity);
     template <typename T>
@@ -221,9 +240,10 @@ public:
 
     // A query over the entities that have every component type in Terms; see Query.h. Terms
     // are distinct component types, `const T` to read and `T` to write, and filters, With<T>,
-    // Without<T> and IncludeDisabled, which the returned Query leaves out of its terms. Disabled
-    // entities are skipped unless the query asks for them. A writable term of an immutable type
-    // asserts, and the query visits nothing.
+    // Without<T>, IncludeDisabled, Added<T> and Changed<T>, which the returned Query leaves out of
+    // its terms. Disabled entities are skipped unless the query asks for them. A writable term of
+    // an immutable type asserts, and the query visits nothing. Added and Changed work only while a
+    // system runs.
     template <typename... Terms>
     [[nodiscard]] detail::QueryOf<Terms...> query();
 
@@ -236,8 +256,8 @@ public:
     [[nodiscard]] bool has(Entity entity, const TypeInfo& type) const;
 
     // The entity's value of `type`, or null when the entity is stale or has none. The pointer is
-    // valid until the next structural change of this world. The non-const form asserts and gives
-    // null for an immutable type; read it through a const World.
+    // valid until the next structural change of this world. The non-const form marks the value
+    // changed; it asserts and gives null for an immutable type, which is read through a const World.
     [[nodiscard]] void* get(Entity entity, const TypeInfo& type);
     [[nodiscard]] const void* get(Entity entity, const TypeInfo& type) const;
 
@@ -259,7 +279,8 @@ public:
     // Calls `function(const TypeInfo& type, void* value)` for each component of the entity, in an
     // unspecified order that is stable while its set of component types stays the same; nothing
     // for a stale handle. Structural changes inside `function` are refused, as in a query. The
-    // non-const form skips immutable components, asserting; the const form, with
+    // non-const form marks each value it visits changed and skips immutable components, asserting;
+    // the const form, with
     // `function(const TypeInfo&, const void*)`, visits every component.
     template <typename Function>
     void forEachComponent(Entity entity, Function&& function);
@@ -312,8 +333,38 @@ public:
 
 private:
     friend class Commands;
+    friend class HookContext;
     friend class Schedule;
     friend void propagateTransforms(World& world);
+    friend struct detail::TransformPropagation;
+    friend void detail::setChangeTickForTesting(World& world, std::uint32_t tick);
+
+    // The run key of propagateTransforms called directly; Schedule gives its systems keys from 1.
+    static constexpr std::uint64_t kDirectPropagationKey = 0;
+
+    // Starts a run of the system with `key`: its window is (its last run on this world, the current
+    // tick]; a first run sees every tick. Returns the clock to restore. A run inside another run
+    // (propagateTransforms in a system) shares the outer run's tick.
+    detail::ChangeClock beginRun(std::uint64_t key);
+
+    // Ends the run that beginRun started: records it as the system's last run, restores `outer`,
+    // and, unless it was nested, moves the tick on and clamps old ticks when it is time.
+    void endRun(std::uint64_t key, const detail::ChangeClock& outer);
+
+    // Clamps every tick older than kMaxChangeAge (Query.h), last runs included.
+    void clampTicks();
+
+    // findComponent that also stamps the value's changed tick.
+    [[nodiscard]] void* writeComponent(Entity entity, detail::ComponentIndex type) noexcept;
+
+    // Stamps the changed tick of the entity's `type` value, if it has one.
+    void markChanged(Entity entity, detail::ComponentIndex type) noexcept;
+
+    // After an entity loses its parent or its LocalTransform, which leaves no tick, gives
+    // propagation a tick to find: the entity's ChildOf when it `keepsParent`, else its
+    // LocalTransform when it `keepsLocal` one. Otherwise the entity is now a root without a
+    // LocalTransform: its WorldTransform becomes the identity, and its children's ChildOf is stamped.
+    void markPlacementChanged(Entity entity, bool keepsParent, bool keepsLocal) noexcept;
 
     // No slot: the end of the root list.
     static constexpr std::uint32_t kNoSlot = 0xFFFFFFFFu;
@@ -416,7 +467,9 @@ private:
     // The cached state of a typed query; `refused` makes a new state match nothing.
     detail::QueryState& queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms,
                                    std::span<const detail::ComponentIndex> with,
-                                   std::span<const detail::ComponentIndex> without, bool includeDisabled, bool refused);
+                                   std::span<const detail::ComponentIndex> without, bool includeDisabled, bool refused,
+                                   std::span<const detail::ComponentIndex> added,
+                                   std::span<const detail::ComponentIndex> changed);
 
     // The memory where insertResource constructs the value: the old value's memory, destroyed, or
     // new uninitialized memory. Null when `type` is not a resource type.
@@ -466,6 +519,7 @@ private:
     static void onChildOfRemove(HookContext& context);
     static void onDisabledAdd(HookContext& context);
     static void onDisabledRemove(HookContext& context);
+    static void onLocalTransformRemove(HookContext& context);
     static bool setHierarchyHooks();
 
     std::uint8_t m_id;
@@ -501,6 +555,10 @@ private:
     bool m_clearing = false; // clear() runs removal hooks
     bool m_spawning = false; // a spawn runs its hooks
     Placement m_placement;   // between a ChildOf's onAdd or onReplace and the hook after it
+    // Change detection: the clock, the tick of the last clamp, and each system's last run by key.
+    detail::ChangeClock m_clock;
+    std::uint32_t m_lastTickCheck = 0;
+    std::unordered_map<std::uint64_t, std::uint32_t> m_lastRuns;
 };
 
 template <typename Function>
@@ -581,8 +639,10 @@ T* World::get(Entity entity) {
         if (detail::isImmutableComponent<T>() && !detail::isWritableComponent(typeOf<T>())) {
             return nullptr;
         }
+        return static_cast<T*>(writeComponent(entity, detail::componentIndexOf<T>()));
+    } else {
+        return static_cast<T*>(findComponent(entity, detail::componentIndexOf<std::remove_const_t<T>>()));
     }
-    return static_cast<T*>(findComponent(entity, detail::componentIndexOf<std::remove_const_t<T>>()));
 }
 
 template <typename T>
@@ -626,15 +686,23 @@ detail::QueryOf<Terms...> World::query() {
     std::array<detail::ComponentIndex, kCount> terms{};
     std::array<detail::ComponentIndex, kCount> with{};
     std::array<detail::ComponentIndex, kCount> without{};
+    std::array<detail::ComponentIndex, kCount> added{};
+    std::array<detail::ComponentIndex, kCount> changed{};
     std::size_t termCount = 0;
     std::size_t withCount = 0;
     std::size_t withoutCount = 0;
+    std::size_t addedCount = 0;
+    std::size_t changedCount = 0;
     // A writable term of an immutable type refuses the query. Immutability never changes, so the
     // cached state of this query type matches nothing for good.
     bool writesImmutable = false;
     const auto sort = [&]<typename Term> {
         if constexpr (detail::kIsIncludeDisabled<Term>) {
             return; // names no component
+        } else if constexpr (detail::kIsAdded<Term>) {
+            added[addedCount++] = detail::componentIndexOf<typename detail::ChangeFilterComponent<Term>::Type>();
+        } else if constexpr (detail::kIsChanged<Term>) {
+            changed[changedCount++] = detail::componentIndexOf<typename detail::ChangeFilterComponent<Term>::Type>();
         } else if constexpr (detail::kIsWith<Term>) {
             with[withCount++] = detail::componentIndexOf<detail::TermComponentT<Term>>();
         } else if constexpr (detail::kIsWithout<Term>) {
@@ -650,10 +718,11 @@ detail::QueryOf<Terms...> World::query() {
     };
     (sort.template operator()<Terms>(), ...);
     constexpr bool kIncludeDisabled = (detail::kIsIncludeDisabled<Terms> || ...);
-    detail::QueryState& state = queryState(detail::typeListSlot<Terms...>(), std::span(terms.data(), termCount),
-                                           std::span(with.data(), withCount), std::span(without.data(), withoutCount),
-                                           kIncludeDisabled, writesImmutable);
-    return detail::QueryOf<Terms...>(state, m_archetypes, m_iterationDepth);
+    detail::QueryState& state =
+        queryState(detail::typeListSlot<Terms...>(), std::span(terms.data(), termCount),
+                   std::span(with.data(), withCount), std::span(without.data(), withoutCount), kIncludeDisabled,
+                   writesImmutable, std::span(added.data(), addedCount), std::span(changed.data(), changedCount));
+    return detail::QueryOf<Terms...>(state, m_archetypes, m_iterationDepth, m_clock);
 }
 
 template <typename Function>
@@ -671,6 +740,7 @@ void World::forEachComponent(Entity entity, Function&& function) {
     for (std::size_t column = 0; column < types.size(); ++column) {
         const TypeInfo& type = detail::componentType(types[column]);
         if (detail::isWritableComponent(type)) {
+            archetype.column(column).ticks(row).changed = m_clock.tick;
             function(type, archetype.column(column).at(row));
         }
     }

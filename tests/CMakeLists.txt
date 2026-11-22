@@ -434,6 +434,7 @@ ith_reflect_target(ith_test_ecs_components
 
 ith_add_test_suite(ecs
     SOURCES
+        ecs/ChangeDetectionTests.cpp
         ecs/CommandTests.cpp
         ecs/ConcurrencyTests.cpp
         ecs/DynamicAccessTests.cpp

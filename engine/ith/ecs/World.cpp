@@ -181,7 +181,7 @@ std::uint32_t World::placeReserved(Entity entity, detail::ArchetypeIndex archety
     EntityRecord& record = m_records[entity.index()];
     ITH_ASSERT(record.archetype == detail::kNoArchetype && record.generation == entity.generation());
     record.archetype = archetype;
-    record.row = m_archetypes[archetype]->pushRow(entity);
+    record.row = m_archetypes[archetype]->pushRow(entity, m_clock.tick);
     ++m_entityCount;
     linkRoot(entity.index(), kNoSlot); // a ChildOf among its components takes it out again
     return record.row;
@@ -226,7 +226,8 @@ detail::ArchetypeIndex World::findOrCreateArchetype(std::span<const detail::Comp
 void World::moveEntity(EntityRecord& record, detail::ArchetypeIndex target) {
     detail::Archetype& from = *m_archetypes[record.archetype];
     detail::Archetype& to = *m_archetypes[target];
-    const std::uint32_t row = to.pushRow(from.entities()[record.row]);
+    // The ticks of the values that move along are copied; a new value gets the current tick.
+    const std::uint32_t row = to.pushRow(from.entities()[record.row], m_clock.tick);
     const Entity moved = from.moveRow(record.row, to, row);
     if (!moved.isNull()) {
         m_records[moved.index()].row = record.row;
@@ -450,6 +451,11 @@ void World::finishAdd(Entity entity, detail::ComponentIndex type, bool added) {
     const EntityRecord& record = *findRecord(entity);
     detail::Archetype& archetype = *m_archetypes[record.archetype];
     const std::size_t column = archetype.columnOf(type);
+    detail::ChangeTicks& ticks = archetype.column(column).ticks(record.row);
+    ticks.changed = m_clock.tick;
+    if (added) {
+        ticks.added = m_clock.tick;
+    }
     if (archetype.hooks(column) == nullptr) {
         return; // no hook ran, onReplace included
     }
@@ -468,6 +474,82 @@ void* World::findComponent(Entity entity, detail::ComponentIndex type) const noe
     detail::Archetype& archetype = *m_archetypes[record->archetype];
     const std::size_t column = archetype.columnOf(type);
     return column != detail::Archetype::kNoColumn ? archetype.column(column).at(record->row) : nullptr;
+}
+
+void* World::writeComponent(Entity entity, detail::ComponentIndex type) noexcept {
+    const EntityRecord* record = findRecord(entity);
+    if (record == nullptr) {
+        return nullptr;
+    }
+    detail::Archetype& archetype = *m_archetypes[record->archetype];
+    const std::size_t column = archetype.columnOf(type);
+    if (column == detail::Archetype::kNoColumn) {
+        return nullptr;
+    }
+    archetype.column(column).ticks(record->row).changed = m_clock.tick;
+    return archetype.column(column).at(record->row);
+}
+
+void World::markChanged(Entity entity, detail::ComponentIndex type) noexcept {
+    static_cast<void>(writeComponent(entity, type));
+}
+
+void World::markPlacementChanged(Entity entity, bool keepsParent, bool keepsLocal) noexcept {
+    if (keepsParent) {
+        markChanged(entity, detail::componentIndexOf<ChildOf>());
+        return;
+    }
+    if (keepsLocal && has<LocalTransform>(entity)) {
+        markChanged(entity, detail::componentIndexOf<LocalTransform>());
+        return;
+    }
+    // A root without a LocalTransform: its world matrix is the identity, as propagation would
+    // write, and its children start from it.
+    if (auto* world =
+            static_cast<WorldTransform*>(writeComponent(entity, detail::componentIndexOf<WorldTransform>()))) {
+        world->matrix = Mat4(1.0f);
+    }
+    if (const std::vector<Entity>* children = childrenOf(entity)) {
+        for (const Entity child : *children) {
+            markChanged(child, detail::componentIndexOf<ChildOf>());
+        }
+    }
+}
+
+detail::ChangeClock World::beginRun(std::uint64_t key) {
+    const detail::ChangeClock outer = m_clock;
+    const std::uint32_t thisRun = m_clock.tick;
+    const auto found = m_lastRuns.find(key);
+    // A first run starts further back than any tick can be, so it sees every value.
+    m_clock.lastRun = found != m_lastRuns.end() ? found->second : thisRun - detail::kMaxChangeAge - 1;
+    m_clock.inSystem = true;
+    return outer;
+}
+
+void World::endRun(std::uint64_t key, const detail::ChangeClock& outer) {
+    m_lastRuns[key] = m_clock.tick;
+    m_clock = outer;
+    if (outer.inSystem) {
+        return; // nested: the outer run moves the tick on
+    }
+    ++m_clock.tick;
+    if (m_clock.tick - m_lastTickCheck >= detail::kTickCheckInterval) {
+        clampTicks();
+    }
+}
+
+void World::clampTicks() {
+    const std::uint32_t tick = m_clock.tick;
+    for (const std::unique_ptr<detail::Archetype>& archetype : m_archetypes) {
+        archetype->clampTicks(tick, detail::kMaxChangeAge);
+    }
+    // A last run older than every tick keeps meaning "everything is new".
+    for (auto& [key, lastRun] : m_lastRuns) {
+        if (tick - lastRun > detail::kMaxChangeAge + 1) {
+            lastRun = tick - detail::kMaxChangeAge - 1;
+        }
+    }
+    m_lastTickCheck = tick;
 }
 
 void World::clear() {
@@ -595,14 +677,15 @@ detail::ArchetypeIndex World::spawnArchetype(std::size_t slot, std::span<const d
 detail::QueryState& World::queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms,
                                       std::span<const detail::ComponentIndex> with,
                                       std::span<const detail::ComponentIndex> without, bool includeDisabled,
-                                      bool refused) {
+                                      bool refused, std::span<const detail::ComponentIndex> added,
+                                      std::span<const detail::ComponentIndex> changed) {
     if (slot >= m_queries.size()) {
         m_queries.resize(slot + 1);
     }
     std::unique_ptr<detail::QueryState>& state = m_queries[slot];
     if (state == nullptr) {
         state = std::make_unique<detail::QueryState>();
-        detail::initQueryState(*state, terms, with, without, includeDisabled);
+        detail::initQueryState(*state, terms, with, without, includeDisabled, added, changed);
         state->matchesNothing = state->matchesNothing || refused;
     }
     return *state;
@@ -619,7 +702,7 @@ void* World::get(Entity entity, const TypeInfo& type) {
     if (index == detail::kNoComponent || !detail::isWritableComponent(type)) {
         return nullptr;
     }
-    return findComponent(entity, index);
+    return writeComponent(entity, index);
 }
 
 const void* World::get(Entity entity, const TypeInfo& type) const {
@@ -663,7 +746,7 @@ bool World::remove(Entity entity, const TypeInfo& type) {
 }
 
 DynamicQuery World::dynamicQuery(std::span<const QueryTerm> terms, std::span<const QueryFilter> filters) {
-    DynamicQuery query(terms, m_archetypes, m_iterationDepth);
+    DynamicQuery query(terms, m_archetypes, m_iterationDepth, m_clock);
     std::vector<detail::ComponentIndex> indices;
     indices.reserve(terms.size());
     bool writesImmutable = false;
@@ -676,6 +759,8 @@ DynamicQuery World::dynamicQuery(std::span<const QueryTerm> terms, std::span<con
     }
     std::vector<detail::ComponentIndex> with;
     std::vector<detail::ComponentIndex> without;
+    std::vector<detail::ComponentIndex> added;
+    std::vector<detail::ComponentIndex> changed;
     bool includeDisabled = false;
     for (const QueryFilter& filter : filters) {
         if (filter.kind == FilterKind::IncludeDisabled) {
@@ -685,16 +770,35 @@ DynamicQuery World::dynamicQuery(std::span<const QueryTerm> terms, std::span<con
         ITH_ASSERT_MSG(filter.type != nullptr, "ecs: a dynamic query filter without a type");
         const detail::ComponentIndex index =
             filter.type != nullptr ? detail::registerComponentType(*filter.type) : detail::kNoComponent;
-        (filter.kind == FilterKind::With ? with : without).push_back(index);
+        switch (filter.kind) {
+            case FilterKind::With:
+                with.push_back(index);
+                break;
+            case FilterKind::Without:
+                without.push_back(index);
+                break;
+            case FilterKind::Added:
+                added.push_back(index);
+                break;
+            case FilterKind::Changed:
+                changed.push_back(index);
+                break;
+            case FilterKind::IncludeDisabled:
+                break;
+        }
     }
-    detail::initQueryState(query.m_state, indices, with, without, includeDisabled);
+    detail::initQueryState(query.m_state, indices, with, without, includeDisabled, added, changed);
     query.m_state.matchesNothing = query.m_state.matchesNothing || writesImmutable;
     return query;
 }
 
 DynamicQuery::DynamicQuery(std::span<const QueryTerm> terms,
-                           std::vector<std::unique_ptr<detail::Archetype>>& archetypes, std::uint32_t& iterationDepth)
-    : m_terms(terms.begin(), terms.end()), m_archetypes(&archetypes), m_iterationDepth(&iterationDepth) {}
+                           std::vector<std::unique_ptr<detail::Archetype>>& archetypes, std::uint32_t& iterationDepth,
+                           const detail::ChangeClock& clock)
+    : m_terms(terms.begin(), terms.end()),
+      m_archetypes(&archetypes),
+      m_iterationDepth(&iterationDepth),
+      m_clock(&clock) {}
 
 namespace {
 
@@ -899,6 +1003,7 @@ bool World::placeBefore(Entity entity, Entity sibling) {
     }
     const auto position = sibling.isNull() ? children->end() : std::ranges::find_if(*children, same(sibling));
     children->insert(position, entity);
+    markChanged(parent, detail::componentIndexOf<Children>());
     return true;
 }
 
@@ -910,6 +1015,7 @@ void World::linkChild(Entity child) {
     if (std::vector<Entity>* children = childrenOf(parent)) {
         if (std::ranges::find_if(*children, [child](Entity entry) { return entry == child; }) == children->end()) {
             children->push_back(child);
+            markChanged(parent, detail::componentIndexOf<Children>());
         }
         return;
     }
@@ -970,6 +1076,7 @@ void World::onChildOfReplace(HookContext& context) {
         oldIndex = static_cast<std::size_t>(found - children->begin());
         if (found != children->end()) {
             children->erase(found);
+            world.markChanged(oldParent, detail::componentIndexOf<Children>());
         }
     }
     if (world.m_despawning == entity) {
@@ -996,13 +1103,14 @@ void World::onChildOfInsert(HookContext& context) {
                    children->end()) {
             children->push_back(entity);
         }
+        world.markChanged(parent, detail::componentIndexOf<Children>());
     } else {
         // Creating the list changes the parent's structure, so it waits until the hooks are done.
         context.commands().m_commands.push_back({.kind = Commands::Kind::LinkChild, .entity = entity});
     }
     if (placement.keepWorld && placement.oldParent != parent) {
-        if (auto* local =
-                static_cast<LocalTransform*>(world.findComponent(entity, detail::componentIndexOf<LocalTransform>()))) {
+        if (auto* local = static_cast<LocalTransform*>(
+                world.writeComponent(entity, detail::componentIndexOf<LocalTransform>()))) {
             local->value = decompose(glm::inverse(world.worldMatrixOf(parent)) * placement.world);
         }
     }
@@ -1020,11 +1128,12 @@ void World::onChildOfRemove(HookContext& context) {
     world.m_placement = {};
     world.linkRoot(entity.index(), kNoSlot);
     if (placement.keepWorld) {
-        if (auto* local =
-                static_cast<LocalTransform*>(world.findComponent(entity, detail::componentIndexOf<LocalTransform>()))) {
+        if (auto* local = static_cast<LocalTransform*>(
+                world.writeComponent(entity, detail::componentIndexOf<LocalTransform>()))) {
             local->value = decompose(placement.world);
         }
     }
+    world.markPlacementChanged(entity, false, true); // losing ChildOf leaves no tick of its own
     world.refreshDisabled(context.commands(), entity, false, world.has<Disabled>(entity));
 }
 
@@ -1054,7 +1163,17 @@ bool World::setHierarchyHooks() {
         .onRemove = &onChildOfRemove,
     });
     const bool disabled = setComponentHooks<Disabled>({.onAdd = &onDisabledAdd, .onRemove = &onDisabledRemove});
-    return childOf && disabled;
+    const bool local = setComponentHooks<LocalTransform>({.onRemove = &onLocalTransformRemove});
+    return childOf && disabled && local;
+}
+
+void World::onLocalTransformRemove(HookContext& context) {
+    World& world = *context.m_world;
+    const Entity entity = context.entity();
+    if (world.m_clearing || world.m_despawning == entity) {
+        return;
+    }
+    world.markPlacementChanged(entity, world.has<ChildOf>(entity), false); // it now counts as the identity
 }
 
 namespace detail {
@@ -1065,8 +1184,20 @@ void ResourceDelete::operator()(std::byte* memory) const noexcept {
 }
 
 void initQueryState(QueryState& state, std::span<const ComponentIndex> terms, std::span<const ComponentIndex> with,
-                    std::span<const ComponentIndex> without, bool includeDisabled) {
+                    std::span<const ComponentIndex> without, bool includeDisabled,
+                    std::span<const ComponentIndex> added, std::span<const ComponentIndex> changed) {
     state.terms.assign(terms.begin(), terms.end());
+    // Change filters require their type, and may name the type of a term or a With filter.
+    for (const auto& [types, isAdded] : {std::pair{added, std::uint8_t{1}}, std::pair{changed, std::uint8_t{0}}}) {
+        for (const ComponentIndex type : types) {
+            if (type == kNoComponent) {
+                state.matchesNothing = true; // registering the type asserted
+                continue;
+            }
+            state.changes.push_back(type);
+            state.added.push_back(isAdded);
+        }
+    }
     const auto mark = [&state](std::span<const ComponentIndex> types, ComponentMask& mask) {
         for (const ComponentIndex type : types) {
             if (type == kNoComponent) {
@@ -1082,6 +1213,9 @@ void initQueryState(QueryState& state, std::span<const ComponentIndex> terms, st
     mark(terms, state.required);
     mark(with, state.required);
     mark(without, state.excluded);
+    for (const ComponentIndex type : state.changes) {
+        state.required[type] = true;
+    }
     // Disabled entities are skipped unless the query asks for them (ADR-0031 rule 9).
     const ComponentIndex inHierarchy = componentIndexOf<DisabledInHierarchy>();
     const ComponentIndex disabled = componentIndexOf<Disabled>();
@@ -1103,8 +1237,22 @@ void updateQueryState(QueryState& state, std::span<const std::unique_ptr<Archety
         for (const ComponentIndex term : state.terms) {
             state.columns.push_back(static_cast<std::uint32_t>(archetype.columnOf(term)));
         }
+        for (const ComponentIndex type : state.changes) {
+            state.columns.push_back(static_cast<std::uint32_t>(archetype.columnOf(type)));
+        }
     }
     state.archetypesSeen = archetypes.size();
+}
+
+bool changeFiltersAllowed(const ChangeClock& clock) noexcept {
+    ITH_ASSERT_MSG(clock.inSystem, "ecs: Added and Changed filters work only while a system runs");
+    return clock.inSystem;
+}
+
+void setChangeTickForTesting(World& world, std::uint32_t tick) {
+    ITH_ASSERT(world.entityCount() == 0 && world.m_lastRuns.empty());
+    world.m_clock.tick = tick;
+    world.m_lastTickCheck = tick;
 }
 
 std::size_t nextTypeListSlot() noexcept {

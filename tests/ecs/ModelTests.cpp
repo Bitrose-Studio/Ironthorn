@@ -5,12 +5,18 @@
 // against the same model. An immutable component with hooks (Tracked) is spawned, replaced,
 // removed, despawned and cleared too; its hooks count their calls into a resource, which is checked
 // against the counts the model expects (ADR-0030). Queries with With and Without filters are checked
-// too. A second model test runs random hierarchy operations (reparent, detach, despawn with the
-// link policy, despawnRecursive, placeBefore, Disabled) and checks the hierarchy invariants after
-// every step. The seeds are fixed, so a failure reproduces.
+// too. The model also tracks whether each Health was added, or added or changed, since an observing
+// system last ran; random schedule runs, whose writer system writes Health and spawns through its
+// commands, check the observer's Added and Changed queries, typed and dynamic, against it (ADR-0014
+// rule 9). A second model test runs random hierarchy operations (reparent, detach, despawn with the
+// link policy, despawnRecursive, placeBefore, Disabled, LocalTransform written, added and removed)
+// and checks the hierarchy invariants after every step, with transforms propagated by the system
+// or by a direct call, each of which writes only the subtrees that changed. The seeds are fixed, so
+// a failure reproduces.
 
 #include "ith/ecs/Hierarchy.h"
 #include "ith/ecs/Hooks.h"
+#include "ith/ecs/Schedule.h"
 #include "ith/ecs/TransformPropagation.h"
 #include "ith/ecs/World.h"
 #include "ith/math/Math.h"
@@ -76,6 +82,9 @@ struct ModelEntity {
     std::optional<float> position;
     bool tag = false;
     std::optional<std::int64_t> tracked;
+    // Whether Health was added, or added or changed, since the observing system last ran.
+    bool healthAdded = false;
+    bool healthChanged = false;
 };
 
 class ModelTest {
@@ -83,6 +92,7 @@ public:
     explicit ModelTest(std::uint32_t seed) : m_random(seed) {
         setTrackedHooks();
         m_world.insertResource(HookCounts{});
+        buildSchedule();
     }
 
     void run(int steps) {
@@ -112,12 +122,104 @@ private:
     void spawned(Entity entity, const ModelEntity& components) {
         REQUIRE_FALSE(entity.isNull());
         REQUIRE(m_model.find(entity.bits()) == m_model.end());
-        m_model[entity.bits()] = components;
+        ModelEntity& model = m_model[entity.bits()] = components;
+        model.healthAdded = model.health.has_value();
+        model.healthChanged = model.health.has_value();
         m_issued.push_back(entity);
     }
 
+    // A schedule of two systems: a writer that adds 1 to the Health of entities with Tag0 and may
+    // spawn an entity through its commands, then an observer that records the entities whose
+    // Health was added or changed since its last run, through typed and dynamic queries.
+    void buildSchedule() {
+        m_schedule.add({
+            .name = "model::writer",
+            .access = ith::accessTo<Health>(),
+            .run =
+                [this](ith::SystemContext& context) {
+                    context.query<Health, ith::With<Tag0>>().forEach([](Health& health) { ++health.value; });
+                    if (m_spawnFromSystem) {
+                        m_systemSpawned = context.commands().spawn(Health{.value = 7});
+                    }
+                },
+        });
+        m_schedule.add({
+            .name = "model::observer",
+            .access = ith::accessTo<const Health>(),
+            .after = {"model::writer"},
+            .run =
+                [this](ith::SystemContext& context) {
+                    m_seen = {};
+                    context.query<ith::Added<Health>>().forEach(
+                        [&](Entity entity) { m_seen.added.push_back(entity.bits()); });
+                    context.query<const Health, ith::Changed<Health>>().forEach(
+                        [&](Entity entity, const Health&) { m_seen.changed.push_back(entity.bits()); });
+                    const std::array health{ith::QueryTerm{.type = &ith::typeOf<Health>()}};
+                    const std::array added{
+                        ith::QueryFilter{.type = &ith::typeOf<Health>(), .kind = ith::FilterKind::Added}};
+                    const std::array changed{
+                        ith::QueryFilter{.type = &ith::typeOf<Health>(), .kind = ith::FilterKind::Changed}};
+                    context.dynamicQuery(health, added).forEach([&](Entity entity, std::span<void* const>) {
+                        m_seen.dynamicAdded.push_back(entity.bits());
+                    });
+                    context.dynamicQuery({}, changed).forEach([&](Entity entity, std::span<void* const>) {
+                        m_seen.dynamicChanged.push_back(entity.bits());
+                    });
+                },
+        });
+        REQUIRE(m_schedule.build());
+    }
+
+    // Runs the schedule and checks what the observer saw against the model.
+    void runSchedule() {
+        m_spawnFromSystem = pick(3) == 0;
+        for (auto& [bits, entity] : m_model) {
+            if (entity.health && entity.tag) {
+                ++*entity.health;
+                entity.healthChanged = true;
+            }
+        }
+        std::set<std::uint64_t> expectedAdded;
+        std::set<std::uint64_t> expectedChanged;
+        for (auto& [bits, entity] : m_model) {
+            if (entity.healthAdded) {
+                expectedAdded.insert(bits);
+            }
+            if (entity.healthChanged) {
+                expectedChanged.insert(bits);
+            }
+            entity.healthAdded = false;
+            entity.healthChanged = false;
+        }
+        m_schedule.run(m_world);
+        // Each query visits an entity at most once, so the sets have the visits' sizes.
+        const auto asSet = [](const std::vector<std::uint64_t>& bits) {
+            return std::set<std::uint64_t>(bits.begin(), bits.end());
+        };
+        CHECK(m_seen.added.size() == expectedAdded.size());
+        CHECK(asSet(m_seen.added) == expectedAdded);
+        CHECK(m_seen.changed.size() == expectedChanged.size());
+        CHECK(asSet(m_seen.changed) == expectedChanged);
+        CHECK(asSet(m_seen.dynamicAdded) == expectedAdded);
+        CHECK(asSet(m_seen.dynamicChanged) == expectedChanged);
+        if (m_spawnFromSystem) {
+            spawned(m_systemSpawned, {.health = 7}); // applied at the stage's sync point
+        }
+    }
+
+    // Marks the model's Health of an entity as given a value: added when it had none.
+    static void healthGiven(ModelEntity& entity, std::int32_t value) {
+        entity.healthAdded = entity.healthAdded || !entity.health.has_value();
+        entity.healthChanged = true;
+        entity.health = value;
+    }
+
     void step() {
-        const std::uint32_t operation = pick(100);
+        const std::uint32_t operation = pick(110);
+        if (operation >= 100) {
+            runSchedule();
+            return;
+        }
         if (operation < 10) {
             spawned(m_world.spawn(), {});
         } else if (operation < 25) {
@@ -165,6 +267,7 @@ private:
             for (auto& [bits, entity] : m_model) {
                 if (entity.health && entity.position) {
                     *entity.health += static_cast<std::int32_t>(*entity.position);
+                    entity.healthChanged = true; // a written term marks every value it visits
                 }
             }
         } else if (pick(4) == 0) {
@@ -253,7 +356,7 @@ private:
             const auto value = static_cast<std::int32_t>(pick(1000));
             added = addValue(entity, Health{.value = value});
             if (model != nullptr) {
-                model->health = value;
+                healthGiven(*model, value);
             }
         } else if (component == 1) {
             std::string name = nextName();
@@ -294,6 +397,8 @@ private:
             removed = removeValue<Health>(entity);
             if (model != nullptr) {
                 model->health.reset();
+                model->healthAdded = false;
+                model->healthChanged = false;
             }
         } else if (component == 1) {
             had = model != nullptr && model->name.has_value();
@@ -329,7 +434,9 @@ private:
                 continue;
             }
             const ModelEntity& model = found->second;
-            const Health* health = m_world.get<Health>(entity);
+            // Read-only access throughout, which marks nothing changed.
+            const World& world = m_world;
+            const Health* health = world.get<Health>(entity);
             REQUIRE((health != nullptr) == model.health.has_value());
             if (health != nullptr) {
                 CHECK(health->value == *model.health);
@@ -353,8 +460,7 @@ private:
 
             // Access by record finds the same values, and forEachComponent visits each once; the
             // const form visits immutable components too.
-            const World& world = m_world;
-            CHECK(m_world.get(entity, ith::typeOf<Health>()) == health);
+            CHECK(world.get(entity, ith::typeOf<Health>()) == health);
             CHECK(world.get(entity, ith::typeOf<Tracked>()) == tracked);
             CHECK(m_world.has(entity, ith::typeOf<Tag0>()) == model.tag);
             const std::size_t components =
@@ -451,6 +557,19 @@ private:
     std::optional<std::uint64_t> m_clock; // the GameClock resource's frame, when it exists
     HookCounts m_counts;                  // the counts Tracked's hooks should have reached
     int m_names = 0;
+
+    // The schedule of the writer and the observer, and what the observer saw in its last run.
+    struct Seen {
+        std::vector<std::uint64_t> added;
+        std::vector<std::uint64_t> changed;
+        std::vector<std::uint64_t> dynamicAdded;
+        std::vector<std::uint64_t> dynamicChanged;
+    };
+
+    ith::Schedule m_schedule;
+    Seen m_seen;
+    bool m_spawnFromSystem = false;
+    Entity m_systemSpawned;
 };
 
 } // namespace
@@ -490,7 +609,10 @@ struct ModelNode {
 // detaching an entity with a LocalTransform must keep its world matrix.
 class HierarchyModelTest {
 public:
-    explicit HierarchyModelTest(std::uint32_t seed) : m_random(seed) {}
+    explicit HierarchyModelTest(std::uint32_t seed) : m_random(seed) {
+        m_propagation.add(ith::transformPropagationSystem());
+        REQUIRE(m_propagation.build());
+    }
 
     void run(int steps) {
         for (int step = 0; step < steps; ++step) {
@@ -748,7 +870,15 @@ private:
         } else if (operation < 92) {
             toggleDisabled();
         } else if (operation < 99) {
-            if (const Entity entity = anyLive(); !entity.isNull() && m_world.has<LocalTransform>(entity)) {
+            const Entity entity = anyLive();
+            if (entity.isNull()) {
+                return;
+            }
+            if (!m_world.has<LocalTransform>(entity)) {
+                CHECK(m_world.add(entity, randomLocal()) != nullptr);
+            } else if (pick(4) == 0) {
+                CHECK(m_world.remove<LocalTransform>(entity)); // it counts as the identity from now on
+            } else {
                 m_world.get<LocalTransform>(entity)->value = randomLocal().value;
             }
         } else {
@@ -773,7 +903,13 @@ private:
         std::vector<Entity> roots;
         m_world.forEachRoot([&](Entity root) { roots.push_back(root); });
         CHECK(roots == m_roots);
-        ith::propagateTransforms(m_world);
+        // Propagation writes only what changed, through the system or a direct call, each with a
+        // window of its own; both must leave every WorldTransform right.
+        if (pick(2) == 0) {
+            ith::propagateTransforms(m_world);
+        } else {
+            m_propagation.run(m_world);
+        }
         std::size_t placed = 0;
         std::size_t placedEnabled = 0;
         for (const auto& [bits, model] : m_nodes) {
@@ -826,6 +962,7 @@ private:
     World m_world;
     std::map<std::uint64_t, ModelNode> m_nodes;
     std::vector<Entity> m_roots; // in order
+    ith::Schedule m_propagation;
 };
 
 } // namespace

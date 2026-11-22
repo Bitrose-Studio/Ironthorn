@@ -2,13 +2,13 @@
 
 The `ecs` module stores the game world as entities with components, in archetype tables. The
 design is [ADR-0014](../decisions/0014-ecs-storage-and-world.md); this page shows how to use what
-exists today, which is the ADR's first five slices: entities, archetype tables, typed queries and
-`has`; component access and queries by reflection record, and resources; deferred commands and
-the schedule of systems; component hooks and immutable components
-([ADR-0030](../decisions/0030-ecs-hooks-registration-and-immutable-components.md)); then the
+exists today, which is the ADR's six slices: entities, archetype tables, typed queries and `has`;
+component access and queries by reflection record, and resources; deferred commands and the
+schedule of systems; component hooks and immutable components
+([ADR-0030](../decisions/0030-ecs-hooks-registration-and-immutable-components.md)); the
 hierarchy, enabled state and transform propagation
-([ADR-0031](../decisions/0031-ecs-hierarchy-enabled-state-and-transform-propagation.md)). Change
-detection follows in slice 6.
+([ADR-0031](../decisions/0031-ecs-hierarchy-enabled-state-and-transform-propagation.md)); and
+[change detection](#change-detection) with the `Added` and `Changed` filters.
 
 ## Components
 
@@ -126,12 +126,17 @@ world.query<ith::With<game::Frozen>>().forEach([](ith::Entity entity) { ... });
 
 - A query visits every entity that has all its component types.
 - `const T` declares read access and `T` write access. Inside a system they must match what the
-  system declared ([the schedule](#the-schedule)), and change detection will mark written values
-  as changed.
+  system declared ([the schedule](#the-schedule)). A `T` term marks every value it hands out as
+  changed, whether the function writes it or not ([change detection](#change-detection)): use
+  `const T` for values you only read.
 - **Filters** `ith::With<T>` and `ith::Without<T>` may stand anywhere among the terms. They hand
   out no values, so the function doesn't take them, and a system needs no access to their types,
   as for `has`. A query of filters only passes the entity, or nothing.
-- Naming a type twice is a compile error, filters included.
+- **Change filters** `ith::Added<T>` and `ith::Changed<T>` keep the entities whose `T` was added,
+  or added or changed, since the running system last ran ([change detection](#change-detection)).
+  They require a `T` like `With<T>`, need `T` declared inside a system, and work only in systems.
+- Naming a type twice is a compile error, filters included. A change filter may name the type of a
+  term: `query<const Health, ith::Changed<Health>>()`.
 - **Disabled entities are skipped**: every query leaves out entities with `ith::DisabledInHierarchy`
   ([enabled state](#enabled-state)) unless it names `Disabled` or `DisabledInHierarchy` as a term
   or filter, or includes the filter `ith::IncludeDisabled`, as the editor and level saving do.
@@ -202,9 +207,12 @@ ith::DynamicQuery moving = world.dynamicQuery(terms, filters);
   without a type) visits them too. **A query without terms visits every enabled entity**, and
   with only an `IncludeDisabled` filter every entity, which is how a level is saved.
 - Each term declares read or write access. Inside a system it must match the system's declared
-  access, and change detection will use it; don't write through a read term's pointer.
+  access. A write term marks every value it hands out as changed; don't write through a read
+  term's pointer, which `Changed` would miss.
 - Filters (`FilterKind::With`, `FilterKind::Without`) hand out no values, so they are not in
-  `components`, and need no declared access.
+  `components`, and need no declared access. `FilterKind::Added` and `FilterKind::Changed` are the
+  change filters, with the rules of their typed forms: they need their type declared, may name the
+  type of a term, and work only in systems.
 - A null type, a type that isn't a component, or a type named twice (terms and filters together)
   asserts, and the query then visits nothing.
 - The query keeps its own cache of matching archetypes. Keep the `DynamicQuery` object to reuse
@@ -350,7 +358,7 @@ A system reaches the world only through its `ith::SystemContext`:
 
 | Call | Needs |
 |---|---|
-| `query<Terms...>()`, `dynamicQuery(terms, filters)` | Each term declared; a written term declared as written. Filters need nothing |
+| `query<Terms...>()`, `dynamicQuery(terms, filters)` | Each term declared; a written term declared as written. `With` and `Without` need nothing; `Added<T>` and `Changed<T>` need `T` declared, read or write |
 | `get<T>(entity)` | `T` declared; written unless `T` is const |
 | `resource<T>()` | `T` declared; written unless `T` is const |
 | `has<T>(entity)`, `isAlive(entity)` | Nothing: they read no values |
@@ -390,8 +398,9 @@ ith::setComponentHooks<game::Owner>({.onRemove = &onOwnerRemoved});
 
 - **Once per process, per component type.** Every World runs the hooks, Play In Editor copies
   included. Setting a type's hooks twice, or after a World stored the type, asserts and changes
-  nothing. A hook is a plain function; state it needs lives in a world resource. `ChildOf` and
-  `Disabled` have the engine's hooks, which the first World sets ([hierarchy](#the-hierarchy-and-transforms)).
+  nothing. A hook is a plain function; state it needs lives in a world resource. `ChildOf`,
+  `Disabled` and `LocalTransform` have the engine's hooks, which the first World sets, so their hooks
+  can't be set ([hierarchy](#the-hierarchy-and-transforms)).
 - **When they run:**
 
   | Hook | Runs | The value |
@@ -522,10 +531,83 @@ ith::propagateTransforms(world);                 // or directly
   [ADR-0006](../decisions/0006-math-and-coordinate-conventions.md)). An entity without a
   `WorldTransform` is skipped, but its children still get theirs; disabled entities are
   propagated too.
-- Slice 5 propagates every entity each time. With change ticks (slice 6) only the subtrees whose
-  local transforms or links changed will be propagated.
+- **Only what changed is written** ([change detection](#change-detection)): the subtrees below
+  entities whose `LocalTransform` was added, written or removed, whose `ChildOf` was added,
+  replaced or removed, or whose `WorldTransform` was added. The matrices are the same as a full
+  propagation gives. When at least half of the entities changed, as on the first propagation of a
+  world, it propagates from every root instead, which is cheaper.
+- Each `WorldTransform` written is marked changed, so `Changed<WorldTransform>` finds what moved.
+  Writing `WorldTransform` yourself isn't seen by propagation and is overwritten at the next change
+  above it; it is propagation's output.
+- The system and direct calls each keep their own last run per world. Use one of them per world:
+  both work, but each repeats the work of changes the other already wrote.
+- Losing a parent or a `LocalTransform` leaves no tick, so the World stamps one instead: the
+  entity's `ChildOf` or `LocalTransform` if it keeps one; otherwise it is now a root counted as the
+  identity, so its `WorldTransform` is set to the identity at once and its children's `ChildOf` is
+  stamped. `Changed<ChildOf>` can therefore report a child whose link didn't change.
 - Code that needs a world matrix before the next propagation multiplies the local transforms of
   the entity's ancestors itself.
+
+## Change detection
+
+Systems find what was added or changed without anyone marking it
+([ADR-0014](../decisions/0014-ecs-storage-and-world.md) rule 9). Replication, render extraction and
+the editor's refresh build on this.
+
+```cpp
+schedule.add({
+    .name = "game::on_damage",
+    .access = ith::accessTo<const game::Health>(),
+    .run = [](ith::SystemContext& context) {
+        context.query<const game::Health, ith::Changed<game::Health>>().forEach(
+            [](ith::Entity entity, const game::Health& health) { /* changed since my last run */ });
+        context.query<ith::Added<game::Health>>().forEach([](ith::Entity entity) { /* new since my last run */ });
+    },
+});
+```
+
+**Ticks.** Every component value has an *added* tick and a *changed* tick. The World keeps a 32-bit
+tick that each system run moves on by one.
+
+| What happens | Added tick | Changed tick |
+|---|---|---|
+| Spawn, or `add` of a type the entity didn't have (also by commands and by record) | Stamped | Stamped |
+| `add` replacing a value | Kept | Stamped |
+| Mutable access: `get<T>` with a non-const `T`, non-const `get(entity, type)`, non-const `forEachComponent`, `HookContext::value<T>` with a non-const `T` | Kept | Stamped, written or not |
+| A query's written term (`T`, or `Access::Write`) | Kept | Stamped on every value it hands out |
+| Read-only access: `get<const T>`, a const World, `const T` terms, `Access::Read` terms | Kept | Kept |
+| Moving to another archetype (adding or removing other types) | Kept | Kept |
+
+- Mutable access counts as a change even when nothing is written. That over-reports, but a write
+  can't be missed; consumers that care, such as replication's delta compression, compare values.
+  Prefer `const` access for reading.
+- **Resources have no ticks.** Change detection covers component values only.
+
+**The filters.** `ith::Added<T>` keeps entities whose `T` was added since the running system last
+ran; `ith::Changed<T>` keeps those whose `T` was added or changed since then. The dynamic forms are
+`FilterKind::Added` and `FilterKind::Changed`. "Since the system last ran" means:
+
+- **Per system and per world.** Each World keeps the last run of every system that ran on it, so
+  one schedule may run several worlds, and two systems never share a window.
+- **A run's window** goes from the system's previous run on this world, exclusive, to its current
+  run, inclusive. Its own writes are stamped with its current run, so it doesn't see them on its
+  next run. It does see everything after them: later systems, the commands applied at sync points,
+  its own included, and code outside the schedule.
+- A system later in the run order sees the writes of the earlier ones in the same `Schedule::run`.
+- **A system's first run on a world sees every value as added and changed.**
+- **Only inside systems.** A change filter outside a running system asserts and the query visits
+  nothing: outside the schedule there is no "last run". Editor tools that need change detection run
+  as systems of the editor world's schedule. If a reader outside the schedule ever needs it, the
+  planned extension is an explicit cursor: the reader keeps a tick (`world.changeTick()`) and asks
+  for changes since it, like event readers keep their own cursor. It doesn't exist yet.
+- Inside a system, a change filter needs its type declared, read or write: it reads the type's
+  ticks, which a writer changes.
+
+**Wraparound.** Ticks are 32-bit and compared relative to the current tick, so the order holds
+across the wrap. Every 2^29 ticks the World clamps every tick, and every system's last run, that is
+older than about 3.2 billion ticks to that age, so an old tick never looks new. A system that hasn't
+run for that long sees everything as changed on its next run. At 100 systems and 60 frames per
+second, the tick wraps about every eight days; clamping runs about once a day.
 
 ## How storage works
 
@@ -535,6 +617,8 @@ ith::propagateTransforms(world);                 // or directly
 - Adding or removing a component **moves the entity** to the archetype with the new set; the
   transitions are cached. Despawning moves the archetype's last row into the hole.
 - Each archetype keeps a bitset of its types, which makes `has` constant time.
+- Each column keeps the change ticks of its values in an array beside them, 8 bytes per value, which
+  moves and swap-removes with the values.
 - Values that are trivially copyable are moved with `memcpy`. Others go through their reflection
   record's move and destroy functions.
 
@@ -558,10 +642,11 @@ It prints the median of 11 runs for: spawning 100k entities with two components;
 them; iterating two components over 100k entities in 1, 10 and 100 archetypes; adding and
 removing a tag on 10k entities; random access by handle; spawning 100k entities through a command
 buffer; transform propagation over 111,100 entities four levels deep (100 roots with 10 children
-per entity); and one run of a schedule of 100 systems over an empty world, which is the executor's
-overhead. Spawning, iteration and propagation are compared with the targets from ADR-0014 and
-ADR-0031 (5.1 ms, 0.34 ms and 5.2 ms); the command spawn and the schedule have no target. Record
-results with the machine they ran on.
+per entity), first on a new world, where every entity is written, then after a first propagation
+with no change, with 100 leaves moved and with one root moved; and one run of a schedule of 100
+systems over an empty world, which is the executor's overhead. Spawning, iteration and propagation
+are compared with the targets from ADR-0014 and ADR-0031 (5.1 ms, 0.34 ms and 5.2 ms); the command
+spawn and the schedule have no target. Record results with the machine they ran on.
 
 ## Tests
 
@@ -574,14 +659,21 @@ results with the machine they ran on.
   `HookTests.cpp` (hook timing and order, hook commands, refused structural changes, registration
   rules, and every refused write of an immutable component) and `HierarchyTests.cpp` (links and
   order, `placeBefore`, world placement on reparent and detach, the despawn policy and
-  `despawnRecursive`, invalid parents, enabled state and propagation);
+  `despawnRecursive`, invalid parents, enabled state and propagation) and `ChangeDetectionTests.cpp`
+  (what stamps a tick, typed and dynamic `Added` and `Changed`, each system's window per world,
+  refused use outside systems and without declared access, the 32-bit wraparound, and propagation
+  that writes only the changed subtrees, removals included);
 - a randomized model test (`ModelTests.cpp`) that runs thousands of random operations, typed and
   by record, against a simple reference model and checks every handle, value, resource and query
   result, and that the hooks of an immutable component ran as often, and with the values, the
-  model expects. A second model test runs random hierarchy operations, directly and through
-  commands, and checks after every step that parent and child links agree both ways, that the
-  root list is the entities without `ChildOf` in order, that `DisabledInHierarchy` matches the
-  ancestors, that reparenting kept the world matrix, and that propagation matches a reference;
+  model expects. The model also tracks which `Health` values were added or changed since an
+  observing system last ran; random schedule runs, with a writer system that writes and spawns
+  through commands, check the observer's `Added` and `Changed` queries, typed and dynamic, against
+  it. A second model test runs random hierarchy operations, directly and through commands, and
+  checks after every step that parent and child links agree both ways, that the root list is the
+  entities without `ChildOf` in order, that `DisabledInHierarchy` matches the ancestors, that
+  reparenting kept the world matrix, and that propagation, which writes only what changed, by the
+  system or by a direct call, matches a reference;
 - `ConcurrencyTests.cpp`: worlds and component types created from several threads, worlds built
   by record in parallel jobs, and a world handed from job to job. CI runs it under
   ThreadSanitizer;

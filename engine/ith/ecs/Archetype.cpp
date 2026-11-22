@@ -24,6 +24,10 @@ void AlignedDelete::operator()(std::byte* memory) const noexcept {
     ::operator delete(memory, std::align_val_t(alignment));
 }
 
+void TicksDelete::operator()(ChangeTicks* ticks) const noexcept {
+    ::operator delete(ticks);
+}
+
 void Column::reallocate(std::size_t capacity, std::size_t count) {
     ITH_ASSERT(count <= capacity);
     if (capacity > std::numeric_limits<std::size_t>::max() / m_type->size) {
@@ -43,6 +47,12 @@ void Column::reallocate(std::size_t capacity, std::size_t count) {
         }
     }
     m_data = std::move(memory);
+    std::unique_ptr<ChangeTicks, TicksDelete> ticks(
+        static_cast<ChangeTicks*>(::operator new(capacity * sizeof(ChangeTicks))));
+    if (count != 0) {
+        std::memcpy(ticks.get(), m_ticks.get(), count * sizeof(ChangeTicks));
+    }
+    m_ticks = std::move(ticks);
 }
 
 void relocateValue(const TypeInfo& type, void* destination, void* source) {
@@ -90,7 +100,7 @@ std::size_t Archetype::columnOf(ComponentIndex type) const noexcept {
     return static_cast<std::size_t>(std::ranges::lower_bound(m_types, type) - m_types.begin());
 }
 
-std::uint32_t Archetype::pushRow(Entity entity) {
+std::uint32_t Archetype::pushRow(Entity entity, std::uint32_t tick) {
     const std::size_t row = m_entities.size();
     if (row == std::numeric_limits<std::uint32_t>::max()) {
         ITH_FATAL("ecs: an archetype has too many rows");
@@ -103,6 +113,9 @@ std::uint32_t Archetype::pushRow(Entity entity) {
         m_capacity = capacity;
     }
     m_entities.push_back(entity);
+    for (Column& column : m_columns) {
+        column.ticks(row) = {.added = tick, .changed = tick};
+    }
     return static_cast<std::uint32_t>(row);
 }
 
@@ -126,7 +139,9 @@ Entity Archetype::moveRow(std::uint32_t row, Archetype& destination, std::uint32
         Column& column = m_columns[position];
         void* value = column.at(row);
         if (target < destination.m_types.size() && destination.m_types[target] == type) {
-            column.relocate(destination.m_columns[target].at(destinationRow), value);
+            Column& to = destination.m_columns[target];
+            column.relocate(to.at(destinationRow), value);
+            to.ticks(destinationRow) = column.ticks(row);
         } else {
             column.destroy(value);
         }
@@ -143,12 +158,29 @@ void Archetype::clear() noexcept {
     m_entities.clear();
 }
 
+void Archetype::clampTicks(std::uint32_t tick, std::uint32_t maxAge) noexcept {
+    const std::uint32_t oldest = tick - maxAge;
+    const auto clamp = [&](std::uint32_t& value) {
+        if (tick - value > maxAge) {
+            value = oldest;
+        }
+    };
+    for (Column& column : m_columns) {
+        ChangeTicks* ticks = column.ticks();
+        for (std::size_t row = 0; row < m_entities.size(); ++row) {
+            clamp(ticks[row].added);
+            clamp(ticks[row].changed);
+        }
+    }
+}
+
 Entity Archetype::fillHole(std::uint32_t row) {
     const std::size_t last = m_entities.size() - 1;
     Entity moved;
     if (row != last) {
         for (Column& column : m_columns) {
             column.relocate(column.at(row), column.at(last));
+            column.ticks(row) = column.ticks(last);
         }
         moved = m_entities[last];
         m_entities[row] = moved;

@@ -37,18 +37,29 @@ using ComponentMask = std::bitset<kMaxComponentTypes>;
 // the source; trivially copyable values are copied with memcpy.
 void relocateValue(const TypeInfo& type, void* destination, void* source);
 
+// When a component value was added and when it last changed, as World change ticks (World.h).
+struct ChangeTicks {
+    std::uint32_t added = 0;
+    std::uint32_t changed = 0;
+};
+
 // Frees memory from aligned operator new.
 struct AlignedDelete {
     std::size_t alignment = 0;
     void operator()(std::byte* memory) const noexcept;
 };
 
+// Frees change ticks from operator new.
+struct TicksDelete {
+    void operator()(ChangeTicks* ticks) const noexcept;
+};
+
 // One aligned, type-erased array of values of one component type. The column owns its memory
 // but not the values in it: the archetype constructs and destroys them, since only it knows how
 // many rows are in use.
 //
-// Change ticks (ADR-0014 slice 6) will live next to the values: one added and one changed tick
-// per row, in two arrays that grow, move and swap-remove together with the values.
+// Each row also has its change ticks (ADR-0014 rule 9), in an array beside the values that
+// grows, moves and swap-removes together with them.
 class Column {
 public:
     explicit Column(const TypeInfo& type) : m_type(&type), m_trivial(type.triviallyCopyable) {}
@@ -59,6 +70,12 @@ public:
     // The value in `row`. Precondition: row is below the archetype's capacity. Rows are found by
     // pointer arithmetic on the column's bytes; typed code indexes them as a T array.
     [[nodiscard]] void* at(std::size_t row) noexcept { return m_data.get() + (row * m_type->size); }
+
+    // The change ticks of every row; null until the column has capacity.
+    [[nodiscard]] ChangeTicks* ticks() noexcept { return m_ticks.get(); }
+
+    // The change ticks of `row`. Precondition: row is below the archetype's capacity.
+    [[nodiscard]] ChangeTicks& ticks(std::size_t row) noexcept { return m_ticks.get()[row]; }
 
     // Destroys a value of this column's type.
     void destroy(void* value) noexcept {
@@ -71,14 +88,16 @@ public:
     // `destination` and destroys the source.
     void relocate(void* destination, void* source);
 
-    // Moves the first `count` values into new memory for `capacity` rows. Precondition
-    // (asserted): count <= capacity.
+    // Moves the first `count` values and their ticks into new memory for `capacity` rows.
+    // Precondition (asserted): count <= capacity.
     void reallocate(std::size_t capacity, std::size_t count);
 
 private:
     const TypeInfo* m_type;
     bool m_trivial;
     std::unique_ptr<std::byte, AlignedDelete> m_data;
+    // The change ticks of each row of capacity, uninitialized until the row is used.
+    std::unique_ptr<ChangeTicks, TicksDelete> m_ticks;
 };
 
 class Archetype {
@@ -130,20 +149,25 @@ public:
     [[nodiscard]] std::size_t size() const noexcept { return m_entities.size(); }
 
     // Appends a row for `entity` and returns it. The new row's values are uninitialized: the
-    // caller constructs one in every column before anything else touches the archetype.
-    std::uint32_t pushRow(Entity entity);
+    // caller constructs one in every column before anything else touches the archetype. The row's
+    // ticks are `tick` in every column, added and changed.
+    std::uint32_t pushRow(Entity entity, std::uint32_t tick);
 
     // Destroys the values of `row` and fills the hole with the last row. Returns the entity
     // that moved into `row`, or the null entity when `row` was the last row.
     Entity removeRow(std::uint32_t row);
 
-    // Moves the values of `row` that `destination` has a column for into its row
+    // Moves the values of `row`, with their ticks, that `destination` has a column for into its row
     // `destinationRow` (from destination.pushRow), destroys the rest, and fills the hole as
     // removeRow does. Returns the entity that moved into `row`, or the null entity.
     Entity moveRow(std::uint32_t row, Archetype& destination, std::uint32_t destinationRow);
 
     // Destroys every value and removes every row; the capacity stays.
     void clear() noexcept;
+
+    // Moves every tick older than `maxAge` ticks before `tick` up to that age, so that ticks never
+    // wrap around past `tick` (World.h).
+    void clampTicks(std::uint32_t tick, std::uint32_t maxAge) noexcept;
 
     // Cached transitions, filled by the World: the archetype with one more component type, and
     // the one with one fewer.

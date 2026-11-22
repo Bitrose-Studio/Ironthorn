@@ -3,6 +3,7 @@
 #include "ith/foundation/Assert.h"
 
 #include <algorithm>
+#include <atomic>
 #include <functional>
 #include <queue>
 #include <span>
@@ -163,7 +164,11 @@ std::string_view stageName(Stage stage) noexcept {
 
 void Schedule::add(SystemDescriptor system) {
     ITH_ASSERT_MSG(!m_running, "ecs: a system added while the schedule runs");
-    m_systems.push_back({std::move(system), {}});
+    // Each system gets a key no other system of the process has, under which every World keeps its
+    // last run. Key 0 belongs to propagateTransforms called directly.
+    static std::atomic<std::uint64_t> nextKey{1};
+    m_systems.push_back(
+        {.descriptor = std::move(system), .access = {}, .key = nextKey.fetch_add(1, std::memory_order_relaxed)});
     m_built = false;
 }
 
@@ -223,9 +228,13 @@ void Schedule::run(World& world) {
         for (const std::uint32_t index : order) {
             const System& system = m_systems[index];
             SystemContext context(world, m_commands[index], system.descriptor.name, system.access);
-            // Direct structural changes are refused while the system runs.
-            const detail::IterationScope scope(world.m_iterationDepth);
-            system.descriptor.run(context);
+            const detail::ChangeClock outer = world.beginRun(system.key);
+            {
+                // Direct structural changes are refused while the system runs.
+                const detail::IterationScope scope(world.m_iterationDepth);
+                system.descriptor.run(context);
+            }
+            world.endRun(system.key, outer);
         }
         // The sync point: commands in system run order, each buffer in recording order.
         for (const std::uint32_t index : order) {
@@ -250,6 +259,13 @@ DynamicQuery SystemContext::dynamicQuery(std::span<const QueryTerm> terms, std::
     for (const QueryTerm& term : terms) {
         if (term.type != nullptr && term.type->kind == TypeKind::Struct && term.type->role == TypeRole::Component) {
             checkComponent(detail::registerComponentType(*term.type), term.access);
+        }
+    }
+    // Change filters read the type's ticks, which its writers change.
+    for (const QueryFilter& filter : filters) {
+        if ((filter.kind == FilterKind::Added || filter.kind == FilterKind::Changed) && filter.type != nullptr &&
+            filter.type->kind == TypeKind::Struct && filter.type->role == TypeRole::Component) {
+            checkComponent(detail::registerComponentType(*filter.type), Access::Read);
         }
     }
     return m_world->dynamicQuery(terms, filters); // asserts for invalid terms and filters

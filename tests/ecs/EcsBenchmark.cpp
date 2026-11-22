@@ -114,6 +114,38 @@ Populated populated() {
     return state;
 }
 
+// The propagation benchmark's hierarchy: 100 roots with four levels of 10 children below each.
+struct Hierarchy {
+    std::unique_ptr<World> world;
+    std::vector<Entity> roots;
+    std::vector<Entity> leaves;
+};
+
+Hierarchy hierarchy() {
+    Hierarchy state{.world = std::make_unique<World>(), .roots = {}, .leaves = {}};
+    World& world = *state.world;
+    for (int root = 0; root < 100; ++root) {
+        state.roots.push_back(
+            world.spawn(ith::LocalTransform{.value = {.translation = {static_cast<float>(root), 0.0f, 0.0f}}},
+                        ith::WorldTransform{}));
+    }
+    std::vector<Entity> level = state.roots;
+    for (int depth = 1; depth < 4; ++depth) {
+        std::vector<Entity> next;
+        for (const Entity parent : level) {
+            for (int child = 0; child < 10; ++child) {
+                next.push_back(world.spawn(
+                    ith::LocalTransform{.value = {.translation = {0.0f, 1.0f, static_cast<float>(child)},
+                                                  .rotation = glm::angleAxis(0.1f, ith::Vec3(0.0f, 1.0f, 0.0f))}},
+                    ith::WorldTransform{}, ith::ChildOf{.parent = parent}));
+            }
+        }
+        level = std::move(next);
+    }
+    state.leaves = std::move(level);
+    return state;
+}
+
 void integrate(World& world) {
     world.query<Position, const Velocity>().forEach([](Position& position, const Velocity& velocity) {
         constexpr float kStep = 1.0f / 60.0f;
@@ -200,34 +232,30 @@ int main() {
 
     // Transform propagation (ADR-0031 rule 2): 100 roots with four levels of 10 children below
     // each, 111,100 entities with LocalTransform and WorldTransform, as in the earlier prototype's
-    // measurement. Slice 5 propagates every entity on each run.
-    report("propagate transforms: 111,100 entities, 4 levels",
-           measure<WorldPtr>(
-               [] {
-                   auto world = std::make_unique<World>();
-                   std::vector<Entity> level;
-                   for (int root = 0; root < 100; ++root) {
-                       level.push_back(world->spawn(
-                           ith::LocalTransform{.value = {.translation = {static_cast<float>(root), 0.0f, 0.0f}}},
-                           ith::WorldTransform{}));
-                   }
-                   for (int depth = 1; depth < 4; ++depth) {
-                       std::vector<Entity> next;
-                       for (const Entity parent : level) {
-                           for (int child = 0; child < 10; ++child) {
-                               next.push_back(world->spawn(
-                                   ith::LocalTransform{
-                                       .value = {.translation = {0.0f, 1.0f, static_cast<float>(child)},
-                                                 .rotation = glm::angleAxis(0.1f, ith::Vec3(0.0f, 1.0f, 0.0f))}},
-                                   ith::WorldTransform{}, ith::ChildOf{.parent = parent}));
-                           }
-                       }
-                       level = std::move(next);
-                   }
-                   return world;
-               },
-               [](WorldPtr& world) { ith::propagateTransforms(*world); }),
+    // measurement. The first propagation on a world writes every entity; later ones write only the
+    // subtrees that changed (ADR-0014 rule 13), measured after the first with no change, with 100
+    // leaves moved, and with one root moved (1,111 entities below and including it).
+    report("propagate transforms: 111,100 entities, 4 levels, first",
+           measure<Hierarchy>(hierarchy, [](Hierarchy& state) { ith::propagateTransforms(*state.world); }), 5.2);
+    const auto steady = [](std::size_t leaves, std::size_t roots) {
+        return [leaves, roots] {
+            Hierarchy state = hierarchy();
+            ith::propagateTransforms(*state.world);
+            for (std::size_t index = 0; index < leaves; ++index) {
+                state.world->get<ith::LocalTransform>(state.leaves[index * 997 % state.leaves.size()])
+                    ->value.translation.y += 1.0f;
+            }
+            for (std::size_t index = 0; index < roots; ++index) {
+                state.world->get<ith::LocalTransform>(state.roots[index])->value.translation.y += 1.0f;
+            }
+            return state;
+        };
+    };
+    const auto propagate = [](Hierarchy& state) { ith::propagateTransforms(*state.world); };
+    report("propagate transforms: 111,100 entities, no change", measure<Hierarchy>(steady(0, 0), propagate), 5.2);
+    report("propagate transforms: 111,100 entities, 100 leaves moved", measure<Hierarchy>(steady(100, 0), propagate),
            5.2);
+    report("propagate transforms: 111,100 entities, 1 root moved", measure<Hierarchy>(steady(0, 1), propagate), 5.2);
 
     // Schedule overhead: 100 systems that each run one query over an empty world, so the time is
     // the executor, the access checks and 100 empty sync points; reported per run.

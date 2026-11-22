@@ -87,7 +87,8 @@ public:
     [[nodiscard]] const void* value() const noexcept { return m_value; }
 
     // The value as T, which must be the hook's component type (asserted; null otherwise). T may be
-    // const; a non-const T of an immutable type asserts and gives null.
+    // const; a non-const T marks the value changed, and a non-const T of an immutable type asserts
+    // and gives null.
     template <typename T>
     [[nodiscard]] T* value();
 
@@ -149,6 +150,7 @@ T* HookContext::value() {
         if (!detail::isWritableComponent(*m_type)) {
             return nullptr;
         }
+        m_world->markChanged(m_entity, detail::componentIndexOf<T>());
     }
     return static_cast<T*>(m_value);
 }

@@ -45,6 +45,14 @@
 // a system runs, the world's structure can't change directly (asserted and refused): record
 // commands instead.
 //
+// Change detection (ADR-0014 rule 9, World.h): each run of a system on a World moves the World's
+// tick on by one. The system's queries with ith::Added or ith::Changed keep the values added or
+// changed after its previous run on that World and up to its current run: by other systems, by
+// commands applied at sync points (its own included), and by code outside the schedule. A system
+// doesn't see its own writes on its next run. Its first run on a World sees every value as added
+// and changed. The last run is kept per system and per World, so one schedule may run several
+// worlds.
+//
 // Not thread-safe: run a schedule on the thread that owns the World. A system may use jobs
 // internally, giving each job its own command buffer (Commands.h).
 
@@ -147,13 +155,14 @@ public:
     SystemContext& operator=(SystemContext&&) = delete;
     ~SystemContext() = default;
 
-    // World::query; each term must be declared, `T` with write access. Filters (With, Without)
-    // read no values and need no access.
+    // World::query; each term must be declared, `T` with write access. With and Without read no
+    // values and need no access; Added<T> and Changed<T> read T's ticks and need T declared, read
+    // or write. Change filters see what changed since this system last ran on this world.
     template <typename... Terms>
     [[nodiscard]] detail::QueryOf<Terms...> query();
 
-    // World::dynamicQuery; each term must be declared, a write term with write access. Filters
-    // need no access.
+    // World::dynamicQuery; each term must be declared, a write term with write access. With and
+    // Without filters need no access; Added and Changed filters need their type declared.
     [[nodiscard]] DynamicQuery dynamicQuery(std::span<const QueryTerm> terms,
                                             std::span<const QueryFilter> filters = {});
 
@@ -220,6 +229,7 @@ private:
     struct System {
         SystemDescriptor descriptor;
         detail::SystemAccess access;
+        std::uint64_t key = 0; // unique in the process; each World keeps the system's last run under it
     };
 
     std::vector<System> m_systems; // in the order they were added
@@ -233,7 +243,10 @@ private:
 template <typename... Terms>
 detail::QueryOf<Terms...> SystemContext::query() {
     const auto check = [this]<typename Term> {
-        if constexpr (!detail::kIsFilter<Term>) {
+        if constexpr (detail::kIsChangeFilter<Term>) {
+            checkComponent(detail::componentIndexOf<typename detail::ChangeFilterComponent<Term>::Type>(),
+                           Access::Read);
+        } else if constexpr (!detail::kIsFilter<Term>) {
             checkComponent(detail::componentIndexOf<std::remove_const_t<Term>>(),
                            std::is_const_v<Term> ? Access::Read : Access::Write);
         }

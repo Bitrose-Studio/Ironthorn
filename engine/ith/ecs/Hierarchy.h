@@ -40,7 +40,8 @@
 
 namespace ith {
 
-// The entity's placement relative to its parent, or to the world for a root.
+// The entity's placement relative to its parent, or to the world for a root. Like ChildOf and
+// Disabled, it carries engine hooks (its onRemove tells propagation), so its hooks can't be set.
 struct LocalTransform {
     ITH_TYPE(Component)
     ITH_FIELD()
