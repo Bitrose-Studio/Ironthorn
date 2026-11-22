@@ -1,6 +1,7 @@
 # ADR-0008: An editor familiar to Unreal Engine developers
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0037](0037-editor-commands-transactions-selection-and-automation.md)
 - **Date:** 2026-11-20
 - **Related:** [ADR-0003](0003-clean-room.md) (clean room),
   [ADR-0004](0004-modules-and-layering.md) (editor/runtime separation),

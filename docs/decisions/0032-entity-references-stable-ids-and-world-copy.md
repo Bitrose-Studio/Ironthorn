@@ -1,7 +1,8 @@
 # ADR-0032: Entity references, stable ids and world copy
 
 - **Status:** Accepted
-- **Amended by:** [ADR-0034](0034-level-documents.md)
+- **Amended by:** [ADR-0034](0034-level-documents.md),
+  [ADR-0037](0037-editor-commands-transactions-selection-and-automation.md)
 - **Date:** 2026-11-22
 - **Related:** amends [ADR-0014](0014-ecs-storage-and-world.md) (ECS) rules 3, 4 and 20,
   [ADR-0018](0018-reflection.md) (reflection) rules 5 and 9, and
