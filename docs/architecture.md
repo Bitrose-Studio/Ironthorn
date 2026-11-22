@@ -224,5 +224,5 @@ Each phase ends when its exit criteria pass in CI.
 | P9 | Production hardening: packaging, crash reporting, localization, accessibility, profiler | planned |
 | P10 | 2D toolset | planned |
 
-Version 0.1.0 is released when P1 is complete
-([ADR-0002](decisions/0002-git-workflow-and-versioning.md)).
+Releases follow phases ([ADR-0002](decisions/0002-git-workflow-and-versioning.md)): version
+0.1.0 completed P1.

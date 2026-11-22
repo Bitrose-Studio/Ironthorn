@@ -6,7 +6,7 @@ project(Ironthorn
     VERSION 0.1.0
     DESCRIPTION "Ironthorn - a modular 3D-first game engine"
     LANGUAGES C CXX)
-set(IRONTHORN_VERSION_SUFFIX "-dev")
+set(IRONTHORN_VERSION_SUFFIX "")
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
     message(FATAL_ERROR "In-source builds are not supported. Use a preset: cmake --preset <name>")

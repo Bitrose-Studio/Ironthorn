@@ -12,9 +12,10 @@ Ironthorn is a modular, 3D-first game engine that also does 2D, written in C++20
 - **Game UI that lives outside the world.** Widget assets are owned by the player and the HUD,
   never placed in the scene hierarchy.
 
-> **Status: early development (phase P0).** The build, tests, CI and the `foundation` module
-> exist. There is no rendering or gameplay functionality yet. Version `0.1.0-dev`. APIs will
-> change without notice until 1.0.
+> **Status: early development.** Phase P1, the engine's foundation, is complete and released as
+> [0.1.0](CHANGELOG.md): platform layer, jobs, the RHI on Direct3D 12 and Vulkan, render graph,
+> reflection, serialization, ECS, asset database and input. There is no editor, renderer or
+> gameplay yet. APIs will change without notice until 1.0.
 
 ## Documentation
 
