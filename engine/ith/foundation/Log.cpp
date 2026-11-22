@@ -47,6 +47,14 @@ void writeToStderr(void* /*context*/, const LogRecord& record) {
     }
 }
 
+// The position of `sink` in `sinks`, or sinks.end(). A predicate rather than std::ranges::find:
+// the MSVC standard library (14.52 and later) sends std::find over 16-byte trivially comparable
+// values such as LogSink to a vectorized search that supports only 1-, 2-, 4- and 8-byte elements,
+// which fails to compile under clang-cl ("unexpected size").
+std::span<LogSink>::iterator findSink(std::span<LogSink> sinks, LogSink sink) {
+    return std::ranges::find_if(sinks, [sink](const LogSink& installed) { return installed == sink; });
+}
+
 struct Logger {
     Mutex mutex;
     std::array<LogSink, kMaxLogSinks> sinks ITH_GUARDED_BY(mutex) = {LogSink{.write = &writeToStderr}};
@@ -174,7 +182,7 @@ Expected<void> addLogSink(LogSink sink) {
     const MutexLock lock(state.mutex);
     const InsideLogger inside;
     const auto installed = std::span(state.sinks).first(state.sinkCount);
-    if (std::ranges::find(installed, sink) != installed.end()) {
+    if (findSink(installed, sink) != installed.end()) {
         return makeError("log.sink_installed", "The log sink is already installed");
     }
     if (state.sinkCount == state.sinks.size()) {
@@ -189,7 +197,7 @@ bool removeLogSink(LogSink sink) {
     Logger& state = logger();
     const MutexLock lock(state.mutex);
     const auto installed = std::span(state.sinks).first(state.sinkCount);
-    const auto found = std::ranges::find(installed, sink);
+    const auto found = findSink(installed, sink);
     if (found == installed.end()) {
         return false;
     }
