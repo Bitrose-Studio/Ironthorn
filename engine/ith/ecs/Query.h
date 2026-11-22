@@ -342,7 +342,7 @@ private:
                 !detail::passesChangeFilters(archetype, *m_state, columns + sizeof...(Terms), row, *m_clock)) {
                 continue;
             }
-            const auto mark = [&]<std::size_t Index, typename Value> {
+            [[maybe_unused]] const auto mark = [&]<std::size_t Index, typename Value> {
                 if constexpr (!std::is_const_v<Value>) {
                     ticks[Index][row].changed = tick;
                 }
