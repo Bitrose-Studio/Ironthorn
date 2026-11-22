@@ -3,10 +3,12 @@
 // Component and resource types for the ECS tests and benchmark. The build generates their
 // records into the test library ith_test_ecs_components (module name "test_ecs").
 
+#include "ith/foundation/Entity.h"
 #include "ith/math/Types.h"
 #include "ith/reflection/Annotations.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -123,7 +125,7 @@ struct MatchRules {
 };
 
 // An immutable component (ADR-0030): it changes only by being replaced.
-struct StableId {
+struct Frozen {
     ITH_TYPE(Component, Immutable)
     ITH_FIELD()
     std::uint64_t value = 0;
@@ -205,6 +207,43 @@ struct DespawnLog {
     std::vector<std::int32_t> ids; // in despawn order
     ITH_FIELD()
     std::vector<std::int32_t> parentAlive; // 1 when the parent was alive at that point
+};
+
+// Entity references for the world copy tests (ADR-0032): reflected ones, which a copy remaps, in a
+// field, a container and a nested struct, and an unreflected one, which it copies as it is.
+struct Follow {
+    ITH_TYPE(Component)
+    ITH_FIELD()
+    Entity target;
+    Entity unreflected;
+};
+
+struct Waypoint {
+    ITH_TYPE(Struct)
+    ITH_FIELD()
+    Entity at;
+    ITH_FIELD()
+    float wait = 0.0f;
+};
+
+struct Patrol {
+    ITH_TYPE(Component)
+    ITH_FIELD()
+    std::vector<std::optional<Waypoint>> route;
+};
+
+// A resource with entities in it.
+struct Roster {
+    ITH_TYPE(Resource)
+    ITH_FIELD()
+    std::vector<Entity> members;
+};
+
+// Its hooks count their runs; only WorldCopyTests.cpp uses it, to show that a copy runs no hooks.
+struct CopyProbe {
+    ITH_TYPE(Component)
+    ITH_FIELD()
+    std::int32_t value = 0;
 };
 
 } // namespace ith::test

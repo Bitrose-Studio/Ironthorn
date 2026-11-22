@@ -104,8 +104,59 @@ world.despawn(ship);
 - A slot whose generation would wrap is retired.
 - A handle from another world asserts.
 - The default `Entity()` is the null handle; it fails lookups without asserting.
-- Handles are runtime-only. Never save them or send them over the network; persistent identity is
-  a stable id component (ADR-0014 rule 3). The handle type lives in `ith/foundation/Entity.h`.
+- Handles are runtime-only. Never save their bits or send them over the network; persistent identity is
+  the `StableId` component (see below). The handle type lives in `ith/foundation/Entity.h`.
+- Reflect every `Entity` field of a component or resource (`ITH_FIELD()`): a world copy remaps
+  only reflected handles, and the archives write them only through an entity mapping
+  ([reflection guide](reflection.md#entity-fields)).
+
+## Stable ids
+
+```cpp
+#include "ith/ecs/StableId.h"
+
+const ith::Entity door = world.spawn(ith::StableId{.id = ith::Uuid::generate()}, Door{});
+const ith::Entity found = world.findByStableId(id); // null when no entity has it
+```
+
+`ith::StableId` ([ADR-0032](../decisions/0032-entity-references-stable-ids-and-world-copy.md)) is
+an entity's persistent identity: level files, the editor's undo and selection, Keep Simulation
+Changes and networking name entities by it.
+
+- **Opt-in.** The editor gives one to every entity it creates, and level load and prefab
+  instantiation assign theirs. Entities spawned at run time have none.
+- **Unique per world.** A second entity with an id the world already has, or the nil id, asserts
+  and is refused before anything is stored: `spawn` returns the null handle, `add` returns null, a
+  spawn command is dropped. Ids may be derived rather than random (prefab instances).
+- **Immutable**, with engine hooks that keep the world's lookup, so its hooks can't be set.
+  `findByStableId` takes constant time on average.
+
+## World copy
+
+```cpp
+#include "ith/ecs/WorldCopy.h"
+
+ith::World play;
+ith::copyWorld(editorWorld, play, {.excludeEditorOnly = true}); // what Play In Editor does
+```
+
+`ith::copyWorld(source, target, options)` copies a whole world into a fresh one (ADR-0032):
+
+- **Same slots.** Each entity keeps its slot and generation under the target's world id:
+  `Entity::fromParts(e.index(), e.generation(), target.id())`. The free slots are the same too.
+  Match entities across worlds by `StableId`, never by handle.
+- **Every value**, Transient ones included, copied through its reflection record, with every
+  reflected `Entity` remapped to the copy's entity. A handle that isn't alive in the source
+  (stale, null, of another world) becomes null. An unreflected `Entity` is copied as it is.
+- **The hierarchy as it is:** parents, children and roots in order, `Disabled` and
+  `DisabledInHierarchy`, and the stable-id lookup.
+- **Every resource**, copied and remapped the same way.
+- `excludeEditorOnly` leaves out every `EditorOnly` component and resource; the entities stay.
+- **No hooks run**, and **ticks start over**: every value is stamped added and changed at the
+  target's current tick, so its systems see everything as `Added`. System runs aren't copied.
+- **Refused** (asserts, returns false, changes nothing): copying a world into itself, a source
+  being iterated or running a hook, and a target that isn't fresh. Fresh means as the
+  constructor left it: nothing ever spawned or reserved, no resources, no system run.
 
 ## Queries
 
@@ -662,7 +713,10 @@ spawn and the schedule have no target. Record results with the machine they ran 
   `despawnRecursive`, invalid parents, enabled state and propagation) and `ChangeDetectionTests.cpp`
   (what stamps a tick, typed and dynamic `Added` and `Changed`, each system's window per world,
   refused use outside systems and without declared access, the 32-bit wraparound, and propagation
-  that writes only the changed subtrees, removals included);
+  that writes only the changed subtrees, removals included) and `StableIdTests.cpp` (the lookup
+  through every change, duplicate and nil ids refused) and `WorldCopyTests.cpp` (values, slots,
+  hierarchy and order, remapped entities in components and resources, EditorOnly left out, fresh
+  ticks, no hooks, refusals);
 - a randomized model test (`ModelTests.cpp`) that runs thousands of random operations, typed and
   by record, against a simple reference model and checks every handle, value, resource and query
   result, and that the hooks of an immutable component ran as often, and with the values, the

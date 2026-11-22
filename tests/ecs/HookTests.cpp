@@ -26,11 +26,11 @@ using ith::Commands;
 using ith::Entity;
 using ith::HookContext;
 using ith::World;
+using ith::test::Frozen;
 using ith::test::Health;
 using ith::test::Hooked;
 using ith::test::HookedOther;
 using ith::test::HookLog;
-using ith::test::StableId;
 
 // Removals seen by Hooked's onRemove in any world, also one without a HookLog.
 int g_hookedRemovals = 0;
@@ -313,17 +313,17 @@ TEST_CASE("Hooks: HookContext::value checks the type") {
 
 TEST_CASE("Immutable components: reads work, writes in place are refused") {
     World world;
-    const Entity entity = world.spawn(StableId{.value = 7}, Health{});
-    const ith::TypeInfo& type = ith::typeOf<StableId>();
+    const Entity entity = world.spawn(Frozen{.value = 7}, Health{});
+    const ith::TypeInfo& type = ith::typeOf<Frozen>();
     CHECK(hasFlags(type.flags, ith::ReflectionFlags::Immutable));
 
     // Reading is allowed on every path.
-    REQUIRE(world.get<const StableId>(entity) != nullptr);
-    CHECK(world.get<const StableId>(entity)->value == 7);
-    CHECK(std::as_const(world).get<StableId>(entity)->value == 7);
-    CHECK(std::as_const(world).get(entity, type) == world.get<const StableId>(entity));
+    REQUIRE(world.get<const Frozen>(entity) != nullptr);
+    CHECK(world.get<const Frozen>(entity)->value == 7);
+    CHECK(std::as_const(world).get<Frozen>(entity)->value == 7);
+    CHECK(std::as_const(world).get(entity, type) == world.get<const Frozen>(entity));
     int reads = 0;
-    world.query<const StableId>().forEach([&](const StableId& id) { reads += static_cast<int>(id.value); });
+    world.query<const Frozen>().forEach([&](const Frozen& id) { reads += static_cast<int>(id.value); });
     CHECK(reads == 7);
     const std::array readTerm{ith::QueryTerm{.type = &type, .access = ith::Access::Read}};
     int dynamicReads = 0;
@@ -336,10 +336,10 @@ TEST_CASE("Immutable components: reads work, writes in place are refused") {
     // Writing in place asserts and is refused.
     {
         const ith::test::AssertCapture capture;
-        CHECK(world.get<StableId>(entity) == nullptr);
+        CHECK(world.get<Frozen>(entity) == nullptr);
         CHECK(world.get(entity, type) == nullptr);
         int writes = 0;
-        world.query<StableId, const Health>().forEach([&](StableId&, const Health&) { ++writes; });
+        world.query<Frozen, const Health>().forEach([&](Frozen&, const Health&) { ++writes; });
         const std::array writeTerm{ith::QueryTerm{.type = &type, .access = ith::Access::Write}};
         world.dynamicQuery(writeTerm).forEach([&](Entity, std::span<void* const>) { ++writes; });
         CHECK(writes == 0);
@@ -355,33 +355,33 @@ TEST_CASE("Immutable components: reads work, writes in place are refused") {
     }
 
     // Replacing is allowed.
-    REQUIRE(world.add(entity, StableId{.value = 8}) != nullptr);
-    CHECK(world.get<const StableId>(entity)->value == 8);
+    REQUIRE(world.add(entity, Frozen{.value = 8}) != nullptr);
+    CHECK(world.get<const Frozen>(entity)->value == 8);
     Commands commands(world);
-    commands.add(entity, StableId{.value = 9});
+    commands.add(entity, Frozen{.value = 9});
     world.apply(commands);
-    CHECK(world.get<const StableId>(entity)->value == 9);
-    StableId loaded{.value = 10};
+    CHECK(world.get<const Frozen>(entity)->value == 9);
+    Frozen loaded{.value = 10};
     REQUIRE(world.add(entity, type, &loaded) != nullptr);
-    CHECK(world.get<const StableId>(entity)->value == 10);
-    CHECK(world.remove<StableId>(entity));
+    CHECK(world.get<const Frozen>(entity)->value == 10);
+    CHECK(world.remove<Frozen>(entity));
 }
 
 TEST_CASE("Immutable components: systems may read them but not declare write access") {
     World world;
-    world.spawn(StableId{.value = 3});
+    world.spawn(Frozen{.value = 3});
 
     ith::Schedule writer;
-    writer.add({.name = "writer", .access = ith::accessTo<StableId>(), .run = [](ith::SystemContext&) {}});
+    writer.add({.name = "writer", .access = ith::accessTo<Frozen>(), .run = [](ith::SystemContext&) {}});
     const ith::Expected<void> built = writer.build();
     REQUIRE_FALSE(built);
     CHECK(built.error().code == "ecs.schedule.invalid_access");
 
     ith::Schedule reader;
     std::uint64_t sum = 0;
-    reader.add({.name = "reader", .access = ith::accessTo<const StableId>(), .run = [&](ith::SystemContext& context) {
-                    context.query<const StableId>().forEach([&](const StableId& id) { sum += id.value; });
-                    context.commands().spawn(StableId{.value = 4}); // new values come through commands
+    reader.add({.name = "reader", .access = ith::accessTo<const Frozen>(), .run = [&](ith::SystemContext& context) {
+                    context.query<const Frozen>().forEach([&](const Frozen& id) { sum += id.value; });
+                    context.commands().spawn(Frozen{.value = 4}); // new values come through commands
                 }});
     REQUIRE(reader.build());
     reader.run(world);

@@ -89,6 +89,7 @@ ith_add_test_suite(input_actions
         input_actions/ContextTests.cpp
         input_actions/RegressionTests.cpp
         input_actions/TriggerTests.cpp
+        input_actions/WorldCopyTests.cpp
     LIBRARIES ith::input_actions)
 
 # No allocation in steady state: an executable of its own, because AllocationTests.cpp replaces the
@@ -433,6 +434,11 @@ ith_reflect_target(ith_test_ecs_components
     KIND runtime
     INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/ecs"
     HEADERS ecs/EcsComponents.h)
+ith_reflect_target(ith_test_ecs_components
+    MODULE test_ecs_editor
+    KIND editor
+    INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/ecs"
+    HEADERS ecs/EditorEcsComponents.h)
 
 ith_add_test_suite(ecs
     SOURCES
@@ -445,6 +451,8 @@ ith_add_test_suite(ecs
         ecs/ModelTests.cpp
         ecs/ResourceTests.cpp
         ecs/ScheduleTests.cpp
+        ecs/StableIdTests.cpp
+        ecs/WorldCopyTests.cpp
         ecs/WorldTests.cpp
     LIBRARIES ith_test_ecs_components ith::jobs Threads::Threads)
 

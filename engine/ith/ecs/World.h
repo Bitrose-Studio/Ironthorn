@@ -95,6 +95,10 @@
 // and ith::Changed, which keep the values added or changed since that system last ran on this
 // World. Ticks are compared relative to the current tick and old ones are clamped periodically, so
 // the 32-bit wraparound never makes an old value look new.
+//
+// Stable ids (StableId.h, ADR-0032): an entity with a StableId can be found by it with
+// findByStableId; ids are unique per world. A whole world is copied into a fresh one with
+// ith::copyWorld (WorldCopy.h).
 
 #include "ith/ecs/Archetype.h"
 #include "ith/ecs/Commands.h"
@@ -102,8 +106,10 @@
 #include "ith/ecs/DynamicQuery.h"
 #include "ith/ecs/Hierarchy.h"
 #include "ith/ecs/Query.h"
+#include "ith/ecs/StableId.h"
 #include "ith/foundation/Entity.h"
 #include "ith/foundation/Mutex.h"
+#include "ith/foundation/Uuid.h"
 #include "ith/math/Types.h"
 #include "ith/reflection/TypeInfo.h"
 #include "ith/reflection/TypeOf.h"
@@ -126,6 +132,7 @@ namespace ith {
 
 class HookContext;
 class World;
+struct WorldCopyOptions;
 
 // Writes the WorldTransforms of the world that changes made stale (TransformPropagation.h).
 void propagateTransforms(World& world);
@@ -205,6 +212,10 @@ public:
 
     // The number of live entities.
     [[nodiscard]] std::size_t entityCount() const noexcept { return m_entityCount; }
+
+    // The entity whose StableId is `id`, or the null handle when no live entity has it (StableId.h).
+    // Constant time on average.
+    [[nodiscard]] Entity findByStableId(const Uuid& id) const;
 
     // True when the entity is alive and has a T. Constant time. T may be written const.
     template <typename T>
@@ -338,6 +349,7 @@ private:
     friend void propagateTransforms(World& world);
     friend struct detail::TransformPropagation;
     friend void detail::setChangeTickForTesting(World& world, std::uint32_t tick);
+    friend bool copyWorld(const World& source, World& target, const WorldCopyOptions& options);
 
     // The run key of propagateTransforms called directly; Schedule gives its systems keys from 1.
     static constexpr std::uint64_t kDirectPropagationKey = 0;
@@ -483,8 +495,9 @@ private:
     void linkRoot(std::uint32_t index, std::uint32_t before);
     void unlinkRoot(std::uint32_t index);
 
-    // False, asserting, when `value` is a ChildOf whose parent `entity` may not have: the entity
-    // itself, a descendant, a dead entity or one of another world. True for every other type.
+    // False, asserting, when `value` is a ChildOf whose parent `entity` may not have (the entity
+    // itself, a descendant, a dead entity or one of another world), or a StableId whose id is nil or
+    // already another live entity's. True for every other type.
     // `entity` is null for an entity being spawned.
     [[nodiscard]] bool acceptsValue(Entity entity, detail::ComponentIndex type, const void* value) const;
 
@@ -520,6 +533,8 @@ private:
     static void onDisabledAdd(HookContext& context);
     static void onDisabledRemove(HookContext& context);
     static void onLocalTransformRemove(HookContext& context);
+    static void onStableIdInsert(HookContext& context);
+    static void onStableIdReplace(HookContext& context);
     static bool setHierarchyHooks();
 
     std::uint8_t m_id;
@@ -559,6 +574,8 @@ private:
     detail::ChangeClock m_clock;
     std::uint32_t m_lastTickCheck = 0;
     std::unordered_map<std::uint64_t, std::uint32_t> m_lastRuns;
+    // The entity of each stable id, kept by the StableId hooks.
+    std::unordered_map<Uuid, Entity> m_stableIds;
 };
 
 template <typename Function>
@@ -597,6 +614,11 @@ Entity World::spawn(Components&&... components) {
     }
     if constexpr ((std::is_same_v<std::remove_cvref_t<Components>, ChildOf> || ...)) {
         if (!acceptsValue(Entity(), detail::componentIndexOf<ChildOf>(), &std::get<ChildOf>(values))) {
+            return {};
+        }
+    }
+    if constexpr ((std::is_same_v<std::remove_cvref_t<Components>, StableId> || ...)) {
+        if (!acceptsValue(Entity(), detail::componentIndexOf<StableId>(), &std::get<StableId>(values))) {
             return {};
         }
     }
@@ -656,7 +678,7 @@ const std::remove_cvref_t<T>* World::add(Entity entity, T&& value) {
     using Component = std::remove_cvref_t<T>;
     Component local(std::forward<T>(value)); // see spawn
     const detail::ComponentIndex type = detail::componentIndexOf<Component>();
-    if constexpr (std::is_same_v<Component, ChildOf>) {
+    if constexpr (std::is_same_v<Component, ChildOf> || std::is_same_v<Component, StableId>) {
         if (!acceptsValue(entity, type, &local)) {
             return nullptr;
         }

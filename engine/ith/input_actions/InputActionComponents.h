@@ -51,8 +51,9 @@ struct InputPlayer {
     ITH_FIELD()
     std::uint8_t index = 0;
     // The entity this player controls, whose ProvidedInputContexts join the player's stack; the null
-    // handle for none. A runtime link, not saved: it stands in for the Controls relation of
-    // ADR-0016 rule 8 until the ECS has relations.
+    // handle for none. A runtime link, never saved (Transient), which a world copy remaps. It stands
+    // in for the Controls relation of ADR-0016 rule 8 until the ECS has relations.
+    ITH_FIELD(Transient)
     Entity controlled;
 };
 

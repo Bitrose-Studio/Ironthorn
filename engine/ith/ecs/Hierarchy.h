@@ -61,7 +61,8 @@ struct WorldTransform {
 struct ChildOf {
     ITH_TYPE(Component, Immutable)
     // The parent, an entity of the same world. A runtime handle: saving maps it to the parent's
-    // stable id.
+    // stable id, and a world copy maps it to the copied parent (ADR-0032).
+    ITH_FIELD()
     Entity parent;
     // True for a part of the parent, despawned with it; false (the default) for a child that is
     // detached in place when the parent is despawned.
@@ -72,6 +73,8 @@ struct ChildOf {
 // The ordered children of a parent, kept by the World (see the header comment).
 struct Children {
     ITH_TYPE(Component, Immutable, Transient)
+    // The children in order. Never saved: loading rebuilds the list from the children's ChildOf.
+    ITH_FIELD()
     std::vector<Entity> entities;
 };
 

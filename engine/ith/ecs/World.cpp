@@ -711,8 +711,13 @@ const void* World::get(Entity entity, const TypeInfo& type) const {
 
 const void* World::add(Entity entity, const TypeInfo& type) {
     const detail::ComponentIndex index = detail::registerComponentType(type);
-    const ChildOf noParent; // a default ChildOf has no parent, which is refused
-    if (!acceptsValue(entity, index, &noParent)) {
+    // The default value, for the types acceptsValue checks: a default ChildOf has no parent and a
+    // default StableId has the nil id, which are both refused.
+    const ChildOf noParent;
+    const StableId noId;
+    const void* defaultValue = index == detail::componentIndexOf<StableId>() ? static_cast<const void*>(&noId)
+                                                                             : static_cast<const void*>(&noParent);
+    if (!acceptsValue(entity, index, defaultValue)) {
         return nullptr;
     }
     bool added = false;
@@ -947,6 +952,18 @@ Mat4 World::worldMatrixOf(Entity entity) const {
 }
 
 bool World::acceptsValue(Entity entity, detail::ComponentIndex type, const void* value) const {
+    if (type == detail::componentIndexOf<StableId>()) {
+        if (!entity.isNull() && (entity.worldId() != m_id || !isAlive(entity))) {
+            return true; // stale: add refuses it anyway, without asserting
+        }
+        const Uuid& id = static_cast<const StableId*>(value)->id;
+        const bool valid = !id.isNil();
+        ITH_ASSERT_MSG(valid, "ecs: a StableId can't be the nil id");
+        const Entity owner = findByStableId(id);
+        const bool unique = owner.isNull() || owner == entity;
+        ITH_ASSERT_MSG(unique, "ecs: another entity of the world already has this StableId");
+        return valid && unique;
+    }
     if (type != detail::componentIndexOf<ChildOf>()) {
         return true;
     }
@@ -1164,7 +1181,27 @@ bool World::setHierarchyHooks() {
     });
     const bool disabled = setComponentHooks<Disabled>({.onAdd = &onDisabledAdd, .onRemove = &onDisabledRemove});
     const bool local = setComponentHooks<LocalTransform>({.onRemove = &onLocalTransformRemove});
-    return childOf && disabled && local;
+    // onReplace also runs before a removal, so it is the only hook that drops an id.
+    const bool stableId = setComponentHooks<StableId>({.onInsert = &onStableIdInsert, .onReplace = &onStableIdReplace});
+    return childOf && disabled && local && stableId;
+}
+
+Entity World::findByStableId(const Uuid& id) const {
+    const auto found = m_stableIds.find(id);
+    return found != m_stableIds.end() ? found->second : Entity();
+}
+
+void World::onStableIdInsert(HookContext& context) {
+    // acceptsValue refused a duplicate before the value was stored.
+    context.m_world->m_stableIds[context.value<const StableId>()->id] = context.entity();
+}
+
+void World::onStableIdReplace(HookContext& context) {
+    World& world = *context.m_world;
+    const auto found = world.m_stableIds.find(context.value<const StableId>()->id);
+    if (found != world.m_stableIds.end() && found->second == context.entity()) {
+        world.m_stableIds.erase(found);
+    }
 }
 
 void World::onLocalTransformRemove(HookContext& context) {
