@@ -271,7 +271,7 @@ TEST_CASE("Hierarchy: an invalid parent asserts and nothing is stored") {
     ChildOf loop{.parent = grandchild};
     CHECK(world.add(root, ith::typeOf<ChildOf>(), &loop) == nullptr);
     CHECK(world.spawn(ChildOf{.parent = dead}).isNull());
-    int asserts = 7;
+    [[maybe_unused]] int asserts = 7; // only read when asserts are compiled in
 #ifdef ITH_ENABLE_ASSERTS
     CHECK(capture.count() == asserts);
 #endif
