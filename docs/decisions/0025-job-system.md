@@ -1,7 +1,7 @@
 # ADR-0025: The job system
 
 - **Status:** Accepted
-- **Amended by:** [ADR-0026](0026-job-system-rules-corrected.md)
+- **Amended by:** [ADR-0026](0026-job-system-rules-corrected.md), [ADR-0035](0035-file-system-configuration-and-main-thread-queue.md)
 - **Date:** 2026-11-21
 - **Related:** amends [ADR-0012](0012-windowing-and-event-loop.md) rule 9 (main-thread queue);
   [ADR-0001](0001-cpp-language-and-safety-rules.md) (no exceptions, `ith::Expected`,

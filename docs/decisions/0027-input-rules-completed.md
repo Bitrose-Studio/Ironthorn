@@ -1,6 +1,7 @@
 # ADR-0027: Input: rules completed after the first implementation
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0035](0035-file-system-configuration-and-main-thread-queue.md)
 - **Date:** 2026-11-21
 - **Related:** amends [ADR-0012](0012-windowing-and-event-loop.md) (windowing and the event loop)
   and [ADR-0013](0013-input.md) (input); [ADR-0004](0004-modules-and-layering.md) (layers),

@@ -29,16 +29,17 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0022](0022-gpu-minimum-features-completed.md) | GPU minimum features completed for the RHI (amends 0005) | Accepted |
 | [0023](0023-build-time-shaders-for-samples-and-tests.md) | Build-time shaders for samples and tests (amends 0011) | Accepted |
 | [0024](0024-asset-document-envelope-and-extension.md) | Asset documents: the envelope id and native asset extensions (amends 0015, 0020) | Accepted, amended by [0034](0034-level-documents.md) |
-| [0025](0025-job-system.md) | The job system (amends 0012) | Accepted, amended by [0026](0026-job-system-rules-corrected.md) |
+| [0025](0025-job-system.md) | The job system (amends 0012) | Accepted, amended by [0026](0026-job-system-rules-corrected.md), [0035](0035-file-system-configuration-and-main-thread-queue.md) |
 | [0026](0026-job-system-rules-corrected.md) | Job system: rules corrected after the first implementation (amends 0025) | Accepted |
-| [0027](0027-input-rules-completed.md) | Input: rules completed after the first implementation (amends 0012, 0013) | Accepted |
+| [0027](0027-input-rules-completed.md) | Input: rules completed after the first implementation (amends 0012, 0013) | Accepted, amended by [0035](0035-file-system-configuration-and-main-thread-queue.md) |
 | [0028](0028-render-graph-v1.md) | Render graph v1 | Accepted |
-| [0029](0029-editor-ui-toolkit.md) | Editor UI toolkit | Accepted |
+| [0029](0029-editor-ui-toolkit.md) | Editor UI toolkit | Accepted, amended by [0035](0035-file-system-configuration-and-main-thread-queue.md) |
 | [0030](0030-ecs-hooks-registration-and-immutable-components.md) | ECS: component hooks registration and immutable components (amends 0014, 0018) | Accepted |
 | [0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md) | ECS: hierarchy, enabled state and transform propagation completed (amends 0014) | Accepted, amended by [0034](0034-level-documents.md) |
 | [0032](0032-entity-references-stable-ids-and-world-copy.md) | Entity references, stable ids and world copy (amends 0014, 0018, 0020) | Accepted, amended by [0034](0034-level-documents.md) |
 | [0033](0033-reflection-property-paths-and-patches.md) | Reflection property paths and patches (amends 0015, 0018, 0020) | Accepted |
 | [0034](0034-level-documents.md) | Level documents (amends 0015, 0024, 0031, 0032) | Accepted |
+| [0035](0035-file-system-configuration-and-main-thread-queue.md) | File system, layered configuration and the main-thread queue (amends 0025, 0027, 0029) | Accepted |
 
 ## Planned
 
