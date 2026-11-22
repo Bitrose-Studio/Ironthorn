@@ -39,7 +39,8 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0032](0032-entity-references-stable-ids-and-world-copy.md) | Entity references, stable ids and world copy (amends 0014, 0018, 0020) | Accepted, amended by [0034](0034-level-documents.md) |
 | [0033](0033-reflection-property-paths-and-patches.md) | Reflection property paths and patches (amends 0015, 0018, 0020) | Accepted |
 | [0034](0034-level-documents.md) | Level documents (amends 0015, 0024, 0031, 0032) | Accepted |
-| [0035](0035-file-system-configuration-and-main-thread-queue.md) | File system, layered configuration and the main-thread queue (amends 0025, 0027, 0029) | Accepted |
+| [0035](0035-file-system-configuration-and-main-thread-queue.md) | File system, layered configuration and the main-thread queue (amends 0025, 0027, 0029) | Accepted, amended by [0036](0036-file-system-windows-atomic-replace-corrected.md) |
+| [0036](0036-file-system-windows-atomic-replace-corrected.md) | File system: Windows atomic replace corrected after the first implementation (amends 0035) | Accepted |
 
 ## Planned
 
