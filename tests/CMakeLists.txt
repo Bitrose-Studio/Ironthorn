@@ -437,6 +437,7 @@ ith_add_test_suite(ecs
         ecs/CommandTests.cpp
         ecs/ConcurrencyTests.cpp
         ecs/DynamicAccessTests.cpp
+        ecs/HierarchyTests.cpp
         ecs/HookTests.cpp
         ecs/ModelTests.cpp
         ecs/ResourceTests.cpp

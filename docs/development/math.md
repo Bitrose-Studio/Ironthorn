@@ -125,9 +125,13 @@ Code that indexes a vector or matrix with a value computed at run time checks th
 - `intersect(ray, box, plane or sphere)` returns the smallest `t >= 0`, or `nullopt`; a ray that
   starts inside a box or sphere hits at 0.
 
-`Transform` is a plain value: the ECS component that places entities is the ECS's to define.
+`Transform` is a plain value; the ECS places entities with `ith::LocalTransform`, which holds one
+([ECS guide](ecs.md#the-hierarchy-and-transforms)).
 Hierarchies compose matrices, since two transforms with non-uniform scale don't compose into a
-transform.
+transform. `decompose(matrix)` gives the transform closest to an affine matrix: exact for any
+matrix `toMatrix` makes, with shear dropped (Gram-Schmidt on the columns x, y, z), a mirror as a
+negative z scale and a zero column as a zero scale. Reparenting in the ECS uses it to keep an
+entity where it is.
 
 ## Tests
 

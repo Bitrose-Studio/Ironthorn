@@ -25,6 +25,13 @@
 // A query names each component type once, filters included: reading and filtering one type, or
 // requiring and excluding it, is a compile error.
 //
+// Disabled entities (Hierarchy.h, ADR-0031) are skipped: every query leaves out the entities with
+// DisabledInHierarchy, unless it names Disabled or DisabledInHierarchy as a term or filter, or
+// includes the filter ith::IncludeDisabled, which visits enabled and disabled entities alike (the
+// editor and level saving use it).
+//
+//   world.query<const Position, ith::IncludeDisabled>().forEach([](const Position& position) { ... });
+//
 // Each World keeps a cache of the archetypes that match each query type and extends it with the
 // archetypes created since the query last ran, so a query never scans archetypes it has seen.
 //
@@ -68,6 +75,9 @@ struct Without {
     static_assert(std::is_same_v<T, std::remove_cvref_t<T>>, "Without names a plain component type");
 };
 
+// A query filter: the query visits disabled entities too (see the header comment).
+struct IncludeDisabled {};
+
 template <typename... Terms>
 class Query;
 
@@ -77,7 +87,7 @@ namespace detail {
 struct QueryState {
     std::vector<ComponentIndex> terms; // the terms that hand out values, in the query's order
     ComponentMask required;            // the terms and the With filters
-    ComponentMask excluded;            // the Without filters
+    ComponentMask excluded;            // the Without filters, and DisabledInHierarchy by default
     bool matchesNothing = false;       // a term or filter is not a component type, or is repeated
     std::size_t archetypesSeen = 0;
     std::vector<ArchetypeIndex> archetypes; // the matching archetypes
@@ -86,9 +96,11 @@ struct QueryState {
 
 // Fills a new query state with its terms and filters. A type that is kNoComponent (it is not a
 // component; registering it asserted) or that repeats an earlier term or filter (asserted) makes
-// the query match nothing. No terms and no filters match every archetype.
+// the query match nothing. Unless `includeDisabled` is set or the query names Disabled or
+// DisabledInHierarchy, DisabledInHierarchy is excluded. No terms and no filters match every
+// enabled archetype.
 void initQueryState(QueryState& state, std::span<const ComponentIndex> terms, std::span<const ComponentIndex> with = {},
-                    std::span<const ComponentIndex> without = {});
+                    std::span<const ComponentIndex> without = {}, bool includeDisabled = false);
 
 // Adds the archetypes created since the last update that have every required type and no
 // excluded one.
@@ -125,7 +137,10 @@ template <typename T>
 inline constexpr bool kIsWithout<Without<T>> = true;
 
 template <typename T>
-inline constexpr bool kIsFilter = kIsWith<T> || kIsWithout<T>;
+inline constexpr bool kIsIncludeDisabled = std::is_same_v<T, IncludeDisabled>;
+
+template <typename T>
+inline constexpr bool kIsFilter = kIsWith<T> || kIsWithout<T> || kIsIncludeDisabled<T>;
 
 // The component type that a term or a filter names, without const.
 template <typename T>

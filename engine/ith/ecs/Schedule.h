@@ -72,6 +72,11 @@ namespace ith {
 
 class SystemContext;
 
+namespace detail {
+// The run function of transformPropagationSystem (TransformPropagation.h).
+void runTransformPropagation(const SystemContext& context);
+} // namespace detail
+
 // The stages of a frame, in run order (ADR-0014 rule 17). Each ends with a sync point.
 enum class Stage : std::uint8_t {
     Input,         // input routing (ADR-0013)
@@ -176,6 +181,7 @@ public:
 
 private:
     friend class Schedule;
+    friend void detail::runTransformPropagation(const SystemContext& context);
 
     SystemContext(World& world, Commands& commands, std::string_view name, const detail::SystemAccess& access) noexcept
         : m_world(&world), m_commands(&commands), m_name(name), m_access(&access) {}

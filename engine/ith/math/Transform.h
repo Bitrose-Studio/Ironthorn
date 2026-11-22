@@ -35,4 +35,12 @@ struct Transform {
 // A direction moved by the transform: scaled and rotated, not translated.
 [[nodiscard]] Vec3 transformVector(const Transform& transform, const Vec3& vector) noexcept;
 
+// The transform closest to an affine matrix, so that toMatrix(decompose(m)) equals m, up to
+// rounding, for every matrix toMatrix makes. The translation is the last column. The upper 3x3
+// part is split into a rotation and per-axis scales by Gram-Schmidt on its columns, in the order
+// x, y, z; shear (what a rotated parent with non-uniform scale passes to its children) is dropped.
+// A mirroring matrix (negative determinant) gets a negative z scale. A column of length zero gives
+// a zero scale on that axis and a rotation that keeps the other axes. The last row is ignored.
+[[nodiscard]] Transform decompose(const Mat4& matrix) noexcept;
+
 } // namespace ith

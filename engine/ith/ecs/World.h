@@ -76,15 +76,26 @@
 // add returns a const pointer for every type: a write after add would skip the hooks that add has
 // already run. Set the fields on the value before adding it, or write through get afterwards.
 //
-// Not yet here (later ADR-0014 slices): hierarchy and change ticks.
+// The hierarchy (Hierarchy.h, ADR-0031): ChildOf links a child to its parent, the World keeps each
+// parent's ordered Children and the ordered list of roots, and despawn follows each link's policy.
+// Disabled entities and their descendants carry DisabledInHierarchy, which queries skip.
+//
+//   const ith::Entity wheel = world.spawn(ith::LocalTransform{}, ith::ChildOf{.parent = car});
+//   world.placeBefore(wheel, firstWheel);         // reorder siblings
+//   world.forEachRoot([](ith::Entity root) { }); // the roots, in order
+//   world.despawnRecursive(car);                 // the car and everything below it
+//
+// Not yet here (ADR-0014 slice 6): change ticks.
 
 #include "ith/ecs/Archetype.h"
 #include "ith/ecs/Commands.h"
 #include "ith/ecs/ComponentRegistry.h"
 #include "ith/ecs/DynamicQuery.h"
 #include "ith/ecs/Entity.h"
+#include "ith/ecs/Hierarchy.h"
 #include "ith/ecs/Query.h"
 #include "ith/foundation/Mutex.h"
+#include "ith/math/Types.h"
 #include "ith/reflection/TypeInfo.h"
 #include "ith/reflection/TypeOf.h"
 
@@ -103,6 +114,12 @@
 #include <vector>
 
 namespace ith {
+
+class HookContext;
+class World;
+
+// Writes every WorldTransform of the world (TransformPropagation.h).
+void propagateTransforms(World& world);
 
 namespace detail {
 
@@ -143,8 +160,26 @@ public:
     Entity spawn(Components&&... components);
 
     // Destroys an entity and its components. Returns false, doing nothing, for a stale or null
-    // handle, and while a query iterates (asserted).
+    // handle, and while a query iterates (asserted). Its children marked despawnWithParent go
+    // first, recursively, children before parents; its other children are detached in place and
+    // become roots, keeping their world placement (Hierarchy.h).
     bool despawn(Entity entity);
+
+    // Despawns the entity and every entity below it, children before parents, whatever their
+    // links' policy. Returns false as despawn does.
+    bool despawnRecursive(Entity entity);
+
+    // Moves `entity` before `sibling` among its parent's children, or among the roots when it has
+    // no parent; a null `sibling` moves it to the end. Returns false, doing nothing, for a stale
+    // `entity`, and for a stale `sibling`, as a command meets one. A `sibling` that is the entity
+    // itself or under another parent asserts and returns false; so does a call while a query iterates.
+    bool placeBefore(Entity entity, Entity sibling);
+
+    // Calls `function(Entity)` for every root (an entity without ChildOf), disabled ones
+    // included, in order: the order they became roots, changed by placeBefore. Structural changes
+    // inside `function` are refused, as in a query.
+    template <typename Function>
+    void forEachRoot(Function&& function) const;
 
     // True when the handle refers to a live entity of this world.
     [[nodiscard]] bool isAlive(Entity entity) const noexcept { return findRecord(entity) != nullptr; }
@@ -185,9 +220,10 @@ public:
     void clear();
 
     // A query over the entities that have every component type in Terms; see Query.h. Terms
-    // are distinct component types, `const T` to read and `T` to write, and filters, With<T> and
-    // Without<T>, which the returned Query leaves out of its terms. A writable term of an
-    // immutable type asserts, and the query visits nothing.
+    // are distinct component types, `const T` to read and `T` to write, and filters, With<T>,
+    // Without<T> and IncludeDisabled, which the returned Query leaves out of its terms. Disabled
+    // entities are skipped unless the query asks for them. A writable term of an immutable type
+    // asserts, and the query visits nothing.
     template <typename... Terms>
     [[nodiscard]] detail::QueryOf<Terms...> query();
 
@@ -277,11 +313,29 @@ public:
 private:
     friend class Commands;
     friend class Schedule;
+    friend void propagateTransforms(World& world);
+
+    // No slot: the end of the root list.
+    static constexpr std::uint32_t kNoSlot = 0xFFFFFFFFu;
 
     struct EntityRecord {
         std::uint32_t generation = 0;
         detail::ArchetypeIndex archetype = detail::kNoArchetype; // kNoArchetype: the slot is free
         std::uint32_t row = 0;
+        // The root list (Hierarchy.h): the neighbours of a root, kNoSlot at the ends.
+        std::uint32_t previousRoot = kNoSlot;
+        std::uint32_t nextRoot = kNoSlot;
+        bool isRoot = false;
+    };
+
+    // What reparenting or detaching an entity needs between its ChildOf hooks: its world matrix
+    // before the change, and where it was among its old parent's children.
+    struct Placement {
+        Entity entity; // null when nothing is pending
+        Mat4 world{1.0f};
+        bool keepWorld = false; // false for a spawn: the local transform stays as given
+        Entity oldParent;
+        std::size_t oldIndex = 0;
     };
 
     // The record of a live entity of this world, or null.
@@ -362,12 +416,57 @@ private:
     // The cached state of a typed query; `refused` makes a new state match nothing.
     detail::QueryState& queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms,
                                    std::span<const detail::ComponentIndex> with,
-                                   std::span<const detail::ComponentIndex> without, bool refused);
+                                   std::span<const detail::ComponentIndex> without, bool includeDisabled, bool refused);
 
     // The memory where insertResource constructs the value: the old value's memory, destroyed, or
     // new uninitialized memory. Null when `type` is not a resource type.
     void* prepareResource(const TypeInfo& type);
     [[nodiscard]] void* findResource(const TypeInfo& type) const noexcept;
+
+    // The hierarchy (Hierarchy.h, World.cpp).
+
+    // Puts a live entity's slot into the root list before `before` (kNoSlot: at the end), or takes
+    // it out. Both do nothing when the slot already is, or isn't, in the list.
+    void linkRoot(std::uint32_t index, std::uint32_t before);
+    void unlinkRoot(std::uint32_t index);
+
+    // False, asserting, when `value` is a ChildOf whose parent `entity` may not have: the entity
+    // itself, a descendant, a dead entity or one of another world. True for every other type.
+    // `entity` is null for an entity being spawned.
+    [[nodiscard]] bool acceptsValue(Entity entity, detail::ComponentIndex type, const void* value) const;
+
+    // The parent of a live entity, or null.
+    [[nodiscard]] Entity parentOf(Entity entity) const;
+
+    // The children list of a live entity, writable whatever its immutability, or null.
+    [[nodiscard]] std::vector<Entity>* childrenOf(Entity entity) const;
+
+    // The entity's world matrix from its ancestors' local transforms; identity for a dead entity.
+    [[nodiscard]] Mat4 worldMatrixOf(Entity entity) const;
+
+    // Despawns an entity and the children that go with it: those marked despawnWithParent, or all
+    // of them when `everything` is set. The other children are detached first.
+    void despawnTree(Entity entity, bool everything);
+
+    // Despawns one entity, which has no children left that despawn with it.
+    void despawnOne(Entity entity);
+
+    // Appends `child` to its parent's children, creating the list (the LinkChild command).
+    void linkChild(Entity child);
+
+    // Queues adding or removing DisabledInHierarchy below and on `entity`, so that it matches
+    // Disabled and the ancestors. `parentDisabled` is the state above `entity`; `ownDisabled` is
+    // whether `entity` counts as Disabled.
+    void refreshDisabled(Commands& commands, Entity entity, bool parentDisabled, bool ownDisabled) const;
+
+    // The engine's hooks for ChildOf and Disabled, set once per process by the first World.
+    static void onChildOfAdd(HookContext& context);
+    static void onChildOfInsert(HookContext& context);
+    static void onChildOfReplace(HookContext& context);
+    static void onChildOfRemove(HookContext& context);
+    static void onDisabledAdd(HookContext& context);
+    static void onDisabledRemove(HookContext& context);
+    static bool setHierarchyHooks();
 
     std::uint8_t m_id;
     mutable std::uint32_t m_iterationDepth = 0; // also counted by the const forEachComponent
@@ -394,7 +493,27 @@ private:
     // The buffers hooks record into, one per nesting depth, created when first needed.
     std::vector<std::unique_ptr<Commands>> m_hookCommands;
     std::uint32_t m_hookDepth = 0;
+    // The root list's ends (slots), kNoSlot when there are no roots.
+    std::uint32_t m_firstRoot = kNoSlot;
+    std::uint32_t m_lastRoot = kNoSlot;
+    // What the hierarchy hooks need to know about the change that runs them.
+    Entity m_despawning;     // the entity whose despawn runs its removal hooks
+    bool m_clearing = false; // clear() runs removal hooks
+    bool m_spawning = false; // a spawn runs its hooks
+    Placement m_placement;   // between a ChildOf's onAdd or onReplace and the hook after it
 };
+
+template <typename Function>
+void World::forEachRoot(Function&& function) const {
+    static_assert(std::is_invocable_v<Function&, Entity>, "the function must take (ith::Entity)");
+    const detail::IterationScope scope(m_iterationDepth);
+    for (std::uint32_t index = m_firstRoot; index != kNoSlot;) {
+        const EntityRecord& record = m_records[index];
+        const std::uint32_t next = record.nextRoot;
+        function(Entity::fromParts(index, record.generation, m_id));
+        index = next;
+    }
+}
 
 #ifdef _MSC_VER
 // MSVC warns (C4324) that the tuple of arguments is padded when a component is over-aligned;
@@ -417,6 +536,11 @@ Entity World::spawn(Components&&... components) {
         detail::componentIndexOf<std::remove_cvref_t<Components>>()...};
     if (std::ranges::find(types, detail::kNoComponent) != types.end()) {
         return {}; // a type without the Component role; registering it asserted
+    }
+    if constexpr ((std::is_same_v<std::remove_cvref_t<Components>, ChildOf> || ...)) {
+        if (!acceptsValue(Entity(), detail::componentIndexOf<ChildOf>(), &std::get<ChildOf>(values))) {
+            return {};
+        }
     }
     std::array<detail::ComponentIndex, kCount> sorted = types;
     std::ranges::sort(sorted);
@@ -472,6 +596,11 @@ const std::remove_cvref_t<T>* World::add(Entity entity, T&& value) {
     using Component = std::remove_cvref_t<T>;
     Component local(std::forward<T>(value)); // see spawn
     const detail::ComponentIndex type = detail::componentIndexOf<Component>();
+    if constexpr (std::is_same_v<Component, ChildOf>) {
+        if (!acceptsValue(entity, type, &local)) {
+            return nullptr;
+        }
+    }
     bool added = false;
     void* memory = prepareAdd(entity, type, added);
     if (memory == nullptr) {
@@ -500,26 +629,30 @@ detail::QueryOf<Terms...> World::query() {
     std::size_t termCount = 0;
     std::size_t withCount = 0;
     std::size_t withoutCount = 0;
+    // A writable term of an immutable type refuses the query. Immutability never changes, so the
+    // cached state of this query type matches nothing for good.
+    bool writesImmutable = false;
     const auto sort = [&]<typename Term> {
-        const detail::ComponentIndex type = detail::componentIndexOf<detail::TermComponentT<Term>>();
-        if constexpr (detail::kIsWith<Term>) {
-            with[withCount++] = type;
+        if constexpr (detail::kIsIncludeDisabled<Term>) {
+            return; // names no component
+        } else if constexpr (detail::kIsWith<Term>) {
+            with[withCount++] = detail::componentIndexOf<detail::TermComponentT<Term>>();
         } else if constexpr (detail::kIsWithout<Term>) {
-            without[withoutCount++] = type;
+            without[withoutCount++] = detail::componentIndexOf<detail::TermComponentT<Term>>();
         } else {
-            terms[termCount++] = type;
+            using Component = std::remove_const_t<Term>;
+            terms[termCount++] = detail::componentIndexOf<Component>();
+            if constexpr (!std::is_const_v<Term>) {
+                writesImmutable = writesImmutable || (detail::isImmutableComponent<Component>() &&
+                                                      !detail::isWritableComponent(typeOf<Component>()));
+            }
         }
     };
     (sort.template operator()<Terms>(), ...);
-    // A writable term of an immutable type refuses the query. Immutability never changes, so the
-    // cached state of this query type matches nothing for good.
-    const bool writesImmutable = ((!detail::kIsFilter<Terms> && !std::is_const_v<Terms> &&
-                                   detail::isImmutableComponent<detail::TermComponentT<Terms>>() &&
-                                   !detail::isWritableComponent(typeOf<detail::TermComponentT<Terms>>())) ||
-                                  ...);
-    detail::QueryState& state =
-        queryState(detail::typeListSlot<Terms...>(), std::span(terms.data(), termCount),
-                   std::span(with.data(), withCount), std::span(without.data(), withoutCount), writesImmutable);
+    constexpr bool kIncludeDisabled = (detail::kIsIncludeDisabled<Terms> || ...);
+    detail::QueryState& state = queryState(detail::typeListSlot<Terms...>(), std::span(terms.data(), termCount),
+                                           std::span(with.data(), withCount), std::span(without.data(), withoutCount),
+                                           kIncludeDisabled, writesImmutable);
     return detail::QueryOf<Terms...>(state, m_archetypes, m_iterationDepth);
 }
 

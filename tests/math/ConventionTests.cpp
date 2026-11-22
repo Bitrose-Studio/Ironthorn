@@ -231,4 +231,63 @@ TEST_SUITE("math.conventions") {
             CHECK(same(m[column], composed[column]));
         }
     }
+
+    TEST_CASE("decompose gives back the transform of a matrix toMatrix made") {
+        const std::initializer_list<ith::Transform> transforms{
+            ith::Transform{},
+            ith::Transform{.translation = {1.0f, -2.0f, 3.5f}},
+            ith::Transform{.translation = {0.0f, 1.0f, 0.0f},
+                           .rotation = glm::angleAxis(ith::kHalfPi, ith::kWorldUp),
+                           .scale = {2.0f, 1.0f, 0.5f}},
+            ith::Transform{.translation = {4.0f, 5.0f, 6.0f},
+                           .rotation = glm::angleAxis(1.0f, glm::normalize(ith::Vec3(1.0f, 2.0f, -3.0f))),
+                           .scale = {0.25f, 3.0f, 7.0f}},
+            // Mirroring: the sign ends up on z, and the matrix is the same.
+            ith::Transform{.rotation = glm::angleAxis(0.5f, ith::Vec3(1.0f, 0.0f, 0.0f)), .scale = {1.0f, 2.0f, -3.0f}},
+        };
+        for (const ith::Transform& transform : transforms) {
+            const ith::Mat4 m = toMatrix(transform);
+            const ith::Transform decomposed = ith::decompose(m);
+            CHECK(same(decomposed.translation, transform.translation));
+            CHECK(same(decomposed.scale, transform.scale));
+            CHECK(glm::abs(glm::dot(decomposed.rotation, transform.rotation)) == doctest::Approx(1.0f));
+            CHECK(glm::length(decomposed.rotation) == doctest::Approx(1.0f));
+            const ith::Mat4 again = toMatrix(decomposed);
+            for (int column = 0; column < 4; ++column) {
+                CHECK(same(again[column], m[column]));
+            }
+        }
+
+        // A mirror on x comes back as a mirror on z with a rotation, giving the same matrix.
+        const ith::Mat4 mirrored = glm::scale(ith::Mat4(1.0f), ith::Vec3(-2.0f, 1.0f, 1.0f));
+        const ith::Transform flipped = ith::decompose(mirrored);
+        CHECK(flipped.scale.z < 0.0f);
+        const ith::Mat4 again = toMatrix(flipped);
+        for (int column = 0; column < 4; ++column) {
+            CHECK(same(again[column], mirrored[column]));
+        }
+    }
+
+    TEST_CASE("decompose drops shear and handles zero scales") {
+        // A rotated parent with non-uniform scale shears its child: the y column leans towards x.
+        ith::Mat4 sheared(1.0f);
+        sheared[1] = ith::Vec4(0.5f, 2.0f, 0.0f, 0.0f);
+        sheared[3] = ith::Vec4(1.0f, 2.0f, 3.0f, 1.0f);
+        const ith::Transform kept = ith::decompose(sheared);
+        CHECK(same(kept.translation, ith::Vec3(1.0f, 2.0f, 3.0f)));
+        CHECK(same(kept.scale, ith::Vec3(1.0f, 2.0f, 1.0f)));
+        CHECK(glm::abs(glm::dot(kept.rotation, ith::Quat(0.0f, 0.0f, 0.0f, 1.0f))) == doctest::Approx(1.0f));
+        // The x axis and the plane of x and y are kept.
+        CHECK(same(transformVector(kept, ith::Vec3(1, 0, 0)), ith::Vec3(1, 0, 0)));
+
+        // A zero scale on one axis keeps the others; all zero gives a zero scale and a unit rotation.
+        const ith::Transform flat = ith::decompose(glm::scale(ith::Mat4(1.0f), ith::Vec3(2.0f, 0.0f, 3.0f)));
+        CHECK(same(flat.scale, ith::Vec3(2.0f, 0.0f, 3.0f)));
+        CHECK(same(transformVector(flat, ith::Vec3(1, 1, 1)), ith::Vec3(2, 0, 3)));
+        const ith::Transform flatX = ith::decompose(glm::scale(ith::Mat4(1.0f), ith::Vec3(0.0f, 2.0f, 3.0f)));
+        CHECK(same(transformVector(flatX, ith::Vec3(1, 1, 1)), ith::Vec3(0, 2, 3)));
+        const ith::Transform nothing = ith::decompose(ith::Mat4(0.0f));
+        CHECK(same(nothing.scale, ith::Vec3(0.0f)));
+        CHECK(glm::length(nothing.rotation) == doctest::Approx(1.0f));
+    }
 }

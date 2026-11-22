@@ -5,19 +5,29 @@
 // against the same model. An immutable component with hooks (Tracked) is spawned, replaced,
 // removed, despawned and cleared too; its hooks count their calls into a resource, which is checked
 // against the counts the model expects (ADR-0030). Queries with With and Without filters are checked
-// too. The seeds are fixed, so a failure reproduces.
+// too. A second model test runs random hierarchy operations (reparent, detach, despawn with the
+// link policy, despawnRecursive, placeBefore, Disabled) and checks the hierarchy invariants after
+// every step. The seeds are fixed, so a failure reproduces.
 
+#include "ith/ecs/Hierarchy.h"
 #include "ith/ecs/Hooks.h"
+#include "ith/ecs/TransformPropagation.h"
 #include "ith/ecs/World.h"
+#include "ith/math/Math.h"
+#include "ith/math/Transform.h"
 #include "ith/reflection/TypeOf.h"
 
+#include "AssertCapture.h"
 #include "EcsComponents.h"
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <random>
@@ -450,5 +460,380 @@ TEST_CASE("World: random operations match a reference model") {
         CAPTURE(seed);
         ModelTest test(seed);
         test.run(3000);
+    }
+}
+
+namespace {
+
+using ith::ChildOf;
+using ith::Children;
+using ith::Disabled;
+using ith::DisabledInHierarchy;
+using ith::LocalTransform;
+using ith::Mat4;
+using ith::Vec3;
+using ith::WorldTransform;
+
+// One entity of the hierarchy model.
+struct ModelNode {
+    Entity parent; // null for a root
+    bool despawnWithParent = false;
+    std::vector<Entity> children; // in order
+    bool disabled = false;
+};
+
+// Random hierarchy operations, directly and through commands, against a model of the links, the
+// order of children and roots, and the Disabled tags. After every step it checks that parent and
+// child links agree both ways, that the root list is exactly the entities without ChildOf, in the
+// model's order, that DisabledInHierarchy matches Disabled and the ancestors, and that propagation
+// gives every WorldTransform the product of the local transforms above it. Reparenting and
+// detaching an entity with a LocalTransform must keep its world matrix.
+class HierarchyModelTest {
+public:
+    explicit HierarchyModelTest(std::uint32_t seed) : m_random(seed) {}
+
+    void run(int steps) {
+        for (int step = 0; step < steps; ++step) {
+            CAPTURE(step);
+            this->step();
+            check();
+        }
+    }
+
+private:
+    std::uint32_t pick(std::uint32_t count) { return static_cast<std::uint32_t>(m_random() % count); }
+
+    // A live entity, or the null handle when there is none.
+    Entity anyLive() {
+        if (m_nodes.empty()) {
+            return {};
+        }
+        auto found = m_nodes.begin();
+        std::advance(found, pick(static_cast<std::uint32_t>(m_nodes.size())));
+        return Entity::fromBits(found->first);
+    }
+
+    ModelNode& node(Entity entity) { return m_nodes.at(entity.bits()); }
+
+    // The order list `entity` is in: its parent's children, or the roots.
+    std::vector<Entity>& siblings(Entity entity) {
+        const Entity parent = node(entity).parent;
+        return parent.isNull() ? m_roots : node(parent).children;
+    }
+
+    static void erase(std::vector<Entity>& list, Entity entity) {
+        const auto found = std::ranges::find_if(list, [entity](Entity entry) { return entry == entity; });
+        REQUIRE(found != list.end());
+        list.erase(found);
+    }
+
+    bool isDescendantOrSelf(Entity candidate, Entity of) {
+        for (Entity current = candidate; !current.isNull(); current = node(current).parent) {
+            if (current == of) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Uniform scales only, so that a hierarchy has no shear and keeping the world placement is
+    // exact up to rounding.
+    LocalTransform randomLocal() {
+        const Vec3 axis = glm::normalize(
+            Vec3(static_cast<float>(pick(5)) + 0.5f, static_cast<float>(pick(5)), static_cast<float>(pick(5))));
+        return {.value = {.translation = Vec3(static_cast<float>(pick(20)) - 10.0f, static_cast<float>(pick(10)),
+                                              static_cast<float>(pick(20)) - 10.0f),
+                          .rotation = glm::angleAxis(static_cast<float>(pick(628)) / 100.0f, axis),
+                          .scale = Vec3(0.5f + (static_cast<float>(pick(4)) * 0.25f))}};
+    }
+
+    // The world matrix from the World's local transforms along the model's links.
+    Mat4 reference(Entity entity) {
+        std::vector<Entity> chain;
+        for (Entity current = entity; !current.isNull(); current = node(current).parent) {
+            chain.push_back(current);
+        }
+        Mat4 world(1.0f);
+        for (auto current = chain.rbegin(); current != chain.rend(); ++current) {
+            if (const LocalTransform* local = m_world.get<const LocalTransform>(*current)) {
+                world = world * ith::toMatrix(local->value);
+            }
+        }
+        return world;
+    }
+
+    static bool close(const Mat4& a, const Mat4& b) {
+        for (int column = 0; column < 4; ++column) {
+            for (int row = 0; row < 4; ++row) {
+                const float tolerance = 1e-3f * (1.0f + std::abs(a[column][row]));
+                if (std::abs(a[column][row] - b[column][row]) > tolerance) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    void spawnEntity() {
+        const bool placed = pick(4) != 0;
+        const Entity parent = pick(3) != 0 ? anyLive() : Entity();
+        const bool part = !parent.isNull() && pick(3) == 0;
+        Entity entity;
+        if (parent.isNull()) {
+            entity = placed ? m_world.spawn(randomLocal(), WorldTransform{}) : m_world.spawn(WorldTransform{});
+        } else if (pick(4) == 0) {
+            ith::Commands commands(m_world);
+            const ChildOf link{.parent = parent, .despawnWithParent = part};
+            entity = placed ? commands.spawn(randomLocal(), WorldTransform{}, link) : commands.spawn(link);
+            m_world.apply(commands);
+        } else {
+            const ChildOf link{.parent = parent, .despawnWithParent = part};
+            entity = placed ? m_world.spawn(randomLocal(), WorldTransform{}, link) : m_world.spawn(link);
+        }
+        REQUIRE(m_world.isAlive(entity));
+        m_nodes[entity.bits()] = ModelNode{.parent = parent, .despawnWithParent = part};
+        (parent.isNull() ? m_roots : node(parent).children).push_back(entity);
+    }
+
+    void reparent() {
+        const Entity entity = anyLive();
+        const Entity parent = anyLive();
+        if (entity.isNull()) {
+            return;
+        }
+        const bool part = pick(3) == 0;
+        if (isDescendantOrSelf(parent, entity)) {
+            // Refused: the entity itself or one of its descendants.
+            const ith::test::AssertCapture capture;
+            CHECK(m_world.add(entity, ChildOf{.parent = parent}) == nullptr);
+#ifdef ITH_ENABLE_ASSERTS
+            CHECK(capture.count() == 1);
+#endif
+            return;
+        }
+        const bool placed = m_world.has<LocalTransform>(entity);
+        const Mat4 before = reference(entity);
+        if (pick(2) == 0) {
+            REQUIRE(m_world.add(entity, ChildOf{.parent = parent, .despawnWithParent = part}) != nullptr);
+        } else {
+            ith::Commands commands(m_world);
+            commands.add(entity, ChildOf{.parent = parent, .despawnWithParent = part});
+            m_world.apply(commands);
+        }
+        if (node(entity).parent != parent) { // the same parent keeps the place
+            erase(siblings(entity), entity);
+            node(entity).parent = parent;
+            node(parent).children.push_back(entity);
+        }
+        node(entity).despawnWithParent = part;
+        if (placed) {
+            CHECK(close(reference(entity), before));
+        }
+    }
+
+    void detach() {
+        const Entity entity = anyLive();
+        if (entity.isNull()) {
+            return;
+        }
+        const bool hadParent = !node(entity).parent.isNull();
+        const bool placed = m_world.has<LocalTransform>(entity);
+        const Mat4 before = reference(entity);
+        CHECK(m_world.remove<ChildOf>(entity) == hadParent);
+        if (hadParent) {
+            erase(siblings(entity), entity);
+            node(entity).parent = {};
+            node(entity).despawnWithParent = false;
+            m_roots.push_back(entity);
+            if (placed) {
+                CHECK(close(reference(entity), before));
+            }
+        }
+    }
+
+    // The model of World::despawn and despawnRecursive, with the World's walk: the entities that
+    // go, breadth first, then in reverse, each detaching the children left to it.
+    void despawnModel(Entity entity, bool everything) {
+        std::vector<Entity> order{entity};
+        for (std::size_t next = 0; next < order.size(); ++next) {
+            for (const Entity child : node(order[next]).children) {
+                if (everything || node(child).despawnWithParent) {
+                    order.push_back(child);
+                }
+            }
+        }
+        for (std::size_t index = order.size(); index-- > 0;) {
+            const Entity current = order[index];
+            const std::vector<Entity> remaining = node(current).children;
+            for (const Entity child : remaining) {
+                node(child).parent = {};
+                node(child).despawnWithParent = false;
+                m_roots.push_back(child);
+            }
+            erase(siblings(current), current);
+            m_nodes.erase(current.bits());
+        }
+    }
+
+    void despawn() {
+        const Entity entity = anyLive();
+        if (entity.isNull()) {
+            return;
+        }
+        const bool everything = pick(3) == 0;
+        if (pick(2) == 0) {
+            CHECK((everything ? m_world.despawnRecursive(entity) : m_world.despawn(entity)));
+        } else {
+            ith::Commands commands(m_world);
+            if (everything) {
+                commands.despawnRecursive(entity);
+            } else {
+                commands.despawn(entity);
+            }
+            m_world.apply(commands);
+        }
+        despawnModel(entity, everything);
+    }
+
+    void placeBefore() {
+        const Entity entity = anyLive();
+        if (entity.isNull()) {
+            return;
+        }
+        std::vector<Entity>& list = siblings(entity);
+        const Entity sibling = pick(4) == 0 ? Entity() : list[pick(static_cast<std::uint32_t>(list.size()))];
+        if (sibling == entity) {
+            return;
+        }
+        if (pick(2) == 0) {
+            CHECK(m_world.placeBefore(entity, sibling));
+        } else {
+            ith::Commands commands(m_world);
+            commands.placeBefore(entity, sibling);
+            m_world.apply(commands);
+        }
+        erase(list, entity);
+        const auto position = sibling.isNull()
+                                  ? list.end()
+                                  : std::ranges::find_if(list, [sibling](Entity entry) { return entry == sibling; });
+        list.insert(position, entity);
+    }
+
+    void toggleDisabled() {
+        const Entity entity = anyLive();
+        if (entity.isNull()) {
+            return;
+        }
+        ModelNode& model = node(entity);
+        if (model.disabled) {
+            CHECK(m_world.remove<Disabled>(entity));
+        } else {
+            CHECK(m_world.add(entity, Disabled{}) != nullptr);
+        }
+        model.disabled = !model.disabled;
+    }
+
+    void step() {
+        const std::uint32_t operation = pick(100);
+        if (operation < 30 || m_nodes.size() < 4) {
+            spawnEntity();
+        } else if (operation < 50) {
+            reparent();
+        } else if (operation < 58) {
+            detach();
+        } else if (operation < 70) {
+            despawn();
+        } else if (operation < 80) {
+            placeBefore();
+        } else if (operation < 92) {
+            toggleDisabled();
+        } else if (operation < 99) {
+            if (const Entity entity = anyLive(); !entity.isNull() && m_world.has<LocalTransform>(entity)) {
+                m_world.get<LocalTransform>(entity)->value = randomLocal().value;
+            }
+        } else {
+            m_world.clear();
+            m_nodes.clear();
+            m_roots.clear();
+        }
+    }
+
+    bool disabledInModel(Entity entity) {
+        for (Entity current = entity; !current.isNull(); current = node(current).parent) {
+            if (node(current).disabled) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void check() {
+        REQUIRE(m_world.entityCount() == m_nodes.size());
+        // The roots, in order, are exactly the entities without ChildOf.
+        std::vector<Entity> roots;
+        m_world.forEachRoot([&](Entity root) { roots.push_back(root); });
+        CHECK(roots == m_roots);
+        ith::propagateTransforms(m_world);
+        std::size_t placed = 0;
+        std::size_t placedEnabled = 0;
+        for (const auto& [bits, model] : m_nodes) {
+            const Entity entity = Entity::fromBits(bits);
+            REQUIRE(m_world.isAlive(entity));
+            // Parent and child links agree both ways, in the model's order.
+            const ChildOf* link = m_world.get<const ChildOf>(entity);
+            REQUIRE((link != nullptr) == !model.parent.isNull());
+            if (link != nullptr) {
+                CHECK(link->parent == model.parent);
+                CHECK(link->despawnWithParent == model.despawnWithParent);
+                const Children* siblings = m_world.get<const Children>(link->parent);
+                REQUIRE(siblings != nullptr);
+                CHECK(std::ranges::count_if(siblings->entities, [entity](Entity entry) { return entry == entity; }) ==
+                      1);
+            }
+            if (const Children* children = m_world.get<const Children>(entity)) {
+                CHECK(children->entities == model.children);
+                for (const Entity child : children->entities) {
+                    REQUIRE(m_world.isAlive(child));
+                    CHECK(m_world.get<const ChildOf>(child)->parent == entity);
+                }
+            } else {
+                CHECK(model.children.empty());
+            }
+            // DisabledInHierarchy matches Disabled and the ancestors.
+            const bool disabled = disabledInModel(entity);
+            CHECK(m_world.has<Disabled>(entity) == model.disabled);
+            CHECK(m_world.has<DisabledInHierarchy>(entity) == disabled);
+            // Propagation matches the reference.
+            if (const WorldTransform* world = m_world.get<const WorldTransform>(entity)) {
+                CHECK(close(world->matrix, reference(entity)));
+                ++placed;
+                placedEnabled += disabled ? 0 : 1;
+            }
+        }
+        // Queries skip disabled entities unless they ask for them.
+        std::size_t visited = 0;
+        m_world.query<const WorldTransform>().forEach([&](Entity entity, const WorldTransform&) {
+            CHECK_FALSE(disabledInModel(entity));
+            ++visited;
+        });
+        CHECK(visited == placedEnabled);
+        std::size_t all = 0;
+        m_world.query<const WorldTransform, ith::IncludeDisabled>().forEach([&](const WorldTransform&) { ++all; });
+        CHECK(all == placed);
+    }
+
+    std::mt19937 m_random;
+    World m_world;
+    std::map<std::uint64_t, ModelNode> m_nodes;
+    std::vector<Entity> m_roots; // in order
+};
+
+} // namespace
+
+TEST_CASE("World: random hierarchy operations match a reference model") {
+    for (const std::uint32_t seed : {1u, 7u, 42u, 2026u}) {
+        CAPTURE(seed);
+        HierarchyModelTest test(seed);
+        test.run(1500);
     }
 }

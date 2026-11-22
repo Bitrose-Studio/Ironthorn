@@ -2,11 +2,13 @@
 
 The `ecs` module stores the game world as entities with components, in archetype tables. The
 design is [ADR-0014](../decisions/0014-ecs-storage-and-world.md); this page shows how to use what
-exists today, which is the ADR's first four slices: entities, archetype tables, typed queries and
+exists today, which is the ADR's first five slices: entities, archetype tables, typed queries and
 `has`; component access and queries by reflection record, and resources; deferred commands and
-the schedule of systems; then component hooks and immutable components
-([ADR-0030](../decisions/0030-ecs-hooks-registration-and-immutable-components.md)). The hierarchy
-and change detection follow in later slices.
+the schedule of systems; component hooks and immutable components
+([ADR-0030](../decisions/0030-ecs-hooks-registration-and-immutable-components.md)); then the
+hierarchy, enabled state and transform propagation
+([ADR-0031](../decisions/0031-ecs-hierarchy-enabled-state-and-transform-propagation.md)). Change
+detection follows in slice 6.
 
 ## Components
 
@@ -73,7 +75,8 @@ world.despawn(ship);
 | Call | Result |
 |---|---|
 | `spawn(components...)` | A new entity with these components, each of a distinct type |
-| `despawn(entity)` | Destroys the entity; `false` for a stale handle |
+| `despawn(entity)` | Destroys the entity, following its children's [despawn policy](#the-hierarchy-and-transforms); `false` for a stale handle |
+| `despawnRecursive(entity)` | Destroys the entity and everything below it |
 | `isAlive(entity)` | Whether the handle refers to a live entity of this world |
 | `has<T>(entity)` | Whether the entity is alive and has a `T` |
 | `get<T>(entity)` | A pointer to the entity's `T`, or null |
@@ -81,6 +84,7 @@ world.despawn(ship);
 | `remove<T>(entity)` | Removes the entity's `T`; `false` when it has none |
 | `clear()` | Despawns every entity |
 | `entityCount()` | The number of live entities |
+| `placeBefore(entity, sibling)`, `forEachRoot(function)` | Order siblings; visit the roots in order ([hierarchy](#the-hierarchy-and-transforms)) |
 
 - **Pointers from `get` and `add`** are valid until the next structural change (spawn, despawn,
   add, remove, clear). Keep handles, not pointers.
@@ -128,6 +132,9 @@ world.query<ith::With<game::Frozen>>().forEach([](ith::Entity entity) { ... });
   out no values, so the function doesn't take them, and a system needs no access to their types,
   as for `has`. A query of filters only passes the entity, or nothing.
 - Naming a type twice is a compile error, filters included.
+- **Disabled entities are skipped**: every query leaves out entities with `ith::DisabledInHierarchy`
+  ([enabled state](#enabled-state)) unless it names `Disabled` or `DisabledInHierarchy` as a term
+  or filter, or includes the filter `ith::IncludeDisabled`, as the editor and level saving do.
 - Each world caches the archetypes that match each query type, and adds new archetypes as they
   appear. A query object can be kept and reused while the world lives.
 - **No structural changes inside `forEach`.** They assert and are refused. Record them as
@@ -191,7 +198,9 @@ ith::DynamicQuery moving = world.dynamicQuery(terms, filters);
 
 - A dynamic query matches archetypes with the same code as a typed query and visits the same
   entities in the same order.
-- **A query without terms and filters visits every entity**, which is how a level is saved.
+- Disabled entities are skipped as for a typed query; `FilterKind::IncludeDisabled` (a filter
+  without a type) visits them too. **A query without terms visits every enabled entity**, and
+  with only an `IncludeDisabled` filter every entity, which is how a level is saved.
 - Each term declares read or write access. Inside a system it must match the system's declared
   access, and change detection will use it; don't write through a read term's pointer.
 - Filters (`FilterKind::With`, `FilterKind::Without`) hand out no values, so they are not in
@@ -265,6 +274,7 @@ world.apply(commands); // in recording order; the buffer is empty afterwards
 | `despawn(entity)` | Despawning the entity |
 | `add(entity, value)` | Giving the entity `value`, replacing a value of that type |
 | `remove<T>(entity)` | Removing the entity's `T` |
+| `despawnRecursive(entity)`, `placeBefore(entity, sibling)` | As the World functions of the same name |
 | `append(other)` | Moves `other`'s commands to the end, in order; `other` is left empty |
 
 - **`world.apply(commands)` runs the commands in recording order.** Each behaves like the World
@@ -380,7 +390,8 @@ ith::setComponentHooks<game::Owner>({.onRemove = &onOwnerRemoved});
 
 - **Once per process, per component type.** Every World runs the hooks, Play In Editor copies
   included. Setting a type's hooks twice, or after a World stored the type, asserts and changes
-  nothing. A hook is a plain function; state it needs lives in a world resource.
+  nothing. A hook is a plain function; state it needs lives in a world resource. `ChildOf` and
+  `Disabled` have the engine's hooks, which the first World sets ([hierarchy](#the-hierarchy-and-transforms)).
 - **When they run:**
 
   | Hook | Runs | The value |
@@ -433,6 +444,89 @@ commands.add(entity, Owner{.id = 8});              // replacing later: allowed
 `add` returns a const pointer to the stored value, for immutable types as for every other. Saving
 and loading are unaffected: a loader adds the value it read with `add(entity, type, value)`.
 
+## The hierarchy and transforms
+
+Entities form ordered trees, the Outliner's view of the world
+([ADR-0031](../decisions/0031-ecs-hierarchy-enabled-state-and-transform-propagation.md)). The
+components are in `ith/ecs/Hierarchy.h`, included by `World.h`:
+
+| Component | Holds | Written by |
+|---|---|---|
+| `LocalTransform` | `ith::Transform value`: the placement relative to the parent, or to the world for a root | You |
+| `WorldTransform` | `ith::Mat4 matrix`: the placement in the world. Transient | Propagation |
+| `ChildOf` | `Entity parent`, `bool despawnWithParent`. Immutable | You, by adding or removing it |
+| `Children` | `std::vector<Entity> entities`: the parent's children, in order. Immutable, Transient | The World only |
+| `Disabled` | A tag | You |
+| `DisabledInHierarchy` | A tag on a disabled entity and everything below it. Transient | The World only |
+
+```cpp
+const ith::Entity car = world.spawn(ith::LocalTransform{}, ith::WorldTransform{});
+const ith::Entity wheel = world.spawn(ith::LocalTransform{.value = {.translation = {1, 0, 2}}},
+                                      ith::WorldTransform{},
+                                      ith::ChildOf{.parent = car, .despawnWithParent = true});
+const ith::Entity driver = world.spawn(ith::LocalTransform{});
+world.add(driver, ith::ChildOf{.parent = car});   // reparent: the driver stays where it is
+world.remove<ith::ChildOf>(driver);               // detach: a root again, where it was
+world.placeBefore(wheel, otherWheel);             // reorder siblings (or roots)
+world.forEachRoot([](ith::Entity root) { ... });  // the roots, in order
+world.despawn(car);                               // the wheel goes too; the driver would be detached
+```
+
+- **Links.** An entity with `ChildOf` is a child of its parent; every other entity is a root.
+  Change the parent by adding a new `ChildOf`, detach by removing it. A parent that is the entity
+  itself, one of its descendants, a dead entity or an entity of another world asserts, and nothing
+  is stored (`add` returns null, a spawn gives the null handle or a reserved handle that stays
+  stale).
+- **Order.** Children are appended to their parent's `Children` when they gain the parent, and
+  roots are appended to the world's root list when they spawn or are detached. `placeBefore(entity,
+  sibling)` moves an entity before a sibling, or to the end with a null `sibling`; a `sibling` under
+  another parent asserts. Replacing a `ChildOf` with the same parent keeps the place. Never add,
+  remove or write `Children` yourself.
+- **World placement.** Reparenting and detaching keep the entity's world placement: the World sets
+  its `LocalTransform` so that it doesn't move, computed from its ancestors' local transforms (a
+  shear from a rotated, non-uniformly scaled parent is dropped, see
+  [`ith::decompose`](math.md)). To keep the local transform instead, add `LocalTransform` after
+  the `ChildOf`, in the same command buffer. A spawn with a `ChildOf` keeps the local transform it
+  was given. An entity without `LocalTransform` counts as the identity.
+- **Despawning a parent** first despawns its children marked `despawnWithParent`, recursively,
+  children before their parents; its other children are detached in place and become roots.
+  `despawnRecursive` despawns the whole subtree, children first, whatever the links say. The
+  editor's Delete is `despawn`; its "Delete with children" is `despawnRecursive`.
+- **Commands** record `despawnRecursive` and `placeBefore` like the other commands. `ChildOf` is
+  added and removed with `add` and `remove`.
+- Removing a child from its parent's list takes time proportional to the number of siblings.
+
+### Enabled state
+
+`Disabled` turns an entity and everything below it off. The World keeps `DisabledInHierarchy` on
+the disabled entity and on each descendant, also as entities are reparented, detached and
+despawned, so systems never walk the hierarchy to check:
+
+- Every query, typed or dynamic, skips entities with `DisabledInHierarchy`, unless it names
+  `Disabled` or `DisabledInHierarchy` as a term or filter, or includes `ith::IncludeDisabled`
+  (`FilterKind::IncludeDisabled` for a dynamic query).
+- `get`, `has`, `forEachComponent` and `forEachRoot` see disabled entities as usual.
+- Never add or remove `DisabledInHierarchy` yourself.
+
+### Transform propagation
+
+```cpp
+#include "ith/ecs/TransformPropagation.h"
+
+schedule.add(ith::transformPropagationSystem()); // "ith::propagate_transforms", in PostUpdate
+ith::propagateTransforms(world);                 // or directly
+```
+
+- Each root's `WorldTransform` is its local transform; each child's is its parent's world matrix
+  times its own local transform (`world = parent * local`,
+  [ADR-0006](../decisions/0006-math-and-coordinate-conventions.md)). An entity without a
+  `WorldTransform` is skipped, but its children still get theirs; disabled entities are
+  propagated too.
+- Slice 5 propagates every entity each time. With change ticks (slice 6) only the subtrees whose
+  local transforms or links changed will be propagated.
+- Code that needs a world matrix before the next propagation multiplies the local transforms of
+  the entity's ancestors itself.
+
 ## How storage works
 
 - Entities with the same set of component types share an **archetype**: one table with a column
@@ -463,9 +557,11 @@ a separate step of the `linux-clang-release` job. It never fails on its numbers.
 It prints the median of 11 runs for: spawning 100k entities with two components; despawning
 them; iterating two components over 100k entities in 1, 10 and 100 archetypes; adding and
 removing a tag on 10k entities; random access by handle; spawning 100k entities through a command
-buffer; and one run of a schedule of 100 systems over an empty world, which is the executor's
-overhead. Spawning and iteration are compared with the targets from ADR-0014 (5.1 ms and 0.34 ms);
-the last two have no target. Record results with the machine they ran on.
+buffer; transform propagation over 111,100 entities four levels deep (100 roots with 10 children
+per entity); and one run of a schedule of 100 systems over an empty world, which is the executor's
+overhead. Spawning, iteration and propagation are compared with the targets from ADR-0014 and
+ADR-0031 (5.1 ms, 0.34 ms and 5.2 ms); the command spawn and the schedule have no target. Record
+results with the machine they ran on.
 
 ## Tests
 
@@ -476,11 +572,16 @@ the last two have no target. Record results with the machine they ran on.
   jobs and checked to give the same world for any worker count), `ScheduleTests.cpp` (stages,
   order, sync points, build errors, enforced access, systems that record from jobs) and
   `HookTests.cpp` (hook timing and order, hook commands, refused structural changes, registration
-  rules, and every refused write of an immutable component);
+  rules, and every refused write of an immutable component) and `HierarchyTests.cpp` (links and
+  order, `placeBefore`, world placement on reparent and detach, the despawn policy and
+  `despawnRecursive`, invalid parents, enabled state and propagation);
 - a randomized model test (`ModelTests.cpp`) that runs thousands of random operations, typed and
   by record, against a simple reference model and checks every handle, value, resource and query
   result, and that the hooks of an immutable component ran as often, and with the values, the
-  model expects;
+  model expects. A second model test runs random hierarchy operations, directly and through
+  commands, and checks after every step that parent and child links agree both ways, that the
+  root list is the entities without `ChildOf` in order, that `DisabledInHierarchy` matches the
+  ancestors, that reparenting kept the world matrix, and that propagation matches a reference;
 - `ConcurrencyTests.cpp`: worlds and component types created from several threads, worlds built
   by record in parallel jobs, and a world handed from job to job. CI runs it under
   ThreadSanitizer;

@@ -4,12 +4,17 @@
 #include "ith/foundation/Assert.h"
 #include "ith/foundation/Hash.h"
 #include "ith/foundation/Mutex.h"
+#include "ith/math/Math.h"
+#include "ith/math/Transform.h"
 
 #include <algorithm>
 #include <atomic>
 #include <bitset>
+#include <cstddef>
 #include <limits>
+#include <ranges>
 #include <utility>
+#include <vector>
 
 namespace ith {
 namespace {
@@ -59,6 +64,8 @@ std::uint64_t hashTypes(std::span<const detail::ComponentIndex> types) noexcept 
 } // namespace
 
 World::World() : m_id(acquireWorldId()) {
+    // The hierarchy's hooks, once per process, before any World stores ChildOf or Disabled.
+    [[maybe_unused]] static const bool kHierarchyHooks = setHierarchyHooks();
     m_archetypes.push_back(std::make_unique<detail::Archetype>(std::span<const detail::ComponentIndex>()));
     m_archetypesByTypes[hashTypes({})].push_back(0);
 }
@@ -176,11 +183,16 @@ std::uint32_t World::placeReserved(Entity entity, detail::ArchetypeIndex archety
     record.archetype = archetype;
     record.row = m_archetypes[archetype]->pushRow(entity);
     ++m_entityCount;
+    linkRoot(entity.index(), kNoSlot); // a ChildOf among its components takes it out again
     return record.row;
 }
 
 void World::releaseSlot(std::uint32_t index) {
-    m_records[index].archetype = detail::kNoArchetype;
+    EntityRecord& record = m_records[index];
+    record.archetype = detail::kNoArchetype;
+    record.isRoot = false;
+    record.previousRoot = kNoSlot;
+    record.nextRoot = kNoSlot;
     --m_entityCount;
     freeSlot(index);
 }
@@ -224,16 +236,71 @@ void World::moveEntity(EntityRecord& record, detail::ArchetypeIndex target) {
 }
 
 bool World::despawn(Entity entity) {
-    if (!canChangeStructure()) {
+    if (!canChangeStructure() || findRecord(entity) == nullptr) {
         return false;
     }
+    despawnTree(entity, false);
+    return true;
+}
+
+bool World::despawnRecursive(Entity entity) {
+    if (!canChangeStructure() || findRecord(entity) == nullptr) {
+        return false;
+    }
+    despawnTree(entity, true);
+    return true;
+}
+
+void World::despawnTree(Entity entity, bool everything) {
+    const std::vector<Entity>* children = childrenOf(entity);
+    if (children == nullptr || children->empty()) {
+        despawnOne(entity);
+        return;
+    }
+    // The entities that go, parents before their children; despawned in reverse, so children go
+    // before their parents and each detached child is placed while its ancestors still exist.
+    std::vector<Entity> order{entity};
+    for (std::size_t next = 0; next < order.size(); ++next) {
+        if (const std::vector<Entity>* below = childrenOf(order[next])) {
+            for (const Entity child : *below) {
+                const auto* link =
+                    static_cast<const ChildOf*>(findComponent(child, detail::componentIndexOf<ChildOf>()));
+                if (everything || (link != nullptr && link->despawnWithParent)) {
+                    order.push_back(child);
+                }
+            }
+        }
+    }
+    std::vector<Entity> detached;
+    for (std::size_t index = order.size(); index-- > 0;) {
+        const Entity current = order[index];
+        if (!isAlive(current)) {
+            continue; // a hook's command despawned it already
+        }
+        if (const std::vector<Entity>* remaining = childrenOf(current); remaining != nullptr && !remaining->empty()) {
+            detached.assign(remaining->begin(), remaining->end());
+            for (const Entity child : detached) {
+                if (parentOf(child) == current) {
+                    removeComponent(child, detail::componentIndexOf<ChildOf>());
+                }
+            }
+        }
+        despawnOne(current);
+    }
+}
+
+void World::despawnOne(Entity entity) {
     const EntityRecord* record = findRecord(entity);
     if (record == nullptr) {
-        return false;
+        return;
     }
+    unlinkRoot(entity.index());
     detail::Archetype& archetype = *m_archetypes[record->archetype];
     if (archetype.hasHooks()) {
+        const Entity outer = m_despawning;
+        m_despawning = entity;
         runRemovalHooks(archetype, record->row); // while the entity is whole
+        m_despawning = outer;
     }
     const Entity moved = archetype.removeRow(record->row);
     if (!moved.isNull()) {
@@ -241,7 +308,6 @@ bool World::despawn(Entity entity) {
     }
     releaseSlot(entity.index());
     flushHookCommands();
-    return true;
 }
 
 void World::runHook(HookKind kind, detail::Archetype& archetype, std::size_t column, std::uint32_t row) {
@@ -289,12 +355,14 @@ void World::runRemovalHooks(detail::Archetype& archetype, std::uint32_t row) {
 void World::runSpawnHooks(Entity entity, std::span<const detail::ComponentIndex> types) {
     const EntityRecord& record = *findRecord(entity);
     detail::Archetype& archetype = *m_archetypes[record.archetype];
+    m_spawning = true; // hooks run one after another, never nested: no structural change between
     for (const detail::ComponentIndex type : types) {
         runHook(HookKind::Add, archetype, archetype.columnOf(type), record.row);
     }
     for (const detail::ComponentIndex type : types) {
         runHook(HookKind::Insert, archetype, archetype.columnOf(type), record.row);
     }
+    m_spawning = false;
     flushHookCommands();
 }
 
@@ -406,7 +474,9 @@ void World::clear() {
     if (!canChangeStructure()) {
         return;
     }
-    // Every remove hook runs while the whole world is still there.
+    // Every remove hook runs while the whole world is still there. The hierarchy's hooks do
+    // nothing: everything they would keep goes.
+    m_clearing = true;
     for (const std::unique_ptr<detail::Archetype>& archetype : m_archetypes) {
         if (archetype->hasHooks()) {
             for (std::uint32_t row = 0; row < archetype->size(); ++row) {
@@ -414,12 +484,15 @@ void World::clear() {
             }
         }
     }
+    m_clearing = false;
     for (const std::unique_ptr<detail::Archetype>& archetype : m_archetypes) {
         for (const Entity entity : archetype->entities()) {
             releaseSlot(entity.index());
         }
         archetype->clear();
     }
+    m_firstRoot = kNoSlot;
+    m_lastRoot = kNoSlot;
     flushHookCommands();
 }
 
@@ -443,6 +516,16 @@ void World::apply(Commands& commands) {
                     types.push_back(value.type);
                 }
                 std::ranges::sort(types);
+                if (std::ranges::any_of(values, [&](const Commands::Value& value) {
+                        return !acceptsValue(Entity(), value.type, value.memory);
+                    })) {
+                    // Refused: the values go, and the reserved handle stays stale for good.
+                    for (const Commands::Value& value : values) {
+                        detail::componentType(value.type).destroy(value.memory);
+                    }
+                    freeSlot(command.entity.index());
+                    break;
+                }
                 if (spawnArchetype == detail::kNoArchetype || types != spawnTypes) {
                     spawnArchetype = findOrCreateArchetype(types);
                     spawnTypes = types;
@@ -469,7 +552,11 @@ void World::apply(Commands& commands) {
             case Commands::Kind::Add: {
                 const Commands::Value& value = values.front();
                 bool added = false;
-                if (void* memory = prepareAdd(command.entity, value.type, added); memory != nullptr) {
+                void* memory = nullptr;
+                if (acceptsValue(command.entity, value.type, value.memory)) {
+                    memory = prepareAdd(command.entity, value.type, added);
+                }
+                if (memory != nullptr) {
                     detail::relocateValue(detail::componentType(value.type), memory, value.memory);
                     finishAdd(command.entity, value.type, added);
                 } else {
@@ -479,6 +566,15 @@ void World::apply(Commands& commands) {
             }
             case Commands::Kind::Remove:
                 removeComponent(command.entity, command.type);
+                break;
+            case Commands::Kind::DespawnRecursive:
+                despawnRecursive(command.entity);
+                break;
+            case Commands::Kind::PlaceBefore:
+                placeBefore(command.entity, command.other);
+                break;
+            case Commands::Kind::LinkChild:
+                linkChild(command.entity);
                 break;
         }
     }
@@ -498,14 +594,15 @@ detail::ArchetypeIndex World::spawnArchetype(std::size_t slot, std::span<const d
 
 detail::QueryState& World::queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms,
                                       std::span<const detail::ComponentIndex> with,
-                                      std::span<const detail::ComponentIndex> without, bool refused) {
+                                      std::span<const detail::ComponentIndex> without, bool includeDisabled,
+                                      bool refused) {
     if (slot >= m_queries.size()) {
         m_queries.resize(slot + 1);
     }
     std::unique_ptr<detail::QueryState>& state = m_queries[slot];
     if (state == nullptr) {
         state = std::make_unique<detail::QueryState>();
-        detail::initQueryState(*state, terms, with, without);
+        detail::initQueryState(*state, terms, with, without, includeDisabled);
         state->matchesNothing = state->matchesNothing || refused;
     }
     return *state;
@@ -531,6 +628,10 @@ const void* World::get(Entity entity, const TypeInfo& type) const {
 
 const void* World::add(Entity entity, const TypeInfo& type) {
     const detail::ComponentIndex index = detail::registerComponentType(type);
+    const ChildOf noParent; // a default ChildOf has no parent, which is refused
+    if (!acceptsValue(entity, index, &noParent)) {
+        return nullptr;
+    }
     bool added = false;
     void* memory = prepareAdd(entity, index, added);
     if (memory != nullptr) {
@@ -544,7 +645,7 @@ const void* World::add(Entity entity, const TypeInfo& type) {
 const void* World::add(Entity entity, const TypeInfo& type, void* value) {
     ITH_ASSERT_MSG(value != nullptr, "ecs: add by record without a value");
     const detail::ComponentIndex index = detail::registerComponentType(type);
-    if (value == nullptr) {
+    if (value == nullptr || !acceptsValue(entity, index, value)) {
         return nullptr;
     }
     bool added = false;
@@ -575,13 +676,18 @@ DynamicQuery World::dynamicQuery(std::span<const QueryTerm> terms, std::span<con
     }
     std::vector<detail::ComponentIndex> with;
     std::vector<detail::ComponentIndex> without;
+    bool includeDisabled = false;
     for (const QueryFilter& filter : filters) {
+        if (filter.kind == FilterKind::IncludeDisabled) {
+            includeDisabled = true;
+            continue;
+        }
         ITH_ASSERT_MSG(filter.type != nullptr, "ecs: a dynamic query filter without a type");
         const detail::ComponentIndex index =
             filter.type != nullptr ? detail::registerComponentType(*filter.type) : detail::kNoComponent;
         (filter.kind == FilterKind::With ? with : without).push_back(index);
     }
-    detail::initQueryState(query.m_state, indices, with, without);
+    detail::initQueryState(query.m_state, indices, with, without, includeDisabled);
     query.m_state.matchesNothing = query.m_state.matchesNothing || writesImmutable;
     return query;
 }
@@ -654,6 +760,303 @@ bool World::removeResource(const TypeInfo& type) {
     return m_resources.erase(type.id) == 1;
 }
 
+// The hierarchy (ADR-0031).
+
+namespace {
+
+// The entity's local transform as a matrix; identity without a LocalTransform.
+Mat4 localMatrix(const LocalTransform* local) noexcept {
+    return local != nullptr ? toMatrix(local->value) : Mat4(1.0f);
+}
+
+} // namespace
+
+void World::linkRoot(std::uint32_t index, std::uint32_t before) {
+    EntityRecord& record = m_records[index];
+    if (record.isRoot) {
+        return;
+    }
+    record.isRoot = true;
+    if (before == kNoSlot) {
+        record.previousRoot = m_lastRoot;
+        record.nextRoot = kNoSlot;
+        if (m_lastRoot != kNoSlot) {
+            m_records[m_lastRoot].nextRoot = index;
+        } else {
+            m_firstRoot = index;
+        }
+        m_lastRoot = index;
+        return;
+    }
+    EntityRecord& next = m_records[before];
+    record.previousRoot = next.previousRoot;
+    record.nextRoot = before;
+    if (next.previousRoot != kNoSlot) {
+        m_records[next.previousRoot].nextRoot = index;
+    } else {
+        m_firstRoot = index;
+    }
+    next.previousRoot = index;
+}
+
+void World::unlinkRoot(std::uint32_t index) {
+    EntityRecord& record = m_records[index];
+    if (!record.isRoot) {
+        return;
+    }
+    if (record.previousRoot != kNoSlot) {
+        m_records[record.previousRoot].nextRoot = record.nextRoot;
+    } else {
+        m_firstRoot = record.nextRoot;
+    }
+    if (record.nextRoot != kNoSlot) {
+        m_records[record.nextRoot].previousRoot = record.previousRoot;
+    } else {
+        m_lastRoot = record.previousRoot;
+    }
+    record.isRoot = false;
+    record.previousRoot = kNoSlot;
+    record.nextRoot = kNoSlot;
+}
+
+Entity World::parentOf(Entity entity) const {
+    const auto* link = static_cast<const ChildOf*>(findComponent(entity, detail::componentIndexOf<ChildOf>()));
+    return link != nullptr ? link->parent : Entity();
+}
+
+std::vector<Entity>* World::childrenOf(Entity entity) const {
+    auto* children = static_cast<Children*>(findComponent(entity, detail::componentIndexOf<Children>()));
+    return children != nullptr ? &children->entities : nullptr;
+}
+
+Mat4 World::worldMatrixOf(Entity entity) const {
+    // Walk up to the root, then compose downwards: world = parent * local.
+    std::vector<Entity> chain;
+    for (Entity current = entity; isAlive(current); current = parentOf(current)) {
+        chain.push_back(current);
+    }
+    Mat4 world(1.0f);
+    for (const Entity current : std::views::reverse(chain)) {
+        world = world * localMatrix(get<const LocalTransform>(current));
+    }
+    return world;
+}
+
+bool World::acceptsValue(Entity entity, detail::ComponentIndex type, const void* value) const {
+    if (type != detail::componentIndexOf<ChildOf>()) {
+        return true;
+    }
+    // A stale entity: add refuses it anyway, without asserting, as any command on a stale handle.
+    const bool spawning = entity.isNull();
+    if (!spawning && (entity.worldId() != m_id || !isAlive(entity))) {
+        return true;
+    }
+    const Entity parent = static_cast<const ChildOf*>(value)->parent;
+    const bool alive = !parent.isNull() && parent.worldId() == m_id && isAlive(parent);
+    ITH_ASSERT_MSG(alive, "ecs: a ChildOf's parent must be a live entity of the same world");
+    if (!alive) {
+        return false;
+    }
+    if (spawning) {
+        return true; // a new entity has no descendants
+    }
+    for (Entity ancestor = parent; !ancestor.isNull(); ancestor = parentOf(ancestor)) {
+        if (ancestor == entity) {
+            ITH_ASSERT_MSG(false, "ecs: a ChildOf's parent can't be the entity itself or one of its descendants");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool World::placeBefore(Entity entity, Entity sibling) {
+    if (!canChangeStructure() || !isAlive(entity)) {
+        return false;
+    }
+    const Entity parent = parentOf(entity);
+    if (!sibling.isNull()) {
+        if (!isAlive(sibling)) {
+            return false; // like any command on a stale handle
+        }
+        const bool valid = sibling != entity && parentOf(sibling) == parent;
+        ITH_ASSERT_MSG(valid, "ecs: placeBefore needs a sibling under the same parent, other than the entity");
+        if (!valid) {
+            return false;
+        }
+    }
+    if (parent.isNull()) {
+        unlinkRoot(entity.index());
+        linkRoot(entity.index(), sibling.isNull() ? kNoSlot : sibling.index());
+        return true;
+    }
+    std::vector<Entity>* children = childrenOf(parent);
+    if (children == nullptr) {
+        return false;
+    }
+    const auto same = [](Entity wanted) { return [wanted](Entity candidate) { return candidate == wanted; }; };
+    if (const auto found = std::ranges::find_if(*children, same(entity)); found != children->end()) {
+        children->erase(found);
+    }
+    const auto position = sibling.isNull() ? children->end() : std::ranges::find_if(*children, same(sibling));
+    children->insert(position, entity);
+    return true;
+}
+
+void World::linkChild(Entity child) {
+    const Entity parent = parentOf(child);
+    if (!isAlive(parent)) {
+        return;
+    }
+    if (std::vector<Entity>* children = childrenOf(parent)) {
+        if (std::ranges::find_if(*children, [child](Entity entry) { return entry == child; }) == children->end()) {
+            children->push_back(child);
+        }
+        return;
+    }
+    add(parent, Children{.entities = {child}});
+}
+
+void World::refreshDisabled(Commands& commands, Entity entity, bool parentDisabled, bool ownDisabled) const {
+    // Every entity below one whose state doesn't change already matches it, so the walk stops
+    // there.
+    struct Pending {
+        Entity entity;
+        bool parentDisabled = false;
+    };
+
+    std::vector<Pending> pending{{.entity = entity, .parentDisabled = parentDisabled}};
+    while (!pending.empty()) {
+        const Pending current = pending.back();
+        pending.pop_back();
+        const bool own = current.entity == entity ? ownDisabled : has<Disabled>(current.entity);
+        const bool disabled = current.parentDisabled || own;
+        if (disabled == has<DisabledInHierarchy>(current.entity)) {
+            continue;
+        }
+        if (disabled) {
+            commands.add(current.entity, DisabledInHierarchy{});
+        } else {
+            commands.remove<DisabledInHierarchy>(current.entity);
+        }
+        if (const std::vector<Entity>* children = childrenOf(current.entity)) {
+            for (const Entity child : *children) {
+                pending.push_back({.entity = child, .parentDisabled = disabled});
+            }
+        }
+    }
+}
+
+void World::onChildOfAdd(HookContext& context) {
+    World& world = *context.m_world;
+    const Entity entity = context.entity();
+    world.unlinkRoot(entity.index());
+    if (!world.m_spawning) {
+        // The entity was a root, so its world placement is its local transform.
+        world.m_placement = {
+            .entity = entity, .world = localMatrix(world.get<const LocalTransform>(entity)), .keepWorld = true};
+    }
+}
+
+void World::onChildOfReplace(HookContext& context) {
+    World& world = *context.m_world;
+    if (world.m_clearing) {
+        return;
+    }
+    const Entity entity = context.entity();
+    const Entity oldParent = static_cast<const ChildOf*>(context.value())->parent;
+    std::size_t oldIndex = 0;
+    if (std::vector<Entity>* children = world.childrenOf(oldParent)) {
+        const auto found = std::ranges::find_if(*children, [entity](Entity entry) { return entry == entity; });
+        oldIndex = static_cast<std::size_t>(found - children->begin());
+        if (found != children->end()) {
+            children->erase(found);
+        }
+    }
+    if (world.m_despawning == entity) {
+        return;
+    }
+    world.m_placement = {.entity = entity,
+                         .world = world.worldMatrixOf(entity), // the old link is still in place
+                         .keepWorld = true,
+                         .oldParent = oldParent,
+                         .oldIndex = oldIndex};
+}
+
+void World::onChildOfInsert(HookContext& context) {
+    World& world = *context.m_world;
+    const Entity entity = context.entity();
+    const Entity parent = static_cast<const ChildOf*>(context.value())->parent;
+    const Placement placement = world.m_placement.entity == entity ? world.m_placement : Placement{};
+    world.m_placement = {};
+    if (std::vector<Entity>* children = world.childrenOf(parent)) {
+        const bool sameParent = placement.oldParent == parent && placement.oldIndex <= children->size();
+        if (sameParent) {
+            children->insert(children->begin() + static_cast<std::ptrdiff_t>(placement.oldIndex), entity);
+        } else if (std::ranges::find_if(*children, [entity](Entity entry) { return entry == entity; }) ==
+                   children->end()) {
+            children->push_back(entity);
+        }
+    } else {
+        // Creating the list changes the parent's structure, so it waits until the hooks are done.
+        context.commands().m_commands.push_back({.kind = Commands::Kind::LinkChild, .entity = entity});
+    }
+    if (placement.keepWorld && placement.oldParent != parent) {
+        if (auto* local =
+                static_cast<LocalTransform*>(world.findComponent(entity, detail::componentIndexOf<LocalTransform>()))) {
+            local->value = decompose(glm::inverse(world.worldMatrixOf(parent)) * placement.world);
+        }
+    }
+    world.refreshDisabled(context.commands(), entity, world.has<DisabledInHierarchy>(parent),
+                          world.has<Disabled>(entity));
+}
+
+void World::onChildOfRemove(HookContext& context) {
+    World& world = *context.m_world;
+    const Entity entity = context.entity();
+    if (world.m_clearing || world.m_despawning == entity) {
+        return;
+    }
+    const Placement placement = world.m_placement.entity == entity ? world.m_placement : Placement{};
+    world.m_placement = {};
+    world.linkRoot(entity.index(), kNoSlot);
+    if (placement.keepWorld) {
+        if (auto* local =
+                static_cast<LocalTransform*>(world.findComponent(entity, detail::componentIndexOf<LocalTransform>()))) {
+            local->value = decompose(placement.world);
+        }
+    }
+    world.refreshDisabled(context.commands(), entity, false, world.has<Disabled>(entity));
+}
+
+void World::onDisabledAdd(HookContext& context) {
+    const World& world = *context.m_world;
+    if (world.m_clearing) {
+        return;
+    }
+    const Entity entity = context.entity();
+    world.refreshDisabled(context.commands(), entity, world.has<DisabledInHierarchy>(world.parentOf(entity)), true);
+}
+
+void World::onDisabledRemove(HookContext& context) {
+    const World& world = *context.m_world;
+    const Entity entity = context.entity();
+    if (world.m_clearing || world.m_despawning == entity) {
+        return;
+    }
+    world.refreshDisabled(context.commands(), entity, world.has<DisabledInHierarchy>(world.parentOf(entity)), false);
+}
+
+bool World::setHierarchyHooks() {
+    const bool childOf = setComponentHooks<ChildOf>({
+        .onAdd = &onChildOfAdd,
+        .onInsert = &onChildOfInsert,
+        .onReplace = &onChildOfReplace,
+        .onRemove = &onChildOfRemove,
+    });
+    const bool disabled = setComponentHooks<Disabled>({.onAdd = &onDisabledAdd, .onRemove = &onDisabledRemove});
+    return childOf && disabled;
+}
+
 namespace detail {
 
 void ResourceDelete::operator()(std::byte* memory) const noexcept {
@@ -662,7 +1065,7 @@ void ResourceDelete::operator()(std::byte* memory) const noexcept {
 }
 
 void initQueryState(QueryState& state, std::span<const ComponentIndex> terms, std::span<const ComponentIndex> with,
-                    std::span<const ComponentIndex> without) {
+                    std::span<const ComponentIndex> without, bool includeDisabled) {
     state.terms.assign(terms.begin(), terms.end());
     const auto mark = [&state](std::span<const ComponentIndex> types, ComponentMask& mask) {
         for (const ComponentIndex type : types) {
@@ -679,6 +1082,14 @@ void initQueryState(QueryState& state, std::span<const ComponentIndex> terms, st
     mark(terms, state.required);
     mark(with, state.required);
     mark(without, state.excluded);
+    // Disabled entities are skipped unless the query asks for them (ADR-0031 rule 9).
+    const ComponentIndex inHierarchy = componentIndexOf<DisabledInHierarchy>();
+    const ComponentIndex disabled = componentIndexOf<Disabled>();
+    const bool namesDisabled = state.required[inHierarchy] || state.excluded[inHierarchy] || state.required[disabled] ||
+                               state.excluded[disabled];
+    if (!includeDisabled && !namesDisabled) {
+        state.excluded[inHierarchy] = true;
+    }
 }
 
 void updateQueryState(QueryState& state, std::span<const std::unique_ptr<Archetype>> archetypes) {

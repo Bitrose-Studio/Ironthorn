@@ -191,4 +191,20 @@ struct HookCounts {
     std::int64_t removedSum = 0; // the values onRemove saw
 };
 
+// Its onRemove hook records, into DespawnLog, its id and whether the entity's parent is still
+// alive (HierarchyTests.cpp).
+struct DespawnProbe {
+    ITH_TYPE(Component)
+    ITH_FIELD()
+    std::int32_t id = 0;
+};
+
+struct DespawnLog {
+    ITH_TYPE(Resource)
+    ITH_FIELD()
+    std::vector<std::int32_t> ids; // in despawn order
+    ITH_FIELD()
+    std::vector<std::int32_t> parentAlive; // 1 when the parent was alive at that point
+};
+
 } // namespace ith::test

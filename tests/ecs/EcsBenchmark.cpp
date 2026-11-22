@@ -6,14 +6,16 @@
 //   build/windows/bin/Release/ith_ecs_benchmark
 //
 // Each workload runs 11 times after a warm-up run, on a freshly set-up world each time, and the
-// median is printed. The first two workloads have targets from an earlier archetype ECS
+// median is printed. Spawning, iteration and propagation have targets from an earlier archetype ECS
 // prototype on a desktop CPU; record results together with the machine they ran on. Spawning
 // through commands and the schedule's overhead per run have no target in ADR-0014 and are printed
-// for reference. Transform propagation, the remaining ADR workload, arrives with the hierarchy.
+// for reference.
 
 #include "ith/ecs/Schedule.h"
+#include "ith/ecs/TransformPropagation.h"
 #include "ith/ecs/World.h"
 #include "ith/foundation/Stopwatch.h"
+#include "ith/math/Math.h"
 
 #include "EcsComponents.h"
 
@@ -195,6 +197,37 @@ int main() {
                                  }
                                  world->apply(commands);
                              }));
+
+    // Transform propagation (ADR-0031 rule 2): 100 roots with four levels of 10 children below
+    // each, 111,100 entities with LocalTransform and WorldTransform, as in the earlier prototype's
+    // measurement. Slice 5 propagates every entity on each run.
+    report("propagate transforms: 111,100 entities, 4 levels",
+           measure<WorldPtr>(
+               [] {
+                   auto world = std::make_unique<World>();
+                   std::vector<Entity> level;
+                   for (int root = 0; root < 100; ++root) {
+                       level.push_back(world->spawn(
+                           ith::LocalTransform{.value = {.translation = {static_cast<float>(root), 0.0f, 0.0f}}},
+                           ith::WorldTransform{}));
+                   }
+                   for (int depth = 1; depth < 4; ++depth) {
+                       std::vector<Entity> next;
+                       for (const Entity parent : level) {
+                           for (int child = 0; child < 10; ++child) {
+                               next.push_back(world->spawn(
+                                   ith::LocalTransform{
+                                       .value = {.translation = {0.0f, 1.0f, static_cast<float>(child)},
+                                                 .rotation = glm::angleAxis(0.1f, ith::Vec3(0.0f, 1.0f, 0.0f))}},
+                                   ith::WorldTransform{}, ith::ChildOf{.parent = parent}));
+                           }
+                       }
+                       level = std::move(next);
+                   }
+                   return world;
+               },
+               [](WorldPtr& world) { ith::propagateTransforms(*world); }),
+           5.2);
 
     // Schedule overhead: 100 systems that each run one query over an empty world, so the time is
     // the executor, the access checks and 100 empty sync points; reported per run.

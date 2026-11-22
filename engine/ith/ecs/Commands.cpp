@@ -34,6 +34,14 @@ void Commands::despawn(Entity entity) {
     m_commands.push_back({.kind = Kind::Despawn, .entity = entity});
 }
 
+void Commands::despawnRecursive(Entity entity) {
+    m_commands.push_back({.kind = Kind::DespawnRecursive, .entity = entity});
+}
+
+void Commands::placeBefore(Entity entity, Entity sibling) {
+    m_commands.push_back({.kind = Kind::PlaceBefore, .entity = entity, .other = sibling});
+}
+
 Entity Commands::reserveEntity() {
     return m_world->reserveEntity();
 }

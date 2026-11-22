@@ -12,8 +12,11 @@
 //   });
 //
 // A dynamic query visits every entity that has all of its component types, archetype by archetype
-// and row by row, with the same matching code as the typed Query. A query without terms and
-// filters visits every entity. Each term declares read or write access, as `const T` and `T` do
+// and row by row, with the same matching code as the typed Query. Like a typed query, it skips
+// disabled entities unless it names Disabled or DisabledInHierarchy or has a
+// FilterKind::IncludeDisabled filter (Hierarchy.h, ADR-0031). A query without terms visits every
+// enabled entity, and with only an IncludeDisabled filter every entity (how a level is saved).
+// Each term declares read or write access, as `const T` and `T` do
 // for a typed query; inside a system it must match the system's declared access (Schedule.h), and
 // change detection (slice 6) will use it. Code must not write through the pointer of a read term.
 //
@@ -64,13 +67,14 @@ struct QueryTerm {
 
 // What a query filter asks of an entity.
 enum class FilterKind : std::uint8_t {
-    With,    // it has the type
-    Without, // it doesn't have the type
+    With,            // it has the type
+    Without,         // it doesn't have the type
+    IncludeDisabled, // disabled entities are visited too; the filter takes no type
 };
 
 // A filter of a dynamic query: it narrows the entities without handing out a value.
 struct QueryFilter {
-    const TypeInfo* type = nullptr; // a reflected struct with the Component role
+    const TypeInfo* type = nullptr; // a reflected struct with the Component role; null for IncludeDisabled
     FilterKind kind = FilterKind::With;
 };
 

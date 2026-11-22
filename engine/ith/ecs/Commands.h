@@ -9,10 +9,11 @@
 //   commands.despawn(spent);
 //   world.apply(commands); // in recording order; the buffer is empty afterwards
 //
-// A command buffer records spawn, despawn, add and remove for one World. Nothing changes until
-// World::apply carries the commands out, in the order they were recorded; each then behaves like
-// the World function of the same name (a command on a stale handle does nothing). Systems get a
-// buffer from the schedule (Schedule.h), which applies it at the end of the system's stage.
+// A command buffer records spawn, despawn, add and remove, and despawnRecursive and placeBefore
+// (Hierarchy.h), for one World. Nothing changes until World::apply carries the commands out, in
+// the order they were recorded; each then behaves like the World function of the same name (a
+// command on a stale handle does nothing). Systems get a buffer from the schedule (Schedule.h),
+// which applies it at the end of the system's stage.
 //
 // spawn returns the new entity's handle at once: the handle is reserved in the world, and the
 // entity is alive from the moment its spawn command is applied. Until then the handle fails every
@@ -74,6 +75,12 @@ public:
     // Records the despawn of `entity`.
     void despawn(Entity entity);
 
+    // Records despawning `entity` and everything below it (World::despawnRecursive).
+    void despawnRecursive(Entity entity);
+
+    // Records moving `entity` before `sibling` (World::placeBefore).
+    void placeBefore(Entity entity, Entity sibling);
+
     // Records giving `entity` the value as its T, replacing a T it has by then.
     template <typename T>
     void add(Entity entity, T&& value);
@@ -99,11 +106,15 @@ private:
         Despawn,
         Add,
         Remove,
+        DespawnRecursive,
+        PlaceBefore,
+        LinkChild, // the hierarchy hooks: append `entity` to its parent's children
     };
 
     struct Command {
         Kind kind = Kind::Despawn;
         Entity entity;
+        Entity other;                                       // PlaceBefore: the sibling
         detail::ComponentIndex type = detail::kNoComponent; // Remove
         std::uint32_t firstValue = 0;                       // Spawn and Add: the first of their values
         std::uint32_t valueCount = 0;
