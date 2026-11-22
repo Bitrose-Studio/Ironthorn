@@ -45,12 +45,20 @@ void Column::reallocate(std::size_t capacity, std::size_t count) {
     m_data = std::move(memory);
 }
 
+void relocateValue(const TypeInfo& type, void* destination, void* source) {
+    if (type.triviallyCopyable) {
+        std::memcpy(destination, source, type.size);
+    } else {
+        type.move(destination, source);
+        type.destroy(source);
+    }
+}
+
 void Column::relocate(void* destination, void* source) {
     if (m_trivial) {
         std::memcpy(destination, source, m_type->size);
     } else {
-        m_type->move(destination, source);
-        m_type->destroy(source);
+        relocateValue(*m_type, destination, source);
     }
 }
 

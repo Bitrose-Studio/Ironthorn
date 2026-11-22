@@ -14,8 +14,8 @@
 // A dynamic query visits every entity that has all of its component types, archetype by archetype
 // and row by row, with the same matching code as the typed Query. A query without terms visits
 // every entity. Each term declares read or write access, as `const T` and `T` do for a typed
-// query; the schedule (slice 3) and change detection (slice 6) will use it. Code must not write
-// through the pointer of a read term.
+// query; inside a system it must match the system's declared access (Schedule.h), and change
+// detection (slice 6) will use it. Code must not write through the pointer of a read term.
 //
 // Invalid terms are programmer errors: a null type, a type that is not a reflected struct with the
 // Component role, or a component type named twice asserts, and the query then visits nothing.

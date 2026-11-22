@@ -33,6 +33,10 @@ inline constexpr ArchetypeIndex kNoArchetype = std::numeric_limits<ArchetypeInde
 // One bit per component index.
 using ComponentMask = std::bitset<kMaxComponentTypes>;
 
+// Moves a value of `type` from `source` into uninitialized memory at `destination` and destroys
+// the source; trivially copyable values are copied with memcpy.
+void relocateValue(const TypeInfo& type, void* destination, void* source);
+
 // Frees memory from aligned operator new.
 struct AlignedDelete {
     std::size_t alignment = 0;

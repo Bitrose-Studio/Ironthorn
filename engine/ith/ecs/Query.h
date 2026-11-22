@@ -8,17 +8,17 @@
 //   world.query<const Health>().forEach([](ith::Entity entity, const Health& health) { ... });
 //
 // A query visits every entity that has all of its component types, archetype by archetype and
-// row by row. A term written as `const T` reads T; a term written as plain `T` writes it. The
-// schedule (slice 3) will use these declarations to order and parallelize systems, and change
-// detection (slice 6) will mark a written value changed when a query hands it out. The function
-// takes the components in the query's order, optionally preceded by the entity.
+// row by row. A term written as `const T` reads T; a term written as plain `T` writes it. Inside a
+// system (Schedule.h) every term must match the system's declared access, and change detection
+// (slice 6) will mark a written value changed when a query hands it out. The function takes the
+// components in the query's order, optionally preceded by the entity.
 //
 // Each World keeps a cache of the archetypes that match each query type and extends it with the
 // archetypes created since the query last ran, so a query never scans archetypes it has seen.
 //
 // No structural change (spawn, despawn, add, remove, clear) may happen while a query iterates:
-// it asserts and is refused. Gather the entities and change them afterwards; deferred commands
-// arrive in slice 3.
+// it asserts and is refused. Record them in a command buffer (Commands.h) and apply it after the
+// loop, or gather the entities and change them afterwards.
 //
 // Code that knows its component types only at run time uses ith::DynamicQuery (DynamicQuery.h),
 // which shares the matching code.

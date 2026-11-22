@@ -7,9 +7,11 @@
 //
 // Each workload runs 11 times after a warm-up run, on a freshly set-up world each time, and the
 // median is printed. The first two workloads have targets from an earlier archetype ECS
-// prototype on a desktop CPU; record results together with the machine they ran on. Transform
-// propagation, the remaining ADR workload, arrives with the hierarchy.
+// prototype on a desktop CPU; record results together with the machine they ran on. Spawning
+// through commands and the schedule's overhead per run have no target in ADR-0014 and are printed
+// for reference. Transform propagation, the remaining ADR workload, arrives with the hierarchy.
 
+#include "ith/ecs/Schedule.h"
 #include "ith/ecs/World.h"
 #include "ith/foundation/Stopwatch.h"
 
@@ -182,6 +184,48 @@ int main() {
                                                                    }
                                                                    g_sink = g_sink + sum;
                                                                }));
+
+    report("spawn 100k through commands, then apply",
+           measure<WorldPtr>([] { return std::make_unique<World>(); },
+                             [](WorldPtr& world) {
+                                 ith::Commands commands(*world);
+                                 for (std::size_t index = 0; index < kEntities; ++index) {
+                                     auto [position, velocity] = moving(index);
+                                     commands.spawn(position, velocity);
+                                 }
+                                 world->apply(commands);
+                             }));
+
+    // Schedule overhead: 100 systems that each run one query over an empty world, so the time is
+    // the executor, the access checks and 100 empty sync points; reported per run.
+    {
+        constexpr int kSystems = 100;
+        constexpr int kFrames = 1000;
+        World world;
+        ith::Schedule schedule;
+        for (int index = 0; index < kSystems; ++index) {
+            schedule.add({
+                .name = "system " + std::to_string(index),
+                .stage = static_cast<ith::Stage>(index % static_cast<int>(ith::kStageCount)),
+                .access = ith::accessTo<Position, const Velocity>(),
+                .run =
+                    [](ith::SystemContext& context) {
+                        context.query<Position, const Velocity>().forEach([](Position&, const Velocity&) {});
+                    },
+            });
+        }
+        if (!schedule.build()) {
+            return 0;
+        }
+        const double perRun = measure<int>([] { return 0; },
+                                           [&](int&) {
+                                               for (int frame = 0; frame < kFrames; ++frame) {
+                                                   schedule.run(world);
+                                               }
+                                           }) /
+                              kFrames;
+        report("schedule run: 100 systems, empty world (per run)", perRun);
+    }
 
     return 0;
 }

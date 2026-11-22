@@ -434,10 +434,12 @@ ith_reflect_target(ith_test_ecs_components
 
 ith_add_test_suite(ecs
     SOURCES
+        ecs/CommandTests.cpp
         ecs/ConcurrencyTests.cpp
         ecs/DynamicAccessTests.cpp
         ecs/ModelTests.cpp
         ecs/ResourceTests.cpp
+        ecs/ScheduleTests.cpp
         ecs/WorldTests.cpp
     LIBRARIES ith_test_ecs_components ith::jobs Threads::Threads)
 

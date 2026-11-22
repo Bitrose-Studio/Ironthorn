@@ -33,7 +33,9 @@
 // of destroyed worlds.
 //
 // A World has a stable address: it can't be copied or moved. It is not thread-safe: one thread
-// at a time uses it. Creating and destroying worlds is thread-safe.
+// at a time uses it. Creating and destroying worlds is thread-safe. The one exception: jobs may
+// record spawns into their own command buffers at the same time, as long as nothing changes the
+// world's structure meanwhile (see Commands.h).
 //
 // Access by type record: has, get, add and remove also take a component type's reflection record
 // (`const TypeInfo&`, e.g. from TypeRegistry::find(id)) instead of a C++ type, and
@@ -53,19 +55,30 @@
 // insertResource replaces its value. Inserting and removing resources is not a structural change:
 // it is allowed while a query iterates. clear() keeps the resources.
 //
-// Not yet here (later ADR-0014 slices): deferred commands and the schedule with declared access to
-// components and resources, hooks, hierarchy and change ticks.
+// Deferred commands (Commands.h) record spawn, despawn, add and remove for later; apply(commands)
+// carries them out in recording order. Systems (Schedule.h) change structure this way: while a
+// system runs, direct structural changes are refused, as inside a query.
+//
+//   ith::Commands commands(world);
+//   const ith::Entity bullet = commands.spawn(Position{}, Velocity{.x = 10.0f}); // reserved now
+//   world.apply(commands); // alive from here
+//
+// Not yet here (later ADR-0014 slices): hooks and immutable components, hierarchy and change
+// ticks.
 
 #include "ith/ecs/Archetype.h"
+#include "ith/ecs/Commands.h"
 #include "ith/ecs/ComponentRegistry.h"
 #include "ith/ecs/DynamicQuery.h"
 #include "ith/ecs/Entity.h"
 #include "ith/ecs/Query.h"
+#include "ith/foundation/Mutex.h"
 #include "ith/reflection/TypeInfo.h"
 #include "ith/reflection/TypeOf.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -221,7 +234,17 @@ public:
     // The number of resources the world has.
     [[nodiscard]] std::size_t resourceCount() const noexcept { return m_resources.size(); }
 
+    // Carries out the commands in recording order and empties the buffer, which keeps its memory
+    // for reuse. Each command behaves like the World function of the same name: a command on a
+    // stale handle does nothing, and a spawn makes its reserved handle alive. Refused (asserted;
+    // the commands stay) while a query iterates or a system runs, and for a buffer of another
+    // world (asserted).
+    void apply(Commands& commands);
+
 private:
+    friend class Commands;
+    friend class Schedule;
+
     struct EntityRecord {
         std::uint32_t generation = 0;
         detail::ArchetypeIndex archetype = detail::kNoArchetype; // kNoArchetype: the slot is free
@@ -238,8 +261,30 @@ private:
     // Creates an entity in a new row of `archetype`, whose values the caller constructs.
     std::pair<Entity, std::uint32_t> allocateEntity(detail::ArchetypeIndex archetype);
 
-    // Makes a slot free: a new generation, or retirement when the generation would wrap.
+    // Makes a reserved handle alive in a new row of `archetype` and returns the row, whose values
+    // the caller constructs.
+    std::uint32_t placeReserved(Entity entity, detail::ArchetypeIndex archetype);
+
+    // Frees the slot of a live entity.
     void releaseSlot(std::uint32_t index);
+
+    // Gives a slot that holds no entity a new generation and puts it on the free list, or retires
+    // it when the generation would wrap.
+    void freeSlot(std::uint32_t index);
+
+    // Reserves the handle of an entity that a command spawns later. Safe from several threads at
+    // once and next to reads of the world, but not next to structural changes.
+    Entity reserveEntity();
+
+    // Hands back handles reserved by commands that were dropped without being applied. Their slots
+    // get a new generation at the next apply, so the handles stay stale. Thread-safe.
+    void abandonReserved(std::span<const Entity> entities);
+
+    // Owner thread only. settleReservations takes the slots reserved since its last call off the
+    // free list and adds records for new ones; every function that changes the free list or the
+    // records calls it first. freeAbandonedReservations frees the slots of abandoned reservations.
+    void settleReservations();
+    void freeAbandonedReservations();
 
     // The archetype of exactly these types (sorted, unique), created when missing.
     detail::ArchetypeIndex findOrCreateArchetype(std::span<const detail::ComponentIndex> types);
@@ -267,7 +312,14 @@ private:
     std::uint32_t m_iterationDepth = 0;
     std::size_t m_entityCount = 0;
     std::vector<EntityRecord> m_records;
+    // Free slots. Only the owner thread changes the list. reserveEntity hands out its entries from
+    // the back through m_freeCursor and, once they run out, new slots past the end of m_records.
     std::vector<std::uint32_t> m_freeSlots;
+    // How many entries of m_freeSlots are not reserved; below zero by the number of new slots
+    // reserved. Equals m_freeSlots.size() when no reservation is pending.
+    std::atomic<std::int64_t> m_freeCursor{0};
+    Mutex m_abandonedMutex;
+    std::vector<Entity> m_abandoned ITH_GUARDED_BY(m_abandonedMutex);
     // Index 0 is the archetype without components.
     std::vector<std::unique_ptr<detail::Archetype>> m_archetypes;
     // Archetypes by a hash of their type list; a bucket holds the rare collisions.

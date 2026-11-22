@@ -405,7 +405,8 @@ TEST_CASE("World: structural changes while a query iterates are refused") {
     CHECK(world.entityCount() == 1);
 #ifdef ITH_ENABLE_ASSERTS
     CHECK(capture.count() == 5);
-    CHECK(capture.lastMessage() == "ecs: structural change while a query iterates");
+    CHECK(capture.lastMessage() ==
+          "ecs: structural change while a query iterates or a system runs; record a command instead");
 #endif
     // After the iteration, changes work again.
     CHECK(world.add(entity, Position{}) != nullptr);

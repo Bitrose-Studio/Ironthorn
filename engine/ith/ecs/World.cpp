@@ -90,38 +90,107 @@ World::EntityRecord* World::findRecord(Entity entity) noexcept {
 }
 
 bool World::canChangeStructure() const noexcept {
-    ITH_ASSERT_MSG(m_iterationDepth == 0, "ecs: structural change while a query iterates");
+    ITH_ASSERT_MSG(m_iterationDepth == 0,
+                   "ecs: structural change while a query iterates or a system runs; record a command instead");
     return m_iterationDepth == 0;
 }
 
+Entity World::reserveEntity() {
+    // Each caller takes a distinct cursor value: a free-list entry while they last, then a new
+    // slot past the records. Neither the free list nor the records change until the owner thread
+    // settles the reservations, so reading them here is safe.
+    const std::int64_t cursor = m_freeCursor.fetch_sub(1, std::memory_order_relaxed);
+    if (cursor > 0) {
+        const std::uint32_t index = m_freeSlots[static_cast<std::size_t>(cursor - 1)];
+        return Entity::fromParts(index, m_records[index].generation, m_id);
+    }
+    const std::uint64_t index = m_records.size() + static_cast<std::uint64_t>(-cursor);
+    if (index >= std::numeric_limits<std::uint32_t>::max()) {
+        ITH_FATAL("ecs: the world has no entity slots left");
+    }
+    return Entity::fromParts(static_cast<std::uint32_t>(index), 0, m_id);
+}
+
+void World::settleReservations() {
+    const std::int64_t cursor = m_freeCursor.load(std::memory_order_relaxed);
+    if (std::cmp_equal(cursor, m_freeSlots.size())) {
+        return;
+    }
+    // Reserved slots are neither free nor alive until their spawn command is applied.
+    if (cursor >= 0) {
+        m_freeSlots.resize(static_cast<std::size_t>(cursor));
+    } else {
+        m_freeSlots.clear();
+        m_records.resize(m_records.size() + static_cast<std::size_t>(-cursor));
+    }
+    m_freeCursor.store(static_cast<std::int64_t>(m_freeSlots.size()), std::memory_order_relaxed);
+}
+
+void World::abandonReserved(std::span<const Entity> entities) {
+    const MutexLock lock(m_abandonedMutex);
+    m_abandoned.insert(m_abandoned.end(), entities.begin(), entities.end());
+}
+
+void World::freeAbandonedReservations() {
+    std::vector<Entity> abandoned;
+    {
+        const MutexLock lock(m_abandonedMutex);
+        abandoned.swap(m_abandoned);
+    }
+    if (abandoned.empty()) {
+        return;
+    }
+    settleReservations();
+    for (const Entity entity : abandoned) {
+        ITH_ASSERT(m_records[entity.index()].archetype == detail::kNoArchetype &&
+                   m_records[entity.index()].generation == entity.generation());
+        freeSlot(entity.index());
+    }
+}
+
 std::pair<Entity, std::uint32_t> World::allocateEntity(detail::ArchetypeIndex archetype) {
+    // The owner thread takes a slot directly, without the atomic operation of reserveEntity.
+    settleReservations();
     std::uint32_t index = 0;
     if (!m_freeSlots.empty()) {
         index = m_freeSlots.back();
         m_freeSlots.pop_back();
+        m_freeCursor.store(static_cast<std::int64_t>(m_freeSlots.size()), std::memory_order_relaxed);
     } else {
-        if (m_records.size() == std::numeric_limits<std::uint32_t>::max()) {
+        if (m_records.size() >= std::numeric_limits<std::uint32_t>::max()) {
             ITH_FATAL("ecs: the world has no entity slots left");
         }
         index = static_cast<std::uint32_t>(m_records.size());
         m_records.emplace_back();
     }
-    EntityRecord& record = m_records[index];
-    const Entity entity = Entity::fromParts(index, record.generation, m_id);
+    const Entity entity = Entity::fromParts(index, m_records[index].generation, m_id);
+    return {entity, placeReserved(entity, archetype)};
+}
+
+std::uint32_t World::placeReserved(Entity entity, detail::ArchetypeIndex archetype) {
+    settleReservations();
+    EntityRecord& record = m_records[entity.index()];
+    ITH_ASSERT(record.archetype == detail::kNoArchetype && record.generation == entity.generation());
     record.archetype = archetype;
     record.row = m_archetypes[archetype]->pushRow(entity);
     ++m_entityCount;
-    return {entity, record.row};
+    return record.row;
 }
 
 void World::releaseSlot(std::uint32_t index) {
-    EntityRecord& record = m_records[index];
-    record.archetype = detail::kNoArchetype;
+    m_records[index].archetype = detail::kNoArchetype;
     --m_entityCount;
+    freeSlot(index);
+}
+
+void World::freeSlot(std::uint32_t index) {
+    settleReservations();
+    EntityRecord& record = m_records[index];
     // A slot whose generation would wrap is retired, so an old handle never matches again.
     if (record.generation < Entity::kMaxGeneration) {
         ++record.generation;
         m_freeSlots.push_back(index);
+        m_freeCursor.store(static_cast<std::int64_t>(m_freeSlots.size()), std::memory_order_relaxed);
     }
 }
 
@@ -243,6 +312,57 @@ void World::clear() {
         }
         archetype->clear();
     }
+}
+
+void World::apply(Commands& commands) {
+    ITH_ASSERT_MSG(commands.m_world == this, "ecs: commands applied to another world");
+    if (commands.m_world != this || !canChangeStructure()) {
+        return;
+    }
+    freeAbandonedReservations();
+    // Consecutive spawns of one set of types share an archetype lookup.
+    std::vector<detail::ComponentIndex> types;
+    std::vector<detail::ComponentIndex> spawnTypes;
+    detail::ArchetypeIndex spawnArchetype = detail::kNoArchetype;
+    for (const Commands::Command& command : commands.m_commands) {
+        const std::span<Commands::Value> values(commands.m_values.data() + command.firstValue, command.valueCount);
+        switch (command.kind) {
+            case Commands::Kind::Spawn: {
+                types.clear();
+                for (const Commands::Value& value : values) {
+                    types.push_back(value.type);
+                }
+                std::ranges::sort(types);
+                if (spawnArchetype == detail::kNoArchetype || types != spawnTypes) {
+                    spawnArchetype = findOrCreateArchetype(types);
+                    spawnTypes = types;
+                }
+                const std::uint32_t row = placeReserved(command.entity, spawnArchetype);
+                detail::Archetype& archetype = *m_archetypes[spawnArchetype];
+                for (const Commands::Value& value : values) {
+                    detail::Column& column = archetype.column(archetype.columnOf(value.type));
+                    column.relocate(column.at(row), value.memory);
+                }
+                break;
+            }
+            case Commands::Kind::Despawn:
+                despawn(command.entity);
+                break;
+            case Commands::Kind::Add: {
+                const Commands::Value& value = values.front();
+                if (void* memory = prepareAdd(command.entity, value.type); memory != nullptr) {
+                    detail::relocateValue(detail::componentType(value.type), memory, value.memory);
+                } else {
+                    detail::componentType(value.type).destroy(value.memory);
+                }
+                break;
+            }
+            case Commands::Kind::Remove:
+                removeComponent(command.entity, command.type);
+                break;
+        }
+    }
+    commands.reset();
 }
 
 detail::ArchetypeIndex World::spawnArchetype(std::size_t slot, std::span<const detail::ComponentIndex> types) {
