@@ -6,6 +6,7 @@
 //       position.x += velocity.x;
 //   });
 //   world.query<const Health>().forEach([](ith::Entity entity, const Health& health) { ... });
+//   world.query<Position, ith::Without<Frozen>>().forEach([](Position& position) { ... });
 //
 // A query visits every entity that has all of its component types, archetype by archetype and
 // row by row. A term written as `const T` reads T; a term written as plain `T` writes it. Inside a
@@ -13,6 +14,16 @@
 // (slice 6) will mark a written value changed when a query hands it out. A writable term of an
 // immutable component type (ADR-0030) asserts, and the query visits nothing. The function takes the
 // components in the query's order, optionally preceded by the entity.
+//
+// Filters narrow the entities without handing out values: ith::With<T> requires a T and
+// ith::Without<T> skips entities that have one. They may stand anywhere among the terms, are not
+// passed to the function, and need no declared access inside a system, because they read no
+// values (like World::has). A query of filters only passes the entity, or nothing:
+//
+//   world.query<ith::With<Selected>>().forEach([](ith::Entity entity) { ... });
+//
+// A query names each component type once, filters included: reading and filtering one type, or
+// requiring and excluding it, is a compile error.
 //
 // Each World keeps a cache of the archetypes that match each query type and extends it with the
 // archetypes created since the query last ran, so a query never scans archetypes it has seen.
@@ -44,28 +55,47 @@ namespace ith {
 
 class World;
 
+// A query filter: the entity must have a T; the query doesn't hand the value out. T is a plain
+// component type, not const.
+template <typename T>
+struct With {
+    static_assert(std::is_same_v<T, std::remove_cvref_t<T>>, "With names a plain component type");
+};
+
+// A query filter: the entity must not have a T. T is a plain component type, not const.
+template <typename T>
+struct Without {
+    static_assert(std::is_same_v<T, std::remove_cvref_t<T>>, "Without names a plain component type");
+};
+
+template <typename... Terms>
+class Query;
+
 namespace detail {
 
 // The cached matches of one query type in one World.
 struct QueryState {
-    std::vector<ComponentIndex> terms; // in the query's order
-    ComponentMask required;
-    bool matchesNothing = false; // a term is not a component type, or is repeated
+    std::vector<ComponentIndex> terms; // the terms that hand out values, in the query's order
+    ComponentMask required;            // the terms and the With filters
+    ComponentMask excluded;            // the Without filters
+    bool matchesNothing = false;       // a term or filter is not a component type, or is repeated
     std::size_t archetypesSeen = 0;
     std::vector<ArchetypeIndex> archetypes; // the matching archetypes
     std::vector<std::uint32_t> columns;     // per matching archetype, the column of each term
 };
 
-// Fills a new query state with its terms. A term that is kNoComponent (its type is not a
-// component; registering it asserted) or that repeats an earlier term (asserted) makes the query
-// match nothing. No terms match every archetype.
-void initQueryState(QueryState& state, std::span<const ComponentIndex> terms);
+// Fills a new query state with its terms and filters. A type that is kNoComponent (it is not a
+// component; registering it asserted) or that repeats an earlier term or filter (asserted) makes
+// the query match nothing. No terms and no filters match every archetype.
+void initQueryState(QueryState& state, std::span<const ComponentIndex> terms, std::span<const ComponentIndex> with = {},
+                    std::span<const ComponentIndex> without = {});
 
-// Adds the archetypes created since the last update that match the query.
+// Adds the archetypes created since the last update that have every required type and no
+// excluded one.
 void updateQueryState(QueryState& state, std::span<const std::unique_ptr<Archetype>> archetypes);
 
 // A process-wide number for each distinct list of types, which indexes the per-World caches of
-// queries (the list of terms) and spawns (SpawnList and the component types).
+// queries (the list of terms and filters) and spawns (SpawnList and the component types).
 std::size_t nextTypeListSlot() noexcept;
 
 template <typename... Types>
@@ -82,6 +112,52 @@ inline constexpr bool kDistinctTypes = true;
 
 template <typename First, typename... Rest>
 inline constexpr bool kDistinctTypes<First, Rest...> = (!std::is_same_v<First, Rest> && ...) && kDistinctTypes<Rest...>;
+
+// Which query terms are filters.
+template <typename T>
+inline constexpr bool kIsWith = false;
+template <typename T>
+inline constexpr bool kIsWith<With<T>> = true;
+
+template <typename T>
+inline constexpr bool kIsWithout = false;
+template <typename T>
+inline constexpr bool kIsWithout<Without<T>> = true;
+
+template <typename T>
+inline constexpr bool kIsFilter = kIsWith<T> || kIsWithout<T>;
+
+// The component type that a term or a filter names, without const.
+template <typename T>
+struct TermComponent {
+    using Type = std::remove_const_t<T>;
+};
+
+template <typename T>
+struct TermComponent<With<T>> {
+    using Type = T;
+};
+
+template <typename T>
+struct TermComponent<Without<T>> {
+    using Type = T;
+};
+
+template <typename T>
+using TermComponentT = TermComponent<T>::Type;
+
+// The Query type of a list of terms and filters: Query<the terms that hand out values, in order>.
+template <typename Done, typename... Rest>
+struct QueryOfTerms {
+    using Type = Done;
+};
+
+template <typename... Done, typename First, typename... Rest>
+struct QueryOfTerms<Query<Done...>, First, Rest...>
+    : QueryOfTerms<std::conditional_t<kIsFilter<First>, Query<Done...>, Query<Done..., First>>, Rest...> {};
+
+template <typename... Terms>
+using QueryOf = QueryOfTerms<Query<>, Terms...>::Type;
 
 // Counts the queries iterating a World for the duration of a scope.
 class IterationScope {
@@ -101,18 +177,19 @@ private:
 
 } // namespace detail
 
-// Terms: one or more distinct component types, each `T` (write) or `const T` (read).
+// Terms: distinct component types, each `T` (write) or `const T` (read); none for a query of
+// filters only. World::query builds it from its terms and filters, which it keeps out of Terms.
 template <typename... Terms>
 class Query {
-    static_assert(sizeof...(Terms) > 0, "a query needs at least one component type");
     static_assert((!std::is_reference_v<Terms> && ...), "query terms are component types, not references");
     static_assert(detail::kDistinctTypes<std::remove_const_t<Terms>...>,
                   "a query names each component type once: it can't read and write the same component");
 
 public:
-    // Calls `function(Terms&...)` or `function(Entity, Terms&...)` for every matching entity.
-    // The order is by archetype, then by row; it is deterministic for one sequence of structural
-    // changes but is not otherwise specified. Structural changes inside `function` are refused.
+    // Calls `function(Terms&...)` or `function(Entity, Terms&...)` for every matching entity;
+    // filters are not passed. The order is by archetype, then by row; it is deterministic for one
+    // sequence of structural changes but is not otherwise specified. Structural changes inside
+    // `function` are refused.
     template <typename Function>
     void forEach(Function&& function) {
         detail::updateQueryState(*m_state, *m_archetypes);
@@ -136,9 +213,10 @@ private:
         : m_state(&state), m_archetypes(&archetypes), m_iterationDepth(&iterationDepth) {}
 
     template <typename Function, std::size_t... Term>
-    static void forEachRow(detail::Archetype& archetype, const std::uint32_t* columns, Function& function,
-                           std::index_sequence<Term...> /*terms*/) {
-        const std::tuple<Terms*...> values{static_cast<Terms*>(archetype.column(columns[Term]).data())...};
+    static void forEachRow(detail::Archetype& archetype, [[maybe_unused]] const std::uint32_t* columns,
+                           Function& function, std::index_sequence<Term...> /*terms*/) {
+        [[maybe_unused]] const std::tuple<Terms*...> values{
+            static_cast<Terms*>(archetype.column(columns[Term]).data())...};
         const std::span<const Entity> entities = archetype.entities();
         const std::size_t rows = entities.size();
         for (std::size_t row = 0; row < rows; ++row) {

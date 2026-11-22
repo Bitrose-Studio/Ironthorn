@@ -43,7 +43,7 @@
 // at run time. This is how the editor, serialization and the visual-script VM reach components.
 //
 //   const ith::TypeInfo& health = *typeRegistry.find("game::Health");
-//   if (void* value = world.add(ship, health)) { ... } // default-constructed
+//   if (const void* value = world.add(ship, health)) { ... } // default-constructed
 //
 // Resources are typed singletons of a world (time, input state, settings): one value per resource
 // type, a reflected struct with the Resource role (ITH_TYPE(Resource)), kept apart from entities.
@@ -71,8 +71,10 @@
 // through add, so their hooks always run. Everything that would hand out a writable value of one
 // asserts and is refused: get<T> with a non-const T and get(entity, type) give null, a query or
 // dynamic query that writes one visits nothing, and the non-const forEachComponent skips it. Read
-// it with get<const T>, a const term, or the const forEachComponent. The pointer add returns
-// is for reading only when the type is immutable.
+// it with get<const T>, a const term, or the const forEachComponent.
+//
+// add returns a const pointer for every type: a write after add would skip the hooks that add has
+// already run. Set the fields on the value before adding it, or write through get afterwards.
 //
 // Not yet here (later ADR-0014 slices): hierarchy and change ticks.
 
@@ -163,13 +165,14 @@ public:
     [[nodiscard]] const T* get(Entity entity) const;
 
     // Gives the entity `value` as its T, replacing a T it already has, and returns the stored
-    // value. Like spawn, the value is copied or moved into a local first, so it may be a
-    // component stored in this world. Returns null, doing nothing, for a stale handle and while a
-    // query iterates (asserted). Runs onReplace before an existing value is destroyed, then onAdd
-    // (for a new type) and onInsert, then the commands they recorded.
+    // value, read-only: the hooks have seen it, so writes belong before the add or through get.
+    // Like spawn, the value is copied or moved into a local first, so it may be a component
+    // stored in this world. Returns null, doing nothing, for a stale handle and while a query
+    // iterates (asserted). Runs onReplace before an existing value is destroyed, then onAdd (for a
+    // new type) and onInsert, then the commands they recorded.
     template <typename T>
         requires detail::kIsValueArgument<T>
-    std::remove_cvref_t<T>* add(Entity entity, T&& value);
+    const std::remove_cvref_t<T>* add(Entity entity, T&& value);
 
     // Removes the entity's T, after its onReplace and onRemove hooks. Returns false, doing nothing,
     // when the entity is stale or has no T, and while a query iterates (asserted).
@@ -182,10 +185,11 @@ public:
     void clear();
 
     // A query over the entities that have every component type in Terms; see Query.h. Terms
-    // are distinct component types, `const T` to read and `T` to write. A writable term of an
+    // are distinct component types, `const T` to read and `T` to write, and filters, With<T> and
+    // Without<T>, which the returned Query leaves out of its terms. A writable term of an
     // immutable type asserts, and the query visits nothing.
     template <typename... Terms>
-    [[nodiscard]] Query<Terms...> query();
+    [[nodiscard]] detail::QueryOf<Terms...> query();
 
     // Access by type record. `type` is the reflection record of a component type: a reflected
     // struct with the Component role. Any other type asserts, and the call then fails as for a
@@ -202,15 +206,15 @@ public:
     [[nodiscard]] const void* get(Entity entity, const TypeInfo& type) const;
 
     // Gives the entity a default-constructed value of `type`, replacing one it already has, and
-    // returns it. Returns null, doing nothing, for a stale handle and while a query iterates
-    // (asserted). Hooks run as for add<T>, with the default value; to add a value with its
-    // fields set, so that hooks see it, use the overload below.
-    void* add(Entity entity, const TypeInfo& type);
+    // returns it, read-only as for add<T>. Returns null, doing nothing, for a stale handle and
+    // while a query iterates (asserted). Hooks run as for add<T>, with the default value; to add a
+    // value with its fields set, so that hooks see it, use the overload below.
+    const void* add(Entity entity, const TypeInfo& type);
 
     // Gives the entity a value of `type` moved from `value`, which points to a valid value of
     // that type and stays a moved-from value the caller destroys. Otherwise as above. This is how
     // a loader adds a value it has read, immutable or with hooks.
-    void* add(Entity entity, const TypeInfo& type, void* value);
+    const void* add(Entity entity, const TypeInfo& type, void* value);
 
     // Removes the entity's value of `type`. Returns false, doing nothing, when the entity is stale
     // or has none, and while a query iterates (asserted).
@@ -226,10 +230,12 @@ public:
     template <typename Function>
     void forEachComponent(Entity entity, Function&& function) const;
 
-    // A query over the entities that have every component type in `terms`; no terms visit every
-    // entity. See DynamicQuery.h. The query copies the terms and keeps its own cache. A write term
-    // of an immutable type asserts, and the query visits nothing.
-    [[nodiscard]] DynamicQuery dynamicQuery(std::span<const QueryTerm> terms);
+    // A query over the entities that have every component type in `terms`, narrowed by `filters`;
+    // no terms and no filters visit every entity. See DynamicQuery.h. The query copies the terms
+    // and keeps its own cache. A write term of an immutable type asserts, and the query visits
+    // nothing.
+    [[nodiscard]] DynamicQuery dynamicQuery(std::span<const QueryTerm> terms,
+                                            std::span<const QueryFilter> filters = {});
 
     // Resources. A resource type is a reflected struct with the Resource role; any other type
     // asserts, and the call then fails as for a missing resource.
@@ -354,7 +360,9 @@ private:
     // The archetype for a spawn signature: `types` (sorted) cached under `slot`.
     detail::ArchetypeIndex spawnArchetype(std::size_t slot, std::span<const detail::ComponentIndex> types);
     // The cached state of a typed query; `refused` makes a new state match nothing.
-    detail::QueryState& queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms, bool refused);
+    detail::QueryState& queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms,
+                                   std::span<const detail::ComponentIndex> with,
+                                   std::span<const detail::ComponentIndex> without, bool refused);
 
     // The memory where insertResource constructs the value: the old value's memory, destroyed, or
     // new uninitialized memory. Null when `type` is not a resource type.
@@ -460,7 +468,7 @@ const T* World::get(Entity entity) const {
 
 template <typename T>
     requires detail::kIsValueArgument<T>
-std::remove_cvref_t<T>* World::add(Entity entity, T&& value) {
+const std::remove_cvref_t<T>* World::add(Entity entity, T&& value) {
     using Component = std::remove_cvref_t<T>;
     Component local(std::forward<T>(value)); // see spawn
     const detail::ComponentIndex type = detail::componentIndexOf<Component>();
@@ -469,7 +477,7 @@ std::remove_cvref_t<T>* World::add(Entity entity, T&& value) {
     if (memory == nullptr) {
         return nullptr;
     }
-    auto* stored = ::new (memory) Component(std::move(local));
+    const auto* stored = ::new (memory) Component(std::move(local));
     finishAdd(entity, type, added);
     return stored; // hooks can't change structure, so the value is still where it was built
 }
@@ -480,17 +488,39 @@ bool World::remove(Entity entity) {
 }
 
 template <typename... Terms>
-Query<Terms...> World::query() {
-    const std::array<detail::ComponentIndex, sizeof...(Terms)> terms{
-        detail::componentIndexOf<std::remove_const_t<Terms>>()...};
+detail::QueryOf<Terms...> World::query() {
+    static_assert(sizeof...(Terms) > 0, "a query needs at least one component type or filter");
+    static_assert((!std::is_reference_v<Terms> && ...), "query terms are component types, not references");
+    static_assert(detail::kDistinctTypes<detail::TermComponentT<Terms>...>,
+                  "a query names each component type once, filters included");
+    constexpr std::size_t kCount = sizeof...(Terms);
+    std::array<detail::ComponentIndex, kCount> terms{};
+    std::array<detail::ComponentIndex, kCount> with{};
+    std::array<detail::ComponentIndex, kCount> without{};
+    std::size_t termCount = 0;
+    std::size_t withCount = 0;
+    std::size_t withoutCount = 0;
+    const auto sort = [&]<typename Term> {
+        const detail::ComponentIndex type = detail::componentIndexOf<detail::TermComponentT<Term>>();
+        if constexpr (detail::kIsWith<Term>) {
+            with[withCount++] = type;
+        } else if constexpr (detail::kIsWithout<Term>) {
+            without[withoutCount++] = type;
+        } else {
+            terms[termCount++] = type;
+        }
+    };
+    (sort.template operator()<Terms>(), ...);
     // A writable term of an immutable type refuses the query. Immutability never changes, so the
     // cached state of this query type matches nothing for good.
-    const bool writesImmutable =
-        ((!std::is_const_v<Terms> && detail::isImmutableComponent<std::remove_const_t<Terms>>() &&
-          !detail::isWritableComponent(typeOf<std::remove_const_t<Terms>>())) ||
-         ...);
-    return Query<Terms...>(queryState(detail::typeListSlot<Terms...>(), terms, writesImmutable), m_archetypes,
-                           m_iterationDepth);
+    const bool writesImmutable = ((!detail::kIsFilter<Terms> && !std::is_const_v<Terms> &&
+                                   detail::isImmutableComponent<detail::TermComponentT<Terms>>() &&
+                                   !detail::isWritableComponent(typeOf<detail::TermComponentT<Terms>>())) ||
+                                  ...);
+    detail::QueryState& state =
+        queryState(detail::typeListSlot<Terms...>(), std::span(terms.data(), termCount),
+                   std::span(with.data(), withCount), std::span(without.data(), withoutCount), writesImmutable);
+    return detail::QueryOf<Terms...>(state, m_archetypes, m_iterationDepth);
 }
 
 template <typename Function>

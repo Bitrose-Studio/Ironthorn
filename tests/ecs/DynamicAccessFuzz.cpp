@@ -95,7 +95,8 @@ private:
         } else if (operation == 2) {
             const Entity entity = anyHandle(input);
             ModelEntity* entry = model(entity);
-            void* value = m_world.add(entity, *kTypes[type]);
+            const void* added = m_world.add(entity, *kTypes[type]);
+            void* value = added != nullptr ? m_world.get(entity, *kTypes[type]) : nullptr;
             check((value != nullptr) == (entry != nullptr));
             if (entry != nullptr) {
                 entry->types |= bit;

@@ -17,6 +17,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -265,7 +266,7 @@ TEST_CASE("World: add and remove move the entity between archetypes and keep the
     // The other entity filled the hole and is still found.
     CHECK(world.get<Position>(other)->x == 2.0f);
 
-    Health* health = world.add(entity, Health{.value = 9});
+    const Health* health = world.add(entity, Health{.value = 9});
     REQUIRE(health != nullptr);
     CHECK(health->value == 9);
 
@@ -370,6 +371,66 @@ TEST_CASE("World: a query sees archetypes created after it first ran") {
     visits = 0;
     query.forEach([&](const Health&) { ++visits; });
     CHECK(visits == 0);
+}
+
+TEST_CASE("World: With and Without filters narrow a query without handing out values") {
+    World world;
+    const Entity moving = world.spawn(Position{.x = 1.0f}, Velocity{});
+    const Entity frozen = world.spawn(Position{.x = 2.0f}, Velocity{}, ith::test::Tag0{});
+    const Entity still = world.spawn(Position{.x = 4.0f});
+    const Entity frozenStill = world.spawn(Position{.x = 8.0f}, ith::test::Tag0{});
+
+    std::set<std::uint64_t> visited;
+    float sum = 0.0f;
+    world.query<const Position, ith::Without<ith::test::Tag0>>().forEach([&](Entity entity, const Position& position) {
+        visited.insert(entity.bits());
+        sum += position.x;
+    });
+    CHECK(visited == std::set<std::uint64_t>{moving.bits(), still.bits()});
+    CHECK(sum == 5.0f);
+
+    // Filters may stand anywhere among the terms; the function takes only the terms.
+    visited.clear();
+    world.query<ith::With<Velocity>, Position, ith::Without<ith::test::Tag0>>().forEach(
+        [&](Entity entity, Position& position) {
+            visited.insert(entity.bits());
+            position.y = 1.0f;
+        });
+    CHECK(visited == std::set<std::uint64_t>{moving.bits()});
+    CHECK(world.get<Position>(moving)->y == 1.0f);
+    CHECK(world.get<Position>(still)->y == 0.0f);
+
+    // A query of filters only passes the entity, or nothing.
+    visited.clear();
+    world.query<ith::With<ith::test::Tag0>, ith::Without<Velocity>>().forEach(
+        [&](Entity entity) { visited.insert(entity.bits()); });
+    CHECK(visited == std::set<std::uint64_t>{frozenStill.bits()});
+    int calls = 0;
+    world.query<ith::With<ith::test::Tag0>>().forEach([&] { ++calls; });
+    CHECK(calls == 2);
+    static_assert(
+        std::is_same_v<decltype(world.query<ith::With<Health>, const Position>()), ith::Query<const Position>>);
+
+    // Archetypes created later are matched against the filters too.
+    const Entity late = world.spawn(Position{}, Name{});
+    world.spawn(Position{}, Name{}, ith::test::Tag0{});
+    visited.clear();
+    world.query<const Position, ith::Without<ith::test::Tag0>>().forEach(
+        [&](Entity entity, const Position&) { visited.insert(entity.bits()); });
+    CHECK(visited == std::set<std::uint64_t>{moving.bits(), still.bits(), late.bits()});
+    CHECK(world.isAlive(frozen));
+}
+
+TEST_CASE("World: add hands out the stored value read-only") {
+    World world;
+    const Entity entity = world.spawn(Position{});
+    static_assert(std::is_same_v<decltype(world.add(entity, Health{})), const Health*>);
+    static_assert(std::is_same_v<decltype(world.add(entity, ith::typeOf<Health>())), const void*>);
+    const Health* health = world.add(entity, Health{.value = 3});
+    REQUIRE(health != nullptr);
+    CHECK(health == world.get<const Health>(entity));
+    world.get<Health>(entity)->value = 4; // writes go through get
+    CHECK(health->value == 4);
 }
 
 TEST_CASE("World: queries of the same type are cached per world") {
@@ -604,7 +665,7 @@ TEST_CASE("World: add replaces a non-trivial value, destroying the old one") {
         World world;
         const Entity entity = world.spawn(Tracked(1), Name{.text = "keeps its name"});
         CHECK(Tracked::s_alive == 1);
-        Tracked* replaced = world.add(entity, Tracked(2));
+        const Tracked* replaced = world.add(entity, Tracked(2));
         REQUIRE(replaced != nullptr);
         CHECK(replaced->value == 2);
         CHECK(Tracked::s_alive == 1);

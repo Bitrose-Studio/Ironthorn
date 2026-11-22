@@ -12,14 +12,22 @@
 //   });
 //
 // A dynamic query visits every entity that has all of its component types, archetype by archetype
-// and row by row, with the same matching code as the typed Query. A query without terms visits
-// every entity. Each term declares read or write access, as `const T` and `T` do for a typed
-// query; inside a system it must match the system's declared access (Schedule.h), and change
-// detection (slice 6) will use it. Code must not write through the pointer of a read term.
+// and row by row, with the same matching code as the typed Query. A query without terms and
+// filters visits every entity. Each term declares read or write access, as `const T` and `T` do
+// for a typed query; inside a system it must match the system's declared access (Schedule.h), and
+// change detection (slice 6) will use it. Code must not write through the pointer of a read term.
 //
-// Invalid terms are programmer errors: a null type, a type that is not a reflected struct with the
-// Component role, a component type named twice, or a write term of an immutable component type
-// (ADR-0030) asserts, and the query then visits nothing.
+// Filters (QueryFilter) narrow the entities without handing out values, as ith::With and
+// ith::Without do for a typed query: FilterKind::With requires the type and FilterKind::Without
+// skips entities that have it. They are not in the `components` span and need no declared access
+// inside a system.
+//
+//   const std::array filters{ith::QueryFilter{.type = frozen, .kind = ith::FilterKind::Without}};
+//   ith::DynamicQuery moving = world.dynamicQuery(terms, filters);
+//
+// Invalid terms and filters are programmer errors: a null type, a type that is not a reflected
+// struct with the Component role, a component type named twice (terms and filters together), or a
+// write term of an immutable component type (ADR-0030) asserts, and the query then visits nothing.
 //
 // The query keeps its own cache of matching archetypes and extends it with the archetypes created
 // since it last ran. No structural change may happen while it iterates (asserted and refused), as
@@ -52,6 +60,18 @@ enum class Access : std::uint8_t {
 struct QueryTerm {
     const TypeInfo* type = nullptr; // a reflected struct with the Component role
     Access access = Access::Read;
+};
+
+// What a query filter asks of an entity.
+enum class FilterKind : std::uint8_t {
+    With,    // it has the type
+    Without, // it doesn't have the type
+};
+
+// A filter of a dynamic query: it narrows the entities without handing out a value.
+struct QueryFilter {
+    const TypeInfo* type = nullptr; // a reflected struct with the Component role
+    FilterKind kind = FilterKind::With;
 };
 
 class DynamicQuery {

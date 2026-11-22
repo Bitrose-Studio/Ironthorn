@@ -496,14 +496,16 @@ detail::ArchetypeIndex World::spawnArchetype(std::size_t slot, std::span<const d
     return cached;
 }
 
-detail::QueryState& World::queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms, bool refused) {
+detail::QueryState& World::queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms,
+                                      std::span<const detail::ComponentIndex> with,
+                                      std::span<const detail::ComponentIndex> without, bool refused) {
     if (slot >= m_queries.size()) {
         m_queries.resize(slot + 1);
     }
     std::unique_ptr<detail::QueryState>& state = m_queries[slot];
     if (state == nullptr) {
         state = std::make_unique<detail::QueryState>();
-        detail::initQueryState(*state, terms);
+        detail::initQueryState(*state, terms, with, without);
         state->matchesNothing = state->matchesNothing || refused;
     }
     return *state;
@@ -527,7 +529,7 @@ const void* World::get(Entity entity, const TypeInfo& type) const {
     return findComponent(entity, detail::registerComponentType(type));
 }
 
-void* World::add(Entity entity, const TypeInfo& type) {
+const void* World::add(Entity entity, const TypeInfo& type) {
     const detail::ComponentIndex index = detail::registerComponentType(type);
     bool added = false;
     void* memory = prepareAdd(entity, index, added);
@@ -539,7 +541,7 @@ void* World::add(Entity entity, const TypeInfo& type) {
     return memory;
 }
 
-void* World::add(Entity entity, const TypeInfo& type, void* value) {
+const void* World::add(Entity entity, const TypeInfo& type, void* value) {
     ITH_ASSERT_MSG(value != nullptr, "ecs: add by record without a value");
     const detail::ComponentIndex index = detail::registerComponentType(type);
     if (value == nullptr) {
@@ -559,7 +561,7 @@ bool World::remove(Entity entity, const TypeInfo& type) {
     return removeComponent(entity, detail::registerComponentType(type));
 }
 
-DynamicQuery World::dynamicQuery(std::span<const QueryTerm> terms) {
+DynamicQuery World::dynamicQuery(std::span<const QueryTerm> terms, std::span<const QueryFilter> filters) {
     DynamicQuery query(terms, m_archetypes, m_iterationDepth);
     std::vector<detail::ComponentIndex> indices;
     indices.reserve(terms.size());
@@ -571,7 +573,15 @@ DynamicQuery World::dynamicQuery(std::span<const QueryTerm> terms) {
             writesImmutable = true;
         }
     }
-    detail::initQueryState(query.m_state, indices);
+    std::vector<detail::ComponentIndex> with;
+    std::vector<detail::ComponentIndex> without;
+    for (const QueryFilter& filter : filters) {
+        ITH_ASSERT_MSG(filter.type != nullptr, "ecs: a dynamic query filter without a type");
+        const detail::ComponentIndex index =
+            filter.type != nullptr ? detail::registerComponentType(*filter.type) : detail::kNoComponent;
+        (filter.kind == FilterKind::With ? with : without).push_back(index);
+    }
+    detail::initQueryState(query.m_state, indices, with, without);
     query.m_state.matchesNothing = query.m_state.matchesNothing || writesImmutable;
     return query;
 }
@@ -651,24 +661,31 @@ void ResourceDelete::operator()(std::byte* memory) const noexcept {
     ::operator delete(memory, std::align_val_t(type->alignment));
 }
 
-void initQueryState(QueryState& state, std::span<const ComponentIndex> terms) {
+void initQueryState(QueryState& state, std::span<const ComponentIndex> terms, std::span<const ComponentIndex> with,
+                    std::span<const ComponentIndex> without) {
     state.terms.assign(terms.begin(), terms.end());
-    for (const ComponentIndex term : terms) {
-        if (term == kNoComponent) {
-            state.matchesNothing = true; // registering the type asserted
-            continue;
+    const auto mark = [&state](std::span<const ComponentIndex> types, ComponentMask& mask) {
+        for (const ComponentIndex type : types) {
+            if (type == kNoComponent) {
+                state.matchesNothing = true; // registering the type asserted
+                continue;
+            }
+            const bool repeated = state.required[type] || state.excluded[type];
+            ITH_ASSERT_MSG(!repeated, "ecs: a query names a component type twice");
+            state.matchesNothing = state.matchesNothing || repeated;
+            mask[type] = true;
         }
-        const bool repeated = state.required[term];
-        ITH_ASSERT_MSG(!repeated, "ecs: a query names a component type twice");
-        state.matchesNothing = state.matchesNothing || repeated;
-        state.required[term] = true;
-    }
+    };
+    mark(terms, state.required);
+    mark(with, state.required);
+    mark(without, state.excluded);
 }
 
 void updateQueryState(QueryState& state, std::span<const std::unique_ptr<Archetype>> archetypes) {
     for (std::size_t index = state.archetypesSeen; index < archetypes.size(); ++index) {
         const Archetype& archetype = *archetypes[index];
-        if (state.matchesNothing || (archetype.mask() & state.required) != state.required) {
+        if (state.matchesNothing || (archetype.mask() & state.required) != state.required ||
+            (archetype.mask() & state.excluded).any()) {
             continue;
         }
         state.archetypes.push_back(static_cast<ArchetypeIndex>(index));

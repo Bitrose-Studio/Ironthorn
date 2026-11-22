@@ -4,7 +4,8 @@
 // through the typed functions or through type records at random, so both paths are exercised
 // against the same model. An immutable component with hooks (Tracked) is spawned, replaced,
 // removed, despawned and cleared too; its hooks count their calls into a resource, which is checked
-// against the counts the model expects (ADR-0030). The seeds are fixed, so a failure reproduces.
+// against the counts the model expects (ADR-0030). Queries with With and Without filters are checked
+// too. The seeds are fixed, so a failure reproduces.
 
 #include "ith/ecs/Hooks.h"
 #include "ith/ecs/World.h"
@@ -203,7 +204,7 @@ private:
     }
 
     // Adds a value through World::add<T>, or through the type's record, either moved from a value or
-    // default-constructed and then written. An immutable type is never written in place.
+    // default-constructed and then written through get. An immutable type is never written in place.
     template <typename T>
     bool addValue(Entity entity, T value) {
         const std::uint32_t path = pick(3);
@@ -213,7 +214,7 @@ private:
         if (path == 1 || hasFlags(ith::typeOf<T>().flags, ith::ReflectionFlags::Immutable)) {
             return m_world.add(entity, ith::typeOf<T>(), &value) != nullptr;
         }
-        auto* stored = static_cast<T*>(m_world.add(entity, ith::typeOf<T>()));
+        T* stored = m_world.add(entity, ith::typeOf<T>()) != nullptr ? m_world.get<T>(entity) : nullptr;
         if (stored != nullptr) {
             *stored = std::move(value);
         }
@@ -411,6 +412,26 @@ private:
             }
         }
         CHECK(visited == expected);
+
+        // Filters: Health with a Name and without Tag0, typed and dynamic, in the same order.
+        std::vector<std::uint64_t> filtered;
+        m_world.query<const Health, ith::With<Name>, ith::Without<Tag0>>().forEach(
+            [&](Entity entity, const Health&) { filtered.push_back(entity.bits()); });
+        expected.clear();
+        for (const auto& [bits, entity] : m_model) {
+            if (entity.health && entity.name && !entity.tag) {
+                expected.insert(bits);
+            }
+        }
+        CHECK(std::multiset<std::uint64_t>(filtered.begin(), filtered.end()) == expected);
+        const std::array healthTerm{ith::QueryTerm{.type = &ith::typeOf<Health>()}};
+        const std::array filters{ith::QueryFilter{.type = &ith::typeOf<Name>()},
+                                 ith::QueryFilter{.type = &ith::typeOf<Tag0>(), .kind = ith::FilterKind::Without}};
+        std::vector<std::uint64_t> dynamicFiltered;
+        m_world.dynamicQuery(healthTerm, filters).forEach([&](Entity entity, std::span<void* const>) {
+            dynamicFiltered.push_back(entity.bits());
+        });
+        CHECK(dynamicFiltered == filtered);
     }
 
     std::mt19937 m_random;

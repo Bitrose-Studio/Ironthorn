@@ -142,12 +142,15 @@ public:
     SystemContext& operator=(SystemContext&&) = delete;
     ~SystemContext() = default;
 
-    // World::query; each term must be declared, `T` with write access.
+    // World::query; each term must be declared, `T` with write access. Filters (With, Without)
+    // read no values and need no access.
     template <typename... Terms>
-    [[nodiscard]] Query<Terms...> query();
+    [[nodiscard]] detail::QueryOf<Terms...> query();
 
-    // World::dynamicQuery; each term must be declared, a write term with write access.
-    [[nodiscard]] DynamicQuery dynamicQuery(std::span<const QueryTerm> terms);
+    // World::dynamicQuery; each term must be declared, a write term with write access. Filters
+    // need no access.
+    [[nodiscard]] DynamicQuery dynamicQuery(std::span<const QueryTerm> terms,
+                                            std::span<const QueryFilter> filters = {});
 
     // World::get; T must be declared, with write access unless T is const.
     template <typename T>
@@ -222,10 +225,14 @@ private:
 };
 
 template <typename... Terms>
-Query<Terms...> SystemContext::query() {
-    (checkComponent(detail::componentIndexOf<std::remove_const_t<Terms>>(),
-                    std::is_const_v<Terms> ? Access::Read : Access::Write),
-     ...);
+detail::QueryOf<Terms...> SystemContext::query() {
+    const auto check = [this]<typename Term> {
+        if constexpr (!detail::kIsFilter<Term>) {
+            checkComponent(detail::componentIndexOf<std::remove_const_t<Term>>(),
+                           std::is_const_v<Term> ? Access::Read : Access::Write);
+        }
+    };
+    (check.template operator()<Terms>(), ...);
     return m_world->query<Terms...>();
 }
 

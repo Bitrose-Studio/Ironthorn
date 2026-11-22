@@ -284,6 +284,36 @@ TEST_CASE("Schedule: systems reach declared data through their context") {
     CHECK(world.resource<GameClock>()->frame == 2);
 }
 
+TEST_CASE("Schedule: query filters need no declared access") {
+    World world;
+    const Entity moving = world.spawn(Position{}, Velocity{});
+    const Entity frozen = world.spawn(Position{}, Velocity{}, Health{});
+    Schedule schedule;
+    schedule.add({
+        .name = "push",
+        .access = ith::accessTo<Position>(),
+        .run =
+            [](SystemContext& context) {
+                context.query<Position, ith::With<Velocity>, ith::Without<Health>>().forEach(
+                    [](Position& position) { position.x += 1.0f; });
+                const std::array terms{ith::QueryTerm{.type = &ith::typeOf<Position>(), .access = Access::Write}};
+                const std::array filters{
+                    ith::QueryFilter{.type = &ith::typeOf<Health>(), .kind = ith::FilterKind::Without}};
+                context.dynamicQuery(terms, filters).forEach([](Entity, std::span<void* const> components) {
+                    static_cast<Position*>(components[0])->y += 1.0f;
+                });
+            },
+    });
+    REQUIRE(schedule.build());
+    const ith::test::AssertCapture capture;
+    schedule.run(world);
+    CHECK(capture.count() == 0);
+    CHECK(world.get<Position>(moving)->x == 1.0f);
+    CHECK(world.get<Position>(moving)->y == 1.0f);
+    CHECK(world.get<Position>(frozen)->x == 0.0f);
+    CHECK(world.get<Position>(frozen)->y == 0.0f);
+}
+
 #ifdef ITH_ENABLE_ASSERTS
 TEST_CASE("Schedule: touching undeclared data asserts") {
     World world;

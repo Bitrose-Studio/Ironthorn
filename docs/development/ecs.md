@@ -77,13 +77,15 @@ world.despawn(ship);
 | `isAlive(entity)` | Whether the handle refers to a live entity of this world |
 | `has<T>(entity)` | Whether the entity is alive and has a `T` |
 | `get<T>(entity)` | A pointer to the entity's `T`, or null |
-| `add(entity, value)` | Adds `value`, or replaces the `T` the entity has; returns the stored value or null |
+| `add(entity, value)` | Adds `value`, or replaces the `T` the entity has; returns the stored value, read-only, or null |
 | `remove<T>(entity)` | Removes the entity's `T`; `false` when it has none |
 | `clear()` | Despawns every entity |
 | `entityCount()` | The number of live entities |
 
 - **Pointers from `get` and `add`** are valid until the next structural change (spawn, despawn,
   add, remove, clear). Keep handles, not pointers.
+- **`add` hands out a const pointer**, for every type: [hooks](#hooks) have already seen the value,
+  and a write through it would skip them. Set the fields before adding, or write through `get`.
 - **A World can't be copied or moved**, so its address is stable. One thread uses it at a time.
 - Up to 255 worlds exist at once (an editor world and a Play In Editor world are two).
 
@@ -112,13 +114,20 @@ world.query<game::Position, const game::Velocity>().forEach(
 world.query<const game::Position>().forEach([](ith::Entity entity, const game::Position& position) {
     // the entity handle comes first when the function asks for it
 });
+
+// Filters: With<T> requires a T, Without<T> skips entities that have one.
+world.query<game::Position, ith::Without<game::Frozen>>().forEach([](game::Position& position) { ... });
+world.query<ith::With<game::Frozen>>().forEach([](ith::Entity entity) { ... });
 ```
 
 - A query visits every entity that has all its component types.
 - `const T` declares read access and `T` write access. Inside a system they must match what the
   system declared ([the schedule](#the-schedule)), and change detection will mark written values
   as changed.
-- Naming a type twice is a compile error.
+- **Filters** `ith::With<T>` and `ith::Without<T>` may stand anywhere among the terms. They hand
+  out no values, so the function doesn't take them, and a system needs no access to their types,
+  as for `has`. A query of filters only passes the entity, or nothing.
+- Naming a type twice is a compile error, filters included.
 - Each world caches the archetypes that match each query type, and adds new archetypes as they
   appear. A query object can be kept and reused while the world lives.
 - **No structural changes inside `forEach`.** They assert and are refused. Record them as
@@ -135,7 +144,7 @@ const ith::TypeInfo& health = *typeRegistry.find("game::Health");
 
 if (world.has(ship, health)) { ... }
 void* value = world.get(ship, health);   // null when the entity has none
-void* added = world.add(ship, health);   // default-constructed; replaces an existing value
+const void* added = world.add(ship, health); // default-constructed; replaces an existing value
 world.add(ship, health, &loadedValue);   // moved from a value the caller built (a loader)
 world.remove(ship, health);
 
@@ -155,7 +164,7 @@ std::as_const(world).forEachComponent(ship, [](const ith::TypeInfo& type, const 
 - `add(entity, type)` builds the value with the record's default constructor; its hooks see that
   default value. `add(entity, type, value)` moves the value from one the caller built, which stays
   a moved-from value the caller destroys: use it when hooks must see the real value, and for
-  immutable components, which can't be written after the add.
+  immutable components, which can't be written after the add. Both return `const void*`.
 - `forEachComponent` visits in an unspecified order, stable while the entity's set of types stays
   the same. Sort by `type.id` or `type.name` where a fixed order matters, such as in saved files.
 - Each call looks the type up in the process-wide component table under a mutex. Typed access
@@ -174,15 +183,21 @@ ith::DynamicQuery query = world.dynamicQuery(terms);
 query.forEach([](ith::Entity entity, std::span<void* const> components) {
     // components[0] is the Position, components[1] the Velocity
 });
+
+// Filters, as With and Without are for a typed query:
+const std::array filters{ith::QueryFilter{.type = &frozen, .kind = ith::FilterKind::Without}};
+ith::DynamicQuery moving = world.dynamicQuery(terms, filters);
 ```
 
 - A dynamic query matches archetypes with the same code as a typed query and visits the same
   entities in the same order.
-- **A query without terms visits every entity**, which is how a level is saved.
+- **A query without terms and filters visits every entity**, which is how a level is saved.
 - Each term declares read or write access. Inside a system it must match the system's declared
   access, and change detection will use it; don't write through a read term's pointer.
-- A null type, a type that isn't a component, or a type named twice asserts, and the query then
-  visits nothing.
+- Filters (`FilterKind::With`, `FilterKind::Without`) hand out no values, so they are not in
+  `components`, and need no declared access.
+- A null type, a type that isn't a component, or a type named twice (terms and filters together)
+  asserts, and the query then visits nothing.
 - The query keeps its own cache of matching archetypes. Keep the `DynamicQuery` object to reuse
   it; it's valid while the world lives.
 - Structural changes inside `forEach` are refused, as for typed queries.
@@ -325,7 +340,7 @@ A system reaches the world only through its `ith::SystemContext`:
 
 | Call | Needs |
 |---|---|
-| `query<Terms...>()`, `dynamicQuery(terms)` | Each term declared; a written term declared as written |
+| `query<Terms...>()`, `dynamicQuery(terms, filters)` | Each term declared; a written term declared as written. Filters need nothing |
 | `get<T>(entity)` | `T` declared; written unless `T` is const |
 | `resource<T>()` | `T` declared; written unless `T` is const |
 | `has<T>(entity)`, `isAlive(entity)` | Nothing: they read no values |
@@ -415,7 +430,7 @@ commands.add(entity, Owner{.id = 8});              // replacing later: allowed
 | `HookContext::value<T>` with a non-const `T` | Asserts, gives null |
 | `add`, `add(entity, type, value)`, `Commands::add` | Allowed: they replace the value |
 
-`add` returns a pointer to the stored value; for an immutable type, only read through it. Saving
+`add` returns a const pointer to the stored value, for immutable types as for every other. Saving
 and loading are unaffected: a loader adds the value it read with `add(entity, type, value)`.
 
 ## How storage works

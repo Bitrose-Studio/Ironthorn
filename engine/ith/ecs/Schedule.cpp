@@ -246,13 +246,13 @@ std::vector<std::string_view> Schedule::order(Stage stage) const {
     return names;
 }
 
-DynamicQuery SystemContext::dynamicQuery(std::span<const QueryTerm> terms) {
+DynamicQuery SystemContext::dynamicQuery(std::span<const QueryTerm> terms, std::span<const QueryFilter> filters) {
     for (const QueryTerm& term : terms) {
         if (term.type != nullptr && term.type->kind == TypeKind::Struct && term.type->role == TypeRole::Component) {
             checkComponent(detail::registerComponentType(*term.type), term.access);
         }
     }
-    return m_world->dynamicQuery(terms); // asserts for invalid terms
+    return m_world->dynamicQuery(terms, filters); // asserts for invalid terms and filters
 }
 
 bool SystemContext::isAlive(Entity entity) const {

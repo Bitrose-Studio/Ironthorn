@@ -82,12 +82,12 @@ TEST_CASE("World: has, get, add and remove by type record match the typed functi
     CHECK(world.get(entity, kHealth) == nullptr);
 
     // add default-constructs the value and moves the entity to the archetype with the new type.
-    void* added = world.add(entity, kHealth);
+    const void* added = world.add(entity, kHealth);
     REQUIRE(added != nullptr);
     CHECK(added == world.get<Health>(entity));
-    CHECK(static_cast<Health*>(added)->value == 100);
+    CHECK(static_cast<const Health*>(added)->value == 100);
     CHECK(world.get<Position>(entity)->x == 1.0f);
-    static_cast<Health*>(added)->value = 42;
+    world.get<Health>(entity)->value = 42; // add hands out a read-only value; write through get
     CHECK(world.get<Health>(entity)->value == 42);
 
     // Adding a type the entity has replaces the value with a default one.
@@ -131,7 +131,8 @@ TEST_CASE("World: values added by type record are built and destroyed exactly on
 TEST_CASE("World: a non-trivial value added by type record survives archetype moves") {
     World world;
     const Entity entity = world.spawn(Counter{});
-    auto* name = static_cast<Name*>(world.add(entity, kName));
+    REQUIRE(world.add(entity, kName) != nullptr);
+    Name* name = world.get<Name>(entity);
     REQUIRE(name != nullptr);
     CHECK(name->text.empty());
     name->text = "a name long enough to live on the heap, set through a type record";
@@ -329,6 +330,64 @@ TEST_CASE("World: invalid dynamic query terms assert and the query visits nothin
     CHECK(visitDynamic(world, wrongRole).empty());
 #ifdef ITH_ENABLE_ASSERTS
     CHECK(capture.count() == 3);
+#endif
+}
+
+TEST_CASE("World: dynamic query filters narrow the entities as typed filters do") {
+    World world;
+    const Entity moving = world.spawn(Position{}, Velocity{});
+    world.spawn(Position{}, Velocity{}, Health{});
+    const Entity still = world.spawn(Position{});
+    const Entity healthy = world.spawn(Position{}, Health{});
+
+    const std::array terms{QueryTerm{.type = &kPosition}};
+    const std::array withoutHealth{ith::QueryFilter{.type = &kHealth, .kind = ith::FilterKind::Without}};
+    std::vector<std::uint64_t> visited;
+    world.dynamicQuery(terms, withoutHealth).forEach([&](Entity entity, std::span<void* const> components) {
+        CHECK(components.size() == 1); // filters hand out no values
+        visited.push_back(entity.bits());
+    });
+    std::vector<std::uint64_t> typed;
+    world.query<const Position, ith::Without<Health>>().forEach(
+        [&](Entity entity, const Position&) { typed.push_back(entity.bits()); });
+    CHECK(visited == typed);
+    CHECK(std::set<std::uint64_t>(visited.begin(), visited.end()) ==
+          std::set<std::uint64_t>{moving.bits(), still.bits()});
+
+    // Filters without terms.
+    const std::array healthNoVelocity{ith::QueryFilter{.type = &kHealth},
+                                      ith::QueryFilter{.type = &kVelocity, .kind = ith::FilterKind::Without}};
+    visited.clear();
+    world.dynamicQuery({}, healthNoVelocity).forEach([&](Entity entity, std::span<void* const> components) {
+        CHECK(components.empty());
+        visited.push_back(entity.bits());
+    });
+    CHECK(visited == std::vector<std::uint64_t>{healthy.bits()});
+}
+
+TEST_CASE("World: invalid dynamic query filters assert and the query visits nothing") {
+    World world;
+    world.spawn(Health{}, Position{}, Velocity{});
+    const ith::TypeInfo& notAComponent = ith::typeOf<ith::test::NotAComponent>();
+    const std::array terms{QueryTerm{.type = &kPosition}};
+    const std::array termAgain{ith::QueryFilter{.type = &kPosition}};
+    const std::array withAndWithout{ith::QueryFilter{.type = &kHealth},
+                                    ith::QueryFilter{.type = &kHealth, .kind = ith::FilterKind::Without}};
+    const std::array nullType{ith::QueryFilter{}};
+    const std::array wrongRole{ith::QueryFilter{.type = &notAComponent, .kind = ith::FilterKind::Without}};
+
+    const auto visits = [&](std::span<const ith::QueryFilter> filters) {
+        int count = 0;
+        world.dynamicQuery(terms, filters).forEach([&](Entity, std::span<void* const>) { ++count; });
+        return count;
+    };
+    const ith::test::AssertCapture capture;
+    CHECK(visits(termAgain) == 0);
+    CHECK(visits(withAndWithout) == 0);
+    CHECK(visits(nullType) == 0);
+    CHECK(visits(wrongRole) == 0);
+#ifdef ITH_ENABLE_ASSERTS
+    CHECK(capture.count() == 4);
 #endif
 }
 
