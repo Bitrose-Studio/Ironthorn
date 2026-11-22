@@ -1,6 +1,7 @@
 # ADR-0038: File system: Windows read retry while a replace is in flight (amends 0036)
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0039](0039-file-system-windows-read-retry-measured.md)
 - **Date:** 2026-11-22
 - **Related:** amends [ADR-0036](0036-file-system-windows-atomic-replace-corrected.md) rule 4
   (readers on Windows); [ADR-0035](0035-file-system-configuration-and-main-thread-queue.md) rule 2
