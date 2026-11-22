@@ -128,6 +128,30 @@ Expected<Value, Error> readDocument(std::string_view text, const DocumentFormat&
 // "serialization.invalid_id" (a nil id) and the writeJson errors.
 Expected<std::string, Error> writeDocument(const DocumentFormat& format, const Value& data, const Uuid* id = nullptr);
 
+// Options of fromValue: those of TextReadOptions that apply to a value without a document.
+struct ValueReadOptions {
+    UnknownFields unknownFields = UnknownFields::Warn;
+    // Receives the warnings of a successful read, appended, as for readText. Null to not collect.
+    std::vector<Error>* warnings = nullptr;
+    // The bytes the read may allocate; 0 means kMinAllocationBudget (Document.h).
+    std::size_t allocationBudget = 0;
+    // How Entity values are read (Document.h); null: a saved Entity fails as for readText.
+    const EntityMapping* entities = nullptr;
+};
+
+// The value of `type` at `object` as a Value tree, written as writeText writes the "data" of a
+// document but without the document around it (ADR-0033): for values kept inside other
+// documents, such as prefab overrides, and for editor command arguments. Error paths start at
+// "$", the value itself. Fails as writeText does, except for the format and id errors.
+Expected<Value, Error> toValue(const TypeInfo& type, const void* object, const EntityMapping* entities = nullptr);
+
+// Reads a Value tree, as toValue writes it, into the value of `type` at `target`, as readText reads
+// the "data" of a document. The whole value is built first, so on failure the target is
+// unchanged. Fails as readText does, except for the document, format, version and migration
+// errors. Precondition: `target` is a complete, non-const object of `type`.
+Expected<void, Error> fromValue(const Value& value, const TypeInfo& type, void* target,
+                                const ValueReadOptions& options = {});
+
 // writeText for a reflected type T.
 template <typename T>
 Expected<std::string, Error> writeText(const DocumentFormat& format, const T& value, const Uuid* id = nullptr,

@@ -195,6 +195,65 @@ const ith::TypeInfo* byName = registry.find("game::Health");
 - The registry is filled at startup and is read-only afterwards; lookups don't allocate. It
   holds pointers to static records, so a module's entries must be removed before the module is
   unloaded (hot reload defines when).
+- Containers expose `count`, the number of elements of a `std::array`, without a value.
+
+## Property paths and patches
+
+A property path names a value inside a reflected value, and a patch is a list of edits that is
+checked in full before anything changes
+([ADR-0033](../decisions/0033-reflection-property-paths-and-patches.md)). The Details panel, undo,
+prefab overrides and Keep Simulation Changes are built on them.
+
+```cpp
+#include "ith/reflection/Patch.h"
+
+const ith::TypeInfo& squadType = ith::typeOf<game::Squad>();
+const auto path = ith::PropertyPath::parse(squadType, "members[2].health.current");
+// path->leafType() is float; path->leafField() has its Min, Max, Unit and tooltip.
+
+ith::Patch patch(squadType);
+patch.set(*path, ith::OwnedValue::of(50.0f));
+patch.erase(*ith::PropertyPath::parse(squadType, "members[0]"));
+
+ith::Expected<ith::Patch> undo = ith::applyPatch(patch, &squad); // squad unchanged on failure
+static_cast<void>(ith::applyPatch(*undo, &squad));              // back to what it was
+```
+
+### Paths
+
+- **Text:** a field name, then `.name` and `[index]` steps, as in the archives' error paths
+  without the `$`: `value.translation.x`, `items[3].name`. The empty text is the whole value.
+- **Optionals are transparent:** `shield.amount` steps through an optional `shield`, and
+  `shield` is the whole optional. Resolving through an empty optional fails.
+- **Qualified paths** start with a fully qualified type name, found in a `TypeRegistry`:
+  `PropertyPath::parseQualified(registry, "ith::LocalTransform.value.translation.x")`. A component
+  path is a qualified path.
+- **Renames:** fields and types are found by their `FormerName` too, and `toString` prints the
+  current names.
+- **Parsing checks everything that doesn't need a value:** names, kinds and `std::array` bounds.
+  `leafType`, `leafField` and `chainFlags` (the flags of every field on the way, such as
+  `ReadOnly` and `Transient`) come from the path alone. `resolve(path, root)` checks the rest: a
+  `std::vector` index and an empty optional.
+- `isPrefixOf` and `==` compare paths; `withoutLastStep` gives the parent.
+- Errors are `ith::Error`s with `reflection.path.*` codes, listed in `PropertyPath.h`; syntax
+  errors give the byte offset.
+
+### Patches
+
+- An `ith::OwnedValue` holds a value of any reflected type in its own memory
+  (`OwnedValue::of(value)`, `copyOf(type, pointer)`, `as<T>()`).
+- `Patch::set(path, value)` replaces the value at the path; the empty path replaces the whole
+  value. `insert(path, value)` and `erase(path)` take a path that ends in an index of a
+  `std::vector`; `insert` may append at the size. `std::array` and `std::optional` take `set`.
+- Entries apply in order, each to the result of those before it.
+- `preparePatch(patch, root)` applies the patch to a copy and builds the inverse patch, without
+  touching the root. Moving the copy into place can't fail. `applyPatch` does both and returns the
+  inverse, the undo step.
+- Patches don't check `Min`, `Max` or `ReadOnly`; the editor's commands do.
+- `remapEntities(patch, map)` translates the `Entity` values of a patch for another world.
+- `readValue(path, root)` copies the value at a path.
+- For a value kept in a document, such as a prefab override, convert it with
+  `ith::serialization::toValue` and `fromValue` ([guide](serialization.md#values-inside-other-documents)).
 
 ## Tests
 
@@ -207,5 +266,10 @@ const ith::TypeInfo* byName = registry.find("game::Health");
   field-wise copy. `serialization` round-trips every reflected type through the text and binary
   archives ([ADR-0010](../decisions/0010-serialization.md), [guide](serialization.md)), the P1
   exit criterion.
+- `reflection` also checks property paths and patches: a path to every value that every
+  reflected test type reaches, every path error with its offset, and a patch over every
+  reachable value with its inverse restoring every type; failed patches change nothing.
 - In Clang sanitizer builds, `reflect_tool_fuzz` runs a short libFuzzer session over the
-  generator (`tests/reflect_tool/ScannerFuzz.cpp`), seeded with the fixture headers.
+  generator (`tests/reflect_tool/ScannerFuzz.cpp`), seeded with the fixture headers, and
+  `reflection_path_fuzz` over the path parser (`tests/reflection/PropertyPathFuzz.cpp`), seeded
+  with `tests/reflection/fuzz_seeds`.

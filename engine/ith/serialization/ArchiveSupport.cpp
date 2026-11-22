@@ -2,26 +2,10 @@
 
 #include "ith/foundation/Assert.h"
 
-#include <new>
 #include <string>
 #include <utility>
 
 namespace ith::serialization::detail {
-
-TempValue::TempValue(const TypeInfo& type)
-    : m_type(type), m_memory(::operator new(type.size, std::align_val_t(type.alignment))) {
-    m_type.construct(m_memory);
-}
-
-TempValue::~TempValue() {
-    m_type.destroy(m_memory);
-    ::operator delete(m_memory, std::align_val_t(m_type.alignment));
-}
-
-void TempValue::moveInto(void* target) const {
-    m_type.destroy(target);
-    m_type.move(target, m_memory);
-}
 
 std::size_t PathBuilder::pushField(std::string_view name) {
     const std::size_t length = m_path.size();

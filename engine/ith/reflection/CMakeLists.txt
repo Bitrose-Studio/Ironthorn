@@ -6,6 +6,12 @@ ith_add_module(reflection
         Annotations.h
         Entities.h
         Entities.cpp
+        OwnedValue.h
+        OwnedValue.cpp
+        Patch.h
+        Patch.cpp
+        PropertyPath.h
+        PropertyPath.cpp
         TypeInfo.h
         TypeInfo.cpp
         TypeOf.h

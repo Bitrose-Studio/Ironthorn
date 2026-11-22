@@ -331,10 +331,32 @@ ith_reflect_target(ith_test_reflected
 ith_add_test_suite(reflection
     SOURCES
         reflection/EntitiesTests.cpp
+        reflection/PatchTests.cpp
+        reflection/PathTestSupport.h
+        reflection/PropertyPathTests.cpp
         reflection/RoundTripTests.cpp
         reflection/TypeOfTests.cpp
         reflection/TypeRegistryTests.cpp
     LIBRARIES ith_test_reflected ith_test_archive)
+
+# A libFuzzer target for the property path parser, in Clang sanitizer builds only, with a short
+# smoke run in CTest like the others, seeded with sample paths (reflection/fuzz_seeds).
+if(IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+        AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_executable(ith_reflection_path_fuzz reflection/PropertyPathFuzz.cpp)
+    target_link_libraries(ith_reflection_path_fuzz PRIVATE ith::reflection ith_test_reflected ith_test_archive)
+    target_compile_options(ith_reflection_path_fuzz PRIVATE -fsanitize=fuzzer)
+    target_link_options(ith_reflection_path_fuzz PRIVATE -fsanitize=fuzzer)
+    set_target_properties(ith_reflection_path_fuzz PROPERTIES
+        FOLDER "Ironthorn/Tests"
+        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    set(corpus "${CMAKE_CURRENT_BINARY_DIR}/reflection_path_fuzz_corpus")
+    file(MAKE_DIRECTORY "${corpus}")
+    add_test(NAME reflection_path_fuzz
+        COMMAND ith_reflection_path_fuzz -runs=20000 -max_len=256 "${corpus}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/reflection/fuzz_seeds")
+    set_tests_properties(reflection_path_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
+endif()
 
 # A reflected test component with math fields, generated like an engine module's records.
 add_library(ith_test_math_reflected STATIC)
@@ -389,6 +411,7 @@ ith_add_test_suite(serialization
         serialization/JsonTests.cpp
         serialization/RoundTripTests.cpp
         serialization/TextArchiveTests.cpp
+        serialization/ValueTreeTests.cpp
     LIBRARIES ith::serialization ith_test_reflected ith_test_archive)
 
 # libFuzzer targets for the text and binary readers, in Clang sanitizer builds only, with short

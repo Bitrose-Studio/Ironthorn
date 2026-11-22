@@ -139,8 +139,7 @@ private:
                 return size;
             }
             case TypeKind::FixedArray: {
-                const detail::TempValue array(type);
-                return saturatingMultiply(type.container->size(array.get()), of(type.element()));
+                return saturatingMultiply(type.count, of(type.element()));
             }
         }
         return 0;
@@ -643,7 +642,7 @@ Expected<void, Error> readBinary(std::span<const std::byte> data, const Document
         return withSource(reader.takeError(), source);
     }
 
-    const detail::TempValue result(type);
+    OwnedValue result(type);
     if (!reader.read(type, result.get(), 0)) {
         return withSource(reader.takeError(), source);
     }

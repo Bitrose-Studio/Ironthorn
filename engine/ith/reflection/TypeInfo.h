@@ -180,6 +180,7 @@ struct TypeInfo {
     // Containers: the element type. Enums: the underlying integer type. Null otherwise.
     const TypeInfo& (*element)() noexcept = nullptr;
     const ContainerOps* container = nullptr; // Containers only.
+    std::size_t count = 0;                   // FixedArray: the number of elements. 0 otherwise.
 
     // The field with this name, or with this FormerName; null when there is none.
     [[nodiscard]] const FieldInfo* findField(std::string_view fieldName) const noexcept;

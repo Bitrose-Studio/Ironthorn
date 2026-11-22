@@ -786,7 +786,7 @@ Expected<void, Error> readText(std::string_view text, const DocumentFormat& form
         return makeUnexpected(document.error());
     }
 
-    const detail::TempValue result(type);
+    OwnedValue result(type);
     TextReader reader(options.unknownFields, options.warnings != nullptr,
                       allocationBudget(text.size(), options.allocationBudget), options.entities);
     if (!reader.read(type, *document->find("data"), result.get(), 1)) {
@@ -798,6 +798,40 @@ Expected<void, Error> readText(std::string_view text, const DocumentFormat& form
     if (options.warnings != nullptr) {
         for (Error& warning : reader.takeWarnings()) {
             warning.source = std::string(options.source);
+            options.warnings->push_back(std::move(warning));
+        }
+    }
+    return {};
+}
+
+Expected<Value, Error> toValue(const TypeInfo& type, const void* object, const EntityMapping* entities) {
+    if (detail::isExcluded(type.flags, detail::kNotInText)) {
+        return makeUnexpected(
+            makeError("serialization.not_saved", std::string(type.name) + " is Transient and can't be saved"));
+    }
+    Value result;
+    TextWriter writer(entities);
+    if (!writer.write(type, object, result, 0)) {
+        return makeUnexpected(writer.takeError());
+    }
+    return result;
+}
+
+Expected<void, Error> fromValue(const Value& value, const TypeInfo& type, void* target,
+                                const ValueReadOptions& options) {
+    if (detail::isExcluded(type.flags, detail::kNotInText)) {
+        return makeUnexpected(
+            makeError("serialization.not_saved", std::string(type.name) + " is Transient and can't be loaded"));
+    }
+    OwnedValue result(type);
+    TextReader reader(options.unknownFields, options.warnings != nullptr, allocationBudget(0, options.allocationBudget),
+                      options.entities);
+    if (!reader.read(type, value, result.get(), 0)) {
+        return makeUnexpected(reader.takeError());
+    }
+    result.moveInto(target);
+    if (options.warnings != nullptr) {
+        for (Error& warning : reader.takeWarnings()) {
             options.warnings->push_back(std::move(warning));
         }
     }

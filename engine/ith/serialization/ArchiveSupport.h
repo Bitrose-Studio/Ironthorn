@@ -2,6 +2,7 @@
 
 // Internal helpers shared by the text and binary archives. Not part of the module's API.
 
+#include "ith/reflection/OwnedValue.h"
 #include "ith/reflection/TypeInfo.h"
 #include "ith/serialization/Document.h"
 #include "ith/serialization/Error.h"
@@ -11,27 +12,6 @@
 #include <string_view>
 
 namespace ith::serialization::detail {
-
-// A default-constructed value of a reflected type in its own aligned memory. Reads fill one and
-// move it into the caller's object only when the whole read succeeded (ADR-0018 rule 10).
-class TempValue {
-public:
-    explicit TempValue(const TypeInfo& type);
-    TempValue(const TempValue&) = delete;
-    TempValue& operator=(const TempValue&) = delete;
-    ~TempValue();
-
-    [[nodiscard]] void* get() const noexcept { return m_memory; }
-
-    // Replaces the whole value at `target` with this one, so members a read doesn't fill (Transient
-    // and unreflected ones) get their default values. Can't fail. Precondition: `target` is a
-    // complete, non-const object of the same type.
-    void moveInto(void* target) const;
-
-private:
-    const TypeInfo& m_type;
-    void* m_memory;
-};
 
 // Builds paths such as "$.items[3].count" while an archive walks a value.
 class PathBuilder {

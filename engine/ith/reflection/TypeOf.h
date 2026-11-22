@@ -426,6 +426,7 @@ TypeInfo makeContainerType(TypeKind kind, std::string_view name, std::uint64_t e
     info.element = &typeOf<Element>;
     info.container = &kContainerOps<C>;
     info.containsEntities = typeOf<Element>().containsEntities;
+    info.count = kind == TypeKind::FixedArray ? static_cast<std::size_t>(extra) : 0;
     return info;
 }
 

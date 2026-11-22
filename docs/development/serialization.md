@@ -147,6 +147,25 @@ constexpr ith::serialization::DocumentFormat kHealthFormat{
 - Before a major release, old migrations are removed and `minimumVersion` is raised; older files
   are then refused with an error that names the minimum.
 
+### Values inside other documents
+
+`toValue` and `fromValue` (`ith/serialization/TextArchive.h`) convert one reflected value to and
+from a `Value` tree with the text archive's rules, but without a document around it. Use them for
+values that are kept inside other data, such as prefab overrides and editor command arguments
+([ADR-0033](../decisions/0033-reflection-property-paths-and-patches.md)):
+
+```cpp
+const auto tree = ith::serialization::toValue(ith::typeOf<game::Health>(), &health);
+game::Health read;
+const auto result = ith::serialization::fromValue(*tree, ith::typeOf<game::Health>(), &read);
+```
+
+- Error paths start at `$`, the value itself.
+- `fromValue` takes `ValueReadOptions`: the unknown-field mode, a warnings list, the allocation
+  budget (by default `kMinAllocationBudget`) and the entity mapping. It builds the whole value
+  first, so a failed read leaves the target unchanged.
+- `Entity` values need an `EntityMapping`, as in documents.
+
 ### Free-form JSON
 
 `ith/serialization/Json.h` reads and writes `Value` trees directly, for data without a reflected
@@ -233,11 +252,11 @@ header ([third-party.md](third-party.md)).
 
 ## Tests
 
-- `serialization` checks the JSON reader and writer, both archives, every error code with its
-  path, versions and migrations, and the P1 exit criterion: every reflected type of the test
-  modules is filled with non-default values, written and read through both archives and compared
-  with its own equality, and writing the result again gives the same bytes. Floats are checked
-  bit for bit over special and pseudo-random values. Golden schema hashes catch a hash that
+- `serialization` checks the JSON reader and writer, both archives, `toValue` and `fromValue`,
+  every error code with its path, versions and migrations, and the P1 exit criterion: every
+  reflected type of the test modules is filled with non-default values, written and read through
+  both archives and compared with its own equality, and writing the result again gives the same
+  bytes. Floats are checked bit for bit over special and pseudo-random values. Golden schema hashes catch a hash that
   differs between compilers or configurations, and allocation-budget tests read small inputs
   that would otherwise allocate hundreds of MiB.
 - In Clang ASan builds, `serialization_text_fuzz` and `serialization_binary_fuzz` run short
