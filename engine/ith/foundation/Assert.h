@@ -31,7 +31,8 @@ enum class AssertAction : std::uint8_t {
 using AssertHandler = AssertAction (*)(const AssertInfo& info);
 
 // Installs a handler for failed asserts and returns the previous one. Passing nullptr
-// restores the default handler, which prints the failure to stderr and aborts.
+// restores the default handler. It logs the failure as a Fatal record in the Assert category
+// (Log.h), which every log sink and stderr receive, and aborts.
 // Thread-safe; the handler itself may be called from any thread.
 AssertHandler setAssertHandler(AssertHandler handler);
 

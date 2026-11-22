@@ -1,5 +1,9 @@
 #include "ith/foundation/Assert.h"
 
+#include "ith/foundation/Log.h"
+
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -19,15 +23,20 @@ void breakIntoDebugger() {
 #endif
 }
 
+// Sends a Fatal record to every log sink (ADR-0007 rule 9). The logger needs no initialization
+// and writes Fatal records to stderr even when no sink does, so this works at any time.
 AssertAction defaultAssertHandler(const AssertInfo& info) {
+    std::array<char, kLogMessageCapacity> message{};
+    int size = 0;
     if (info.expression != nullptr) {
-        std::fprintf(stderr, "%s(%d): assertion failed: %s%s%s\n", info.file, info.line, info.expression,
-                     info.message != nullptr ? " - " : "", info.message != nullptr ? info.message : "");
+        size = std::snprintf(message.data(), message.size(), "assertion failed: %s%s%s", info.expression,
+                             info.message != nullptr ? " - " : "", info.message != nullptr ? info.message : "");
     } else {
-        std::fprintf(stderr, "%s(%d): fatal error: %s\n", info.file, info.line,
-                     info.message != nullptr ? info.message : "(no message)");
+        size = std::snprintf(message.data(), message.size(), "fatal error: %s",
+                             info.message != nullptr ? info.message : "(no message)");
     }
-    std::fflush(stderr);
+    const std::size_t length = size < 0 ? 0 : std::min(static_cast<std::size_t>(size), message.size() - 1);
+    logMessage(LogLevel::Fatal, g_logCategoryAssert, info.file, info.line, std::string_view(message.data(), length));
     return AssertAction::Abort;
 }
 

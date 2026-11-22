@@ -12,6 +12,10 @@ ith_add_module(foundation
         Hash.h
         LinearAllocator.h
         LinearAllocator.cpp
+        Log.h
+        Log.cpp
+        LogRingBuffer.h
+        LogRingBuffer.cpp
         Mutex.h
         ObjectPool.h
         Stopwatch.h

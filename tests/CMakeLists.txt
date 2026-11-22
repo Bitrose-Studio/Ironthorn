@@ -23,6 +23,9 @@ ith_add_test_suite(foundation
         foundation/FixedTimestepTests.cpp
         foundation/HashTests.cpp
         foundation/LinearAllocatorTests.cpp
+        foundation/LogRingBufferTests.cpp
+        foundation/LogStrippingTests.cpp
+        foundation/LogTests.cpp
         foundation/MutexTests.cpp
         foundation/ObjectPoolTests.cpp
         foundation/StopwatchTests.cpp
@@ -30,6 +33,34 @@ ith_add_test_suite(foundation
         foundation/UuidTests.cpp
         foundation/VersionTests.cpp
     LIBRARIES ith::foundation Threads::Threads)
+
+# A fatal error ends the process, so these test cases are skipped in the suite and run alone here,
+# passing when the Fatal record reaches an installed sink and stderr (ADR-0007 rule 9), also when
+# the stderr sink was removed and when nothing had used the logger before.
+add_test(NAME log_fatal_reaches_sinks
+    COMMAND ith_foundation_tests "--test-case=Log: a fatal error reaches the sinks and stderr" --no-skip
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+set_tests_properties(log_fatal_reaches_sinks PROPERTIES
+    LABELS "unit"
+    TIMEOUT 60
+    PASS_REGULAR_EXPRESSION "sink received Fatal: fatal error: logger fatal test.*\\[Fatal\\] Assert: fatal error: logger fatal test")
+add_test(NAME log_fatal_before_first_use
+    COMMAND ith_foundation_tests "--test-case=Log: a fatal error before the logger was used*" --no-skip
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+set_tests_properties(log_fatal_before_first_use PROPERTIES
+    LABELS "unit"
+    TIMEOUT 60
+    PASS_REGULAR_EXPRESSION "\\[Fatal\\] Assert: fatal error: fatal before the logger was used")
+
+# The logger benchmark (docs/development/logging.md): disabled statements, formatted records and
+# contention. Like jobs_benchmark it only prints numbers.
+add_executable(ith_log_benchmark foundation/LogBenchmark.cpp)
+target_link_libraries(ith_log_benchmark PRIVATE ith::foundation Threads::Threads)
+set_target_properties(ith_log_benchmark PROPERTIES
+    FOLDER "Ironthorn/Benchmarks"
+    COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+add_test(NAME log_benchmark COMMAND ith_log_benchmark)
+set_tests_properties(log_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
 
 if(ITH_BUILD_SHADER_COMPILER)
     ith_add_test_suite(shader_compiler
