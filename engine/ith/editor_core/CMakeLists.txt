@@ -6,6 +6,10 @@ ith_add_module(editor_core
     LAYER editor
     KIND editor
     SOURCES
+        Automation.h
+        Automation.cpp
+        CommandArgs.h
+        CommandArgs.cpp
         CommandRegistry.h
         CommandRegistry.cpp
         EditCommands.cpp
@@ -15,6 +19,10 @@ ith_add_module(editor_core
         EditorLabel.h
         EditorSession.h
         EditorSession.cpp
+        FileCommands.cpp
+        Keymap.h
+        Keymap.cpp
+        QueryCommands.cpp
         Selection.h
         Selection.cpp
         StoredPatches.h
@@ -26,8 +34,15 @@ ith_add_module(editor_core
     DEPENDS
         foundation
         math
+        file_system
+        platform_events
+        jobs
         reflection
         serialization
+        config
         ecs
         level
+        assets
+        input
+        asset_database
     REFLECT)

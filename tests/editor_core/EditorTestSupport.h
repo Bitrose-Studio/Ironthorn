@@ -5,6 +5,8 @@
 // same world (ADR-0034 rule 9).
 
 #include "ith/editor_core/EditorSession.h"
+#include "ith/file_system/FileSystem.h"
+#include "ith/file_system/Path.h"
 #include "ith/foundation/Uuid.h"
 #include "ith/level/Level.h"
 #include "ith/reflection/TypeRegistry.h"
@@ -13,9 +15,13 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
+#include <filesystem>
+#include <optional>
 #include <ostream> // doctest prints std::string operands through an ostream
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <vector>
 
 ITH_DECLARE_REFLECTION_MODULE(ecs)
 ITH_DECLARE_REFLECTION_MODULE(editor_core)
@@ -71,5 +77,44 @@ inline std::string levelText(const EditorSession& session) {
     REQUIRE_MESSAGE(text.hasValue(), (text.hasValue() ? std::string() : text.error().message));
     return std::move(*text);
 }
+
+inline void removeTree(const std::string& path) {
+    const Expected<std::optional<fs::FileInfo>> info = fs::fileInfo(path);
+    if (!info || !info->has_value()) {
+        return;
+    }
+    if ((*info)->kind == fs::FileKind::Directory) {
+        if (Expected<std::vector<fs::DirectoryEntry>> entries = fs::listDirectory(path)) {
+            for (const fs::DirectoryEntry& entry : *entries) {
+                removeTree(fs::joinPath(path, entry.name));
+            }
+        }
+    }
+    static_cast<void>(fs::remove(path));
+}
+
+// An empty project directory in the temporary folder, removed afterwards.
+class TempProject {
+public:
+    TempProject() {
+        std::error_code error;
+        const std::u8string base = std::filesystem::temp_directory_path(error).generic_u8string();
+        REQUIRE_FALSE(error);
+        m_root = fs::joinPath(std::string(base.begin(), base.end()), "ith-editor-test-" + Uuid::generate().toString());
+        REQUIRE(fs::createDirectories(fs::joinPath(m_root, "Content")).hasValue());
+    }
+
+    TempProject(const TempProject&) = delete;
+    TempProject& operator=(const TempProject&) = delete;
+    TempProject(TempProject&&) = delete;
+    TempProject& operator=(TempProject&&) = delete;
+
+    ~TempProject() { removeTree(m_root); }
+
+    [[nodiscard]] const std::string& root() const noexcept { return m_root; }
+
+private:
+    std::string m_root;
+};
 
 } // namespace ith::test::editor

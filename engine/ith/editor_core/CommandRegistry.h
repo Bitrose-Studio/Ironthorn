@@ -23,6 +23,7 @@
 // - Action: changes editor state without its own transaction (undo, redo, save, open); refused
 //   while an interaction is open. Its canExecute decides about Play In Editor.
 // - Query: reads only; always allowed.
+// While a level is being opened, Edit and Action commands are refused ("editor.document.busy").
 // canExecute, when set, runs first; its error comes back as "editor.command.disabled" with its
 // message, which menus show as the reason. An unknown id is "editor.command.unknown". Main thread
 // only.

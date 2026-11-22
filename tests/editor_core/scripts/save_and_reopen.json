@@ -1,0 +1,30 @@
+{
+  "format": "ith.automation_script",
+  "version": 1,
+  "data": {
+    "steps": [
+      {"command": "ith.file.save", "expectError": "editor.document.no_path"},
+      {"command": "ith.entity.create", "args": {"id": "00000000-0000-00ed-0000-000000000001", "label": "Table"}},
+      {"command": "ith.entity.create", "args": {"id": "00000000-0000-00ed-0000-000000000002", "label": "Lamp", "parent": "00000000-0000-00ed-0000-000000000001"}},
+      {"command": "ith.file.save_as", "args": {"path": "Content/Levels/Room.ithmap"}},
+      {"wait": "idle"},
+      {"command": "ith.query.document", "expect": {"path": "Content/Levels/Room.ithmap", "dirty": false, "saving": false, "lastError": null}},
+      {"command": "ith.edit.rename", "args": {"id": "00000000-0000-00ed-0000-000000000001", "label": "Big table"}},
+      {"command": "ith.file.new_level", "expectError": "editor.document.unsaved_changes"},
+      {"command": "ith.file.save"},
+      {"wait": "idle"},
+      {"command": "ith.file.new_level"},
+      {"command": "ith.query.document", "expect": {"path": "", "entities": 0, "dirty": false}},
+      {"command": "ith.entity.create", "args": {"id": "00000000-0000-00ed-0000-000000000003"}},
+      {"command": "ith.file.open_level", "args": {"path": "Content/Levels/Room.ithmap"}, "expectError": "editor.document.unsaved_changes"},
+      {"command": "ith.file.open_level", "args": {"path": "Content/Levels/Room.ithmap", "unsaved": "discard"}},
+      {"wait": "idle"},
+      {"command": "ith.query.document", "expect": {"path": "Content/Levels/Room.ithmap", "entities": 2, "dirty": false, "opening": false}},
+      {"command": "ith.query.entity", "args": {"id": "00000000-0000-00ed-0000-000000000001"}, "expect": {"label": "Big table", "children": ["00000000-0000-00ed-0000-000000000002"]}},
+      {"command": "ith.query.history", "expect": {"entries": [], "canUndo": false}},
+      {"command": "ith.file.open_level", "args": {"path": "Content/Levels/Missing.ithmap"}},
+      {"wait": "idle"},
+      {"command": "ith.query.document", "expect": {"path": "Content/Levels/Room.ithmap", "entities": 2, "lastError": {"code": "fs.not_found"}}}
+    ]
+  }
+}

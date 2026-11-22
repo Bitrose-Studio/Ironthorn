@@ -145,7 +145,7 @@ struct defines:
 | File | Content |
 |---|---|
 | `Editor.json` | `layouts.default`: the name of the layout Reset Layout and a first start use, `Default`. The `preferences` defaults (idle rate 10 frames per second, 2 without focus) are the struct's. |
-| `Keymap.json` | `commands`: editor command id to its chords, the ADR-0008 rule 4 preset. A chord is a stable control name (`Keyboard.F`) after optional `Ctrl+`, `Shift+` and `Alt+`. Viewport navigation (fly, orbit, pan) is held input and comes with the viewport. The command ids are confirmed by the command registry in P2 step 7. |
+| `Keymap.json` | `commands`: editor command id to its chords, the ADR-0008 rule 4 preset. A chord is a stable control name (`Keyboard.F`) after optional `Ctrl+`, `Shift+` and `Alt+`. Viewport navigation (fly, orbit, pan) is held input and comes with the viewport. The ids are those of the editor command registry ([editor core](editor-core.md#keymap)); the Play In Editor keys have their own context. |
 | `Layouts/Default.json` | The Default layout of ADR-0029 rule 15, an `ith.editor_layout` document: a dock tree of split nodes (`split` `horizontal`, first on the left, or `vertical`, first on top; a `ratio` for the first child; `first` and `second`) and tab nodes (`tabs` of panel ids, the `active` one), and `floating` panels. Viewport in the centre, Outliner top right with Details below, Content Browser at the bottom with the Output Log beside it. |
 
 Input bindings (`Input.json`, an `ith.input_bindings` document per layer) are whole files too: the

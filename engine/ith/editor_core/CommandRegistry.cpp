@@ -37,6 +37,9 @@ Expected<void> CommandRegistry::check(EditorSession& session, const CommandDesc&
         return makeError("editor.command.interaction_open",
                          command.id + ": an interaction is in progress; finish or cancel it first");
     }
+    if (command.kind != CommandKind::Query && document.opening()) {
+        return makeError("editor.document.busy", command.id + ": a level is being opened");
+    }
     if (command.kind == CommandKind::Edit && document.playing()) {
         return makeError("editor.command.playing", command.id + ": the level can't change while playing");
     }

@@ -29,6 +29,7 @@
 #include "ith/foundation/Uuid.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <vector>
@@ -64,14 +65,19 @@ public:
     void cancel();
 
     // True until commit() or cancel().
-    [[nodiscard]] bool active() const noexcept { return m_owner != nullptr; }
+    [[nodiscard]] bool active() const noexcept { return live() != nullptr; }
 
 private:
     friend class Transactions;
 
-    explicit TransactionScope(Transactions& owner) noexcept : m_owner(&owner) {}
+    TransactionScope(Transactions& owner, std::uint64_t epoch) noexcept : m_owner(&owner), m_epoch(epoch) {}
+
+    // The owner while this scope still belongs to the open transaction: not after commit or cancel,
+    // nor after Transactions::cancelOpen.
+    [[nodiscard]] Transactions* live() const noexcept;
 
     Transactions* m_owner = nullptr;
+    std::uint64_t m_epoch = 0;
 };
 
 class Transactions {
@@ -100,6 +106,11 @@ public:
     // Redoes the next entry, restoring its selection after; as undo.
     Expected<void> redo();
 
+    // Cancels the open transaction from outside its scopes, as Esc does during a drag: the collected
+    // inverse is applied and nothing is recorded. The scopes of that transaction become inactive;
+    // their commit and cancel do nothing. Does nothing when no transaction is open.
+    void cancelOpen();
+
     // References into stored values that named entities without a stable id, made null (StoredPatches.h).
     [[nodiscard]] std::size_t droppedReferences() const noexcept { return m_dropped; }
 
@@ -121,6 +132,8 @@ private:
 
     // The open transaction.
     std::size_t m_depth = 0;
+    // Changes on every cancelOpen, so the scopes it ended know.
+    std::uint64_t m_epoch = 0;
     bool m_cancelled = false;
     std::string m_name;
     StableIdTable m_ids;

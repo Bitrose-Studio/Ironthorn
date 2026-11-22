@@ -1,13 +1,27 @@
-// The engine's default keymap (ADR-0008 rule 4, ADR-0029 rule 16): editor command id to its
-// chords. A chord is a stable control name (ADR-0013) after optional "Ctrl+", "Shift+" and
-// "Alt+" modifiers; [] unbinds a command in a higher layer. The viewport navigation of rule 4
-// (fly, orbit, dolly, pan, fly speed, Alt + drag to duplicate) is held input, not commands, and
-// comes with the viewport. The command ids are confirmed by the command registry (P2 step 7).
+// The engine's default keymap (ADR-0008 rule 4, ADR-0029 rule 16, ADR-0037 rule 4): editor command
+// id to its chords. A chord is a stable control name (ADR-0013) after optional "Ctrl+", "Shift+"
+// and "Alt+" modifiers; [] unbinds a command in a higher layer. Stop, free mouse and possess or
+// eject are the Play In Editor keys, which work only while a game runs (ADR-0029 rule 7), so Escape
+// stops play there and clears the selection in the editor. The viewport navigation of ADR-0008
+// rule 4 (fly, orbit, dolly, pan, fly speed, Alt + drag to duplicate) is held input, not commands,
+// and comes with the viewport. The viewport, content drawer and Play In Editor commands are
+// registered by the editor modules that bring them.
 {
   "format": "ith.config",
   "version": 1,
   "data": {
     "commands": {
+      "ith.edit.undo": ["Ctrl+Keyboard.Z"],
+      "ith.edit.redo": ["Ctrl+Keyboard.Y"],
+      "ith.edit.delete": ["Keyboard.Delete"],
+      "ith.edit.rename": ["Keyboard.F2"],
+      "ith.edit.duplicate": ["Ctrl+Keyboard.D"],
+      "ith.edit.select_all": ["Ctrl+Keyboard.A"],
+      "ith.edit.select_none": ["Keyboard.Escape"],
+      "ith.file.new_level": ["Ctrl+Keyboard.N"],
+      "ith.file.open_level": ["Ctrl+Keyboard.O"],
+      "ith.file.save": ["Ctrl+Keyboard.S"],
+      "ith.file.save_as": ["Ctrl+Alt+Keyboard.S"],
       "ith.viewport.focus_selection": ["Keyboard.F"],
       "ith.viewport.translate_tool": ["Keyboard.W"],
       "ith.viewport.rotate_tool": ["Keyboard.E"],
@@ -16,8 +30,9 @@
       "ith.viewport.snap_to_floor": ["Keyboard.End"],
       "ith.viewport.game_view": ["Keyboard.G"],
       "ith.viewport.immersive": ["Keyboard.F11"],
-      "ith.edit.duplicate": ["Ctrl+Keyboard.D"],
       "ith.content_browser.open_drawer": ["Ctrl+Keyboard.Space"],
+      "ith.play.play": ["Alt+Keyboard.P"],
+      "ith.play.simulate": ["Alt+Keyboard.S"],
       "ith.play.stop": ["Keyboard.Escape"],
       "ith.play.free_mouse": ["Shift+Keyboard.F1"],
       "ith.play.possess_or_eject": ["Keyboard.F8"]

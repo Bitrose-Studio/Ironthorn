@@ -3,9 +3,9 @@
 `engine/ith/editor_core` is the editor without its UI
 ([ADR-0029](../decisions/0029-editor-ui-toolkit.md) rule 1,
 [ADR-0037](../decisions/0037-editor-commands-transactions-selection-and-automation.md)): the
-document and its world, commands, transactions and undo, selection and change counters. It
-includes no ImGui and opens no window, so everything here is tested headless, under sanitizers
-too. `editor_ui` draws its state and calls its commands.
+document and its world, commands, transactions and undo, selection, change counters, level files,
+the keymap and automation. It includes no ImGui and opens no window, so everything here is
+tested headless, under sanitizers too. `editor_ui` draws its state and calls its commands.
 
 ## The session
 
@@ -17,13 +17,15 @@ ith::generated::registerReflection_ecs(types);
 ith::generated::registerReflection_editor_core(types);
 // ... and the game's modules
 
-ith::EditorSession session(types);
+ith::EditorSession session(types, {.projectDirectory = project, .jobs = &jobs, .assets = &assets});
 auto created = session.execute("ith.entity.create", args); // args: a serialization::Value object
 ```
 
 An `EditorSession` owns one `EditorDocument` and the `CommandRegistry`, with the built-in
-commands registered. `types` names the component types that commands may use. Everything is
-main thread only.
+commands registered. `types` names the component types that commands and level files may use.
+The options give the project directory that relative paths start from, the job system for file
+work (without one, files are read and written at once on the calling thread) and the asset
+database for opening levels by id. Everything is main thread only.
 
 The document owns the editor world, the open level's asset id, the undo history, the selection,
 the change counters and the transactions. The world is read through `document().world()`;
@@ -39,13 +41,14 @@ panels and automation all call `registry.execute(session, id, args)`.
 | Kind | What it is | Refused |
 |---|---|---|
 | `Edit` | changes the world, inside one transaction named by the display name; a failure cancels it | while playing, and while an interaction holds a transaction open |
-| `Action` | changes editor state without its own transaction (undo, redo, selection) | while an interaction holds a transaction open |
+| `Action` | changes editor state without its own transaction (undo, redo, selection, files) | while an interaction holds a transaction open |
 | `Query` | reads only | never |
 
-`canExecute` failures come back as `editor.command.disabled` with the reason. Arguments and
-results are JSON objects (`serialization::Value`): entities by stable id, components by fully
-qualified type name, values as `fromValue` reads them, unknown fields refused. Commands that take
-`ids` use the selection when it is left out.
+While a level is being opened, `Edit` and `Action` commands are refused with
+`editor.document.busy`. `canExecute` failures come back as `editor.command.disabled` with the
+reason. Arguments and results are JSON objects (`serialization::Value`): entities by stable id,
+components by fully qualified type name, values as `fromValue` reads them, unknown fields
+refused. Commands that take `ids` use the selection when it is left out.
 
 Built-in commands:
 
@@ -60,9 +63,18 @@ Built-in commands:
 | `ith.entity.set_property` | `ids`, `path`, `value` | Set one value by component path (`ith::LocalTransform.value.translation.x`); read-only fields are refused with `editor.command.read_only` |
 | `ith.edit.delete` | `ids` | Delete; other children are detached in place |
 | `ith.edit.delete_with_children` | `ids` | Delete with the whole subtree |
-| `ith.edit.duplicate` | `ids` | Copies with new ids, each right after its original; they become the selection. Returns `{"ids"}` |
+| `ith.edit.duplicate` | `ids` | Copies with new ids, each right after its original; they become the selection. Children are copied only when selected too; references between the copied entities (a selected child's parent) point at the copies. Returns `{"ids"}` |
 | `ith.selection.set` | `entities`, `mode` (`replace`, `add`, `toggle`, `remove`) | Change the selection |
 | `ith.edit.select_all`, `ith.edit.select_none` | | Select every entity in Outliner order, or none |
+| `ith.file.new_level` | `unsaved` | An empty, untitled level |
+| `ith.file.open_level` | `path` or `id`, `unsaved` | Open a level file, by path or by asset id; finishes in the background |
+| `ith.file.save`, `ith.file.save_as` | `path` (Save As) | Save the level; the write finishes in the background |
+| `ith.query.document` | | `path`, `levelId`, `dirty`, `saving`, `opening`, `playing`, `entities`, `lastError` |
+| `ith.query.selection` | | `entities`, `primary` |
+| `ith.query.entity` | `id` | `label`, `parent`, `children` and `components` (JSON, entities as stable ids) |
+| `ith.query.find` | `label` | `ids`, in Outliner order |
+| `ith.query.history` | | `entries` (names), `cursor`, `canUndo`, `canRedo` |
+| `ith.query.world_hash` | | `hash` of the level as it would be saved, `entities` |
 
 ## Transactions and undo
 
@@ -96,10 +108,63 @@ drag.commit();       // one undo entry; or drag.cancel() on Esc
 `takeTouched()`, the stable ids whose values changed), `selection` and `document`. A gizmo drag
 bumps only `values`, so the Outliner doesn't rebuild.
 
+## Level files
+
+- **Save** serializes the level on the main thread (`saveLevel` reads the world), moves the saved
+  marker, and writes the file durably on the background lane; the result comes back through the
+  job system's main-thread queue. A failed write puts the marker back, so the level stays dirty,
+  and `lastFileError()` (and `ith.query.document`'s `lastError`) says why. Editing goes on while
+  the file is written; another save or an open waits (`editor.document.save_in_progress`).
+- **Open** reads the file on the background lane and loads it on the main thread, all or
+  nothing; until then the document is busy. A failed read or load keeps the open level.
+- **New** and **Open** on a dirty level fail with `editor.document.unsaved_changes` unless the
+  arguments say `"unsaved": "save"` (saved first, waiting for the write) or `"discard"`. The UI
+  asks Save / Don't Save / Cancel and runs the command again with the answer. Both clear the
+  history; Save keeps it.
+- `waitIdle()` returns once no file operation runs; the session's destructor calls it.
+
+## Keymap
+
+`Keymap::load(config, registry, warnings)` reads the `commands` section of `Keymap.json` from
+each configuration layer: a command id maps to chords such as `"Ctrl+Keyboard.Z"`, the highest
+layer that lists a command decides its chords, and `[]` or `null` unbinds it. Invalid chords,
+unknown command ids and conflicts are warnings; in a conflict the command bound in the higher
+layer wins, and within one layer the lower id. The Play In Editor keys (`ith.play.stop`,
+`ith.play.free_mouse`, `ith.play.possess_or_eject`) have their own context, so Escape both stops
+play and, in the editor, clears the selection.
+
+`KeymapConsumer` is the keymap consumer of an editor window's input stack (ADR-0029 rule 7). It
+runs the bound command of a key press; letter keys follow the user's layout, so Ctrl + Z is the key
+that prints Z. While an interaction holds a transaction open, Escape cancels it
+(`Transactions::cancelOpen`) and other keys go on to the consumers below.
+
+## Automation
+
+```cpp
+ith::Automation automation(session);
+automation.run("ith.entity.create", args);
+ith::Expected<ith::ScriptReport> report = automation.runScriptFile("build_and_save.json");
+```
+
+A script is an `ith.automation_script` document whose `data.steps` are commands with `args`, an
+optional `expect` (a subset of the result: object keys, whole arrays, numbers by value) or
+`expectError` (an error code), and `{"wait": "idle"}` steps. There are no variables: commands that
+create things take their ids. The runner stops at the first failing step and names it. The same
+runner serves the headless tests and the editor's `--automation` run.
+
 ## Tests
 
-`tests/editor_core` holds the transaction and history tests, the command tests (every command with
-undo and redo, refusals, argument errors) and a randomized model test: thousands of random
-commands mixed with undo and redo, checked against the level text after each entry, plus the P2
-step 7 sequence (create, rename, reparent, edit, delete, undo all, redo all) compared by level
-text.
+`tests/editor_core` holds:
+
+- the transaction and history tests, and the command tests (every command with undo and redo,
+  refusals, argument errors);
+- the file tests (save and reopen with and without a job system, failed writes and opens, unsaved
+  changes, busy refusals, opening by asset id) and the query tests;
+- the keymap tests: chords, layers and conflicts, the engine's `Keymap.json` (every id registered
+  or listed as coming with a later step), and the consumer;
+- the automation tests: the matcher, script errors, every script in `tests/editor_core/scripts`
+  run in a fresh project, and the **coverage test**, which fails when a registered command is run
+  by no script. A new command therefore comes with a script step;
+- a randomized model test: thousands of random commands mixed with undo and redo, checked against
+  the level text after each entry, plus the P2 step 7 sequence (create, rename, reparent, edit,
+  delete, undo all, redo all) compared by level text.

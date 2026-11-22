@@ -1,0 +1,40 @@
+{
+  "format": "ith.automation_script",
+  "version": 1,
+  "data": {
+    "steps": [
+      {"command": "ith.entity.create", "args": {"id": "00000000-0000-00ed-0000-000000000001", "label": "Table"}, "expect": {"id": "00000000-0000-00ed-0000-000000000001"}},
+      {"command": "ith.entity.create", "args": {"id": "00000000-0000-00ed-0000-000000000002", "label": "Lamp"}},
+      {"command": "ith.entity.create", "args": {"id": "00000000-0000-00ed-0000-000000000003", "label": "Chair"}},
+      {"command": "ith.query.selection", "expect": {"entities": ["00000000-0000-00ed-0000-000000000003"], "primary": "00000000-0000-00ed-0000-000000000003"}},
+      {"command": "ith.edit.rename", "args": {"id": "00000000-0000-00ed-0000-000000000002", "label": "Desk lamp"}},
+      {"command": "ith.entity.attach", "args": {"ids": ["00000000-0000-00ed-0000-000000000002"], "parent": "00000000-0000-00ed-0000-000000000001"}},
+      {"command": "ith.entity.move_before", "args": {"id": "00000000-0000-00ed-0000-000000000003", "before": "00000000-0000-00ed-0000-000000000001"}},
+      {"command": "ith.entity.add_component", "args": {"ids": ["00000000-0000-00ed-0000-000000000002"], "type": "ith::test::editor::Lamp", "value": {"intensity": 2}}},
+      {"command": "ith.entity.set_property", "args": {"ids": ["00000000-0000-00ed-0000-000000000002"], "path": "ith::test::editor::Lamp.intensity", "value": 5}},
+      {"command": "ith.query.entity", "args": {"id": "00000000-0000-00ed-0000-000000000002"},
+       "expect": {"label": "Desk lamp", "parent": "00000000-0000-00ed-0000-000000000001", "children": [], "components": {"ith::test::editor::Lamp": {"intensity": 5}}}},
+      {"command": "ith.entity.set_property", "args": {"ids": ["00000000-0000-00ed-0000-000000000002"], "path": "ith::test::editor::Lamp.serial", "value": 1},
+       "expectError": "editor.command.read_only"},
+      {"command": "ith.entity.remove_component", "args": {"ids": ["00000000-0000-00ed-0000-000000000002"], "type": "ith::test::editor::Lamp"}},
+      {"command": "ith.query.find", "args": {"label": "Desk lamp"}, "expect": {"ids": ["00000000-0000-00ed-0000-000000000002"]}},
+      {"command": "ith.entity.detach", "args": {"ids": ["00000000-0000-00ed-0000-000000000002"]}},
+      {"command": "ith.selection.set", "args": {"entities": ["00000000-0000-00ed-0000-000000000001"]}},
+      {"command": "ith.edit.duplicate", "expect": {}},
+      {"command": "ith.query.document", "expect": {"entities": 4, "dirty": true}},
+      {"command": "ith.edit.select_all"},
+      {"command": "ith.query.selection", "expect": {"primary": "00000000-0000-00ed-0000-000000000002"}},
+      {"command": "ith.edit.select_none", "expect": null},
+      {"command": "ith.edit.delete", "args": {"ids": ["00000000-0000-00ed-0000-000000000001"]}},
+      {"command": "ith.edit.delete_with_children", "args": {"ids": ["00000000-0000-00ed-0000-000000000003"]}},
+      {"command": "ith.query.document", "expect": {"entities": 2}},
+      {"command": "ith.edit.undo"},
+      {"command": "ith.edit.undo"},
+      {"command": "ith.query.document", "expect": {"entities": 4}},
+      {"command": "ith.edit.redo"},
+      {"command": "ith.query.history", "expect": {"canUndo": true, "canRedo": true}},
+      {"command": "ith.query.world_hash", "expect": {"entities": 3}},
+      {"command": "ith.no_such_command", "expectError": "editor.command.unknown"}
+    ]
+  }
+}

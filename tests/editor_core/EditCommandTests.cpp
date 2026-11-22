@@ -220,6 +220,32 @@ TEST_SUITE("editor_core.commands") {
         undoAllRedoAll(session);
     }
 
+    TEST_CASE("duplicate copies a selected parent and child as a hierarchy; unselected children stay behind") {
+        EditorSession session(types());
+        create(session, 1);
+        create(session, 2,
+               R"(, "parent": )" + quoted(1) + R"(, "components": {"ith::test::editor::Aim": {"target": )" + quoted(1) +
+                   "}}");
+        create(session, 3,
+               R"(, "parent": )" + quoted(1) + R"(, "components": {"ith::test::editor::Aim": {"target": )" + quoted(1) +
+                   "}}");
+        // The child first: the copies are made in Outliner order whatever the order of the ids.
+        const ith::serialization::Value result =
+            run(session, "ith.edit.duplicate", R"({"ids": [)" + quoted(2) + "," + quoted(1) + "]}");
+        REQUIRE(result.find("ids")->elements().size() == 2);
+        const Entity parentCopy =
+            session.document().world().findByStableId(*Uuid::parse(result.find("ids")->elements()[0].asString()));
+        const Entity childCopy =
+            session.document().world().findByStableId(*Uuid::parse(result.find("ids")->elements()[1].asString()));
+        const ith::World& world = session.document().world();
+        CHECK(world.get<const ith::ChildOf>(childCopy)->parent == parentCopy);
+        CHECK(world.get<const Aim>(childCopy)->target == parentCopy); // a reference inside the set
+        CHECK(world.get<const ith::Children>(parentCopy)->entities == std::vector<Entity>{childCopy});
+        CHECK(childrenOf(session, 1).size() == 2); // entity 3 was not selected and is not copied
+        CHECK(roots(session) == std::vector<Entity>{entityOf(session, 1), parentCopy});
+        undoAllRedoAll(session);
+    }
+
     TEST_CASE("selection commands: set with modes, select all in Outliner order, select none") {
         EditorSession session(types());
         create(session, 1);

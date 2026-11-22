@@ -798,8 +798,9 @@ set_target_properties(ith_jobs_benchmark PROPERTIES
 add_test(NAME jobs_benchmark COMMAND ith_jobs_benchmark)
 set_tests_properties(jobs_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
 
-# The editor's core (ADR-0037): commands, transactions and undo, selection and the model test,
-# headless. Built wherever the editor modules are, sanitizer builds included (ADR-0029 rule 19).
+# The editor's core (ADR-0037): commands, transactions and undo, selection, files, the keymap,
+# automation with the scripts in editor_core/scripts, and the model test, headless. Built wherever
+# the editor modules are, sanitizer builds included (ADR-0029 rule 19).
 if(TARGET ith_editor_core)
     add_library(ith_test_editor_core_components STATIC)
     target_include_directories(ith_test_editor_core_components PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/editor_core")
@@ -817,9 +818,12 @@ if(TARGET ith_editor_core)
 
     ith_add_test_suite(editor_core
         SOURCES
+            editor_core/AutomationTests.cpp
             editor_core/EditCommandTests.cpp
             editor_core/EditorCoreComponents.h
             editor_core/EditorTestSupport.h
+            editor_core/FileTests.cpp
+            editor_core/KeymapTests.cpp
             editor_core/ModelTests.cpp
             editor_core/TransactionTests.cpp
         LIBRARIES ith::editor_core ith_test_editor_core_components)

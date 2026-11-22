@@ -32,7 +32,11 @@ bool coveredBy(const ComponentChange& change, const ComponentChange& older) {
 } // namespace
 
 TransactionScope::TransactionScope(TransactionScope&& other) noexcept
-    : m_owner(std::exchange(other.m_owner, nullptr)) {}
+    : m_owner(std::exchange(other.m_owner, nullptr)), m_epoch(other.m_epoch) {}
+
+Transactions* TransactionScope::live() const noexcept {
+    return m_owner != nullptr && m_owner->m_epoch == m_epoch ? m_owner : nullptr;
+}
 
 TransactionScope& TransactionScope::operator=(TransactionScope&& other) noexcept {
     if (this != &other) {
@@ -40,6 +44,7 @@ TransactionScope& TransactionScope::operator=(TransactionScope&& other) noexcept
             cancel();
         }
         m_owner = std::exchange(other.m_owner, nullptr);
+        m_epoch = other.m_epoch;
     }
     return *this;
 }
@@ -51,20 +56,24 @@ TransactionScope::~TransactionScope() {
 }
 
 Expected<void> TransactionScope::apply(std::span<const EntityPatch> patches) {
-    if (m_owner == nullptr) {
+    if (live() == nullptr) {
         return makeError("editor.transaction.ended", "the transaction scope was committed or cancelled");
     }
     return m_owner->apply(patches);
 }
 
 void TransactionScope::commit() {
-    if (Transactions* owner = std::exchange(m_owner, nullptr)) {
+    Transactions* owner = live();
+    m_owner = nullptr;
+    if (owner != nullptr) {
         owner->end(false);
     }
 }
 
 void TransactionScope::cancel() {
-    if (Transactions* owner = std::exchange(m_owner, nullptr)) {
+    Transactions* owner = live();
+    m_owner = nullptr;
+    if (owner != nullptr) {
         owner->end(true);
     }
 }
@@ -78,7 +87,16 @@ TransactionScope Transactions::begin(std::string name) {
         m_selectionBefore = m_selection->entities();
     }
     ++m_depth;
-    return TransactionScope(*this);
+    return TransactionScope(*this, m_epoch);
+}
+
+void Transactions::cancelOpen() {
+    if (m_depth == 0) {
+        return;
+    }
+    m_depth = 1;
+    end(true);
+    ++m_epoch;
 }
 
 Expected<void> Transactions::apply(std::span<const EntityPatch> patches) {
