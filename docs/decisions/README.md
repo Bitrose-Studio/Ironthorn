@@ -33,6 +33,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0026](0026-job-system-rules-corrected.md) | Job system: rules corrected after the first implementation (amends 0025) | Accepted |
 | [0027](0027-input-rules-completed.md) | Input: rules completed after the first implementation (amends 0012, 0013) | Accepted |
 | [0028](0028-render-graph-v1.md) | Render graph v1 | Accepted |
+| [0029](0029-editor-ui-toolkit.md) | Editor UI toolkit | Accepted |
 
 ## Planned
 
@@ -40,6 +41,5 @@ These decisions are still open. Each is needed by the [roadmap](../architecture.
 
 | Topic | Needed by |
 |---|---|
-| Editor UI toolkit | P2 |
 | Material model (OpenPBR-based real-time subset, per-tier approximations) | P3 |
 | Animation retargeting (rigs, chain mapping, runtime and editor batch retarget) | P5 |

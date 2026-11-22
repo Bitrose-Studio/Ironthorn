@@ -3,7 +3,9 @@
 Every dependency is fetched at configure time as an archive pinned by URL and SHA-256
 (`cmake/IronthornDependencies.cmake`). None is committed to the repository. Adding one needs:
 
-- a license check (permissive licenses only in shipped code; no GPL/LGPL/CC BY-SA);
+- a license check (permissive licenses only in shipped code; no GPL/LGPL/CC BY-SA). Fonts are
+  the one exception: SIL OFL-1.1 is allowed for fonts only
+  ([ADR-0029](../decisions/0029-editor-ui-toolkit.md));
 - a maintenance check;
 - a platform check, including consoles;
 - a line in the table below.
