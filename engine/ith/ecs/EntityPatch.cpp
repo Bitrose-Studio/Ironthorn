@@ -2,11 +2,14 @@
 
 #include "ith/ecs/World.h"
 #include "ith/foundation/Assert.h"
+#include "ith/foundation/Hash.h"
+#include "ith/foundation/Uuid.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -37,17 +40,31 @@ struct PatchApplier {
         OwnedValue value;
     };
 
+    // A slot's key: the entity's bits and the component index.
+    struct SlotKey {
+        std::uint64_t entity = 0;
+        ComponentIndex type = kNoComponent;
+
+        friend bool operator==(const SlotKey&, const SlotKey&) = default;
+    };
+
+    struct SlotKeyHash {
+        std::size_t operator()(const SlotKey& key) const noexcept {
+            return static_cast<std::size_t>(hashCombine(key.entity, key.type));
+        }
+    };
+
     World& world;
+    // The slots, found through `slotIndex`, so planning M changes takes O(M) lookups, not O(M^2).
     std::vector<Slot> slots;
+    std::unordered_map<SlotKey, std::size_t, SlotKeyHash> slotIndex;
+    // The entity of each StableId that a slot holds (present), so ownerOf needn't scan the slots.
+    std::unordered_map<Uuid, Entity> slotStableIds;
     std::vector<Planned> planned;
 
     [[nodiscard]] const Slot* findSlot(Entity entity, ComponentIndex type) const {
-        for (const Slot& slot : slots) {
-            if (slot.entity == entity && slot.type == type) {
-                return &slot;
-            }
-        }
-        return nullptr;
+        const auto found = slotIndex.find(SlotKey{.entity = entity.bits(), .type = type});
+        return found != slotIndex.end() ? &slots[found->second] : nullptr;
     }
 
     // The entity's value of `type` as the earlier changes leave it; null when it has none.
@@ -59,14 +76,26 @@ struct PatchApplier {
     }
 
     void record(Entity entity, ComponentIndex type, bool present, const OwnedValue& value) {
-        for (Slot& slot : slots) {
-            if (slot.entity == entity && slot.type == type) {
-                slot.present = present;
-                slot.value = value;
-                return;
+        const auto [found, inserted] =
+            slotIndex.try_emplace(SlotKey{.entity = entity.bits(), .type = type}, slots.size());
+        if (inserted) {
+            slots.push_back(Slot{.entity = entity, .type = type});
+        }
+        Slot& slot = slots[found->second];
+        if (type == componentIndexOf<StableId>()) {
+            if (slot.present) {
+                const Uuid& old = static_cast<const StableId*>(slot.value.get())->id;
+                if (const auto owner = slotStableIds.find(old);
+                    owner != slotStableIds.end() && owner->second == entity) {
+                    slotStableIds.erase(owner);
+                }
+            }
+            if (present) {
+                slotStableIds[static_cast<const StableId*>(value.get())->id] = entity;
             }
         }
-        slots.push_back(Slot{.entity = entity, .type = type, .present = present, .value = value});
+        slot.present = present;
+        slot.value = value;
     }
 
     [[nodiscard]] Entity parentOf(Entity entity) const {
@@ -76,12 +105,10 @@ struct PatchApplier {
 
     // The entity whose StableId is `id` as the earlier changes leave the world; null when none.
     [[nodiscard]] Entity ownerOf(const Uuid& id) const {
-        const ComponentIndex stableId = componentIndexOf<StableId>();
-        for (const Slot& slot : slots) {
-            if (slot.type == stableId && slot.present && static_cast<const StableId*>(slot.value.get())->id == id) {
-                return slot.entity;
-            }
+        if (const auto found = slotStableIds.find(id); found != slotStableIds.end()) {
+            return found->second;
         }
+        const ComponentIndex stableId = componentIndexOf<StableId>();
         const Entity owner = world.findByStableId(id);
         // An owner whose StableId an earlier change replaced or removed no longer has this id.
         return owner.isNull() || findSlot(owner, stableId) != nullptr ? Entity() : owner;

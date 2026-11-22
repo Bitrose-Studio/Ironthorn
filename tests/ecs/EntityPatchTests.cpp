@@ -21,6 +21,7 @@
 
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <ostream> // doctest prints std::string_view operands through an ostream
@@ -428,4 +429,42 @@ TEST_SUITE("ecs.entity_patch") {
         CHECK(capture.count() == kAsserts);
         CHECK(world.get<const Health>(entity)->value == 100);
     }
+}
+
+TEST_CASE("applyPatches: 80,000 changes are planned in linear time") {
+    // 20,000 entities, each with four changes: an add, a patch of the value just added, a new
+    // StableId and a parent. Searching the earlier changes for each one would take minutes; the bound
+    // is generous for Debug and sanitizer builds.
+    constexpr std::size_t kEntities = 20'000;
+    World world;
+    const Entity parent = world.spawn(Health{});
+    std::vector<EntityPatch> patches;
+    patches.reserve(kEntities);
+    for (std::size_t index = 0; index < kEntities; ++index) {
+        const Entity entity = world.spawn(Health{});
+        std::vector<ComponentChange> changes;
+        changes.push_back(ComponentChange::makeAdd(OwnedValue::of(Position{.x = 1.0f})));
+        changes.push_back(setting<Position>("y", static_cast<float>(index)));
+        changes.push_back(ComponentChange::makeAdd(OwnedValue::of(StableId{.id = Uuid(0x5EED, index + 1)})));
+        changes.push_back(ComponentChange::makeAdd(OwnedValue::of(ChildOf{.parent = parent})));
+        patches.push_back(patchOf(entity, std::move(changes)));
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    const ith::Expected<std::vector<EntityPatch>> undo = world.applyPatches(patches);
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    CHECK(seconds < 60.0);
+    REQUIRE(undo.hasValue());
+    CHECK(undo->size() == kEntities);
+    const Entity last = world.findByStableId(Uuid(0x5EED, kEntities));
+    REQUIRE(world.get<const Position>(last) != nullptr);
+    CHECK(world.get<const Position>(last)->y == static_cast<float>(kEntities - 1));
+    CHECK(world.get<const Children>(parent)->entities.size() == kEntities);
+
+    // A duplicate id among the changes is still found, at the end of a long batch.
+    std::vector<EntityPatch> duplicate;
+    duplicate.push_back(patchOf(parent, {ComponentChange::makeAdd(OwnedValue::of(StableId{.id = Uuid(0x5EED, 1)}))}));
+    const auto refused = world.applyPatches(duplicate);
+    REQUIRE_FALSE(refused.hasValue());
+    CHECK(refused.error().code == "ecs.patch.refused_value");
 }
