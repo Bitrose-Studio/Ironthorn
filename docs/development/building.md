@@ -170,14 +170,20 @@ Building one by name in `Release` is not refused, but nothing ships it, and a te
 must not run in `Release`. Only applications are excluded: `tools` and `editor` modules and their
 tests still build and run in `Release`, so `verify` covers them in every configuration. The
 samples `minimal_player`, `window_player`, `scene_player` (built only with the shader compiler,
-whose `slangc` compiles its shaders) and `minimal_server` (`samples/`) are the applications today.
+whose `slangc` compiles its shaders), `minimal_server` (`samples/`) and the editor,
+`ironthorn_editor` (`editor/`, built with the shader compiler), are the applications today.
 
 Sanitizer builds leave out the shader compiler. The `editor` modules don't need it, so they and their
-headless tests (`editor_core`) are built and run under ASan, UBSan and TSan too
-([ADR-0029](../decisions/0029-editor-ui-toolkit.md) rule 19); the editor application, which compiles its
-shaders at start-up, needs the shader compiler and will be left out there. `scene_player` and its
-GPU test need the shader compiler's `slangc`, so their code (`samples/scene_player/Scenes.cpp`) gets
-no sanitizer coverage.
+headless tests (`editor_core`, `editor_ui`) are built and run under ASan, UBSan and TSan too
+([ADR-0029](../decisions/0029-editor-ui-toolkit.md) rule 19): `editor_ui` carries its shader as
+source and its tests render on the null device, which takes any bytecode. The editor application,
+which compiles the UI shader at start-up, needs the shader compiler and is left out there.
+`scene_player` and its GPU test need the shader compiler's `slangc`, so their code
+(`samples/scene_player/Scenes.cpp`) gets no sanitizer coverage.
+
+With the editor modules on, the build copies the editor fonts and their licences to `fonts/` next
+to the executables of each configuration, as it copies `engine/config` to `Config/`
+([editor UI guide](editor-ui.md#theme-fonts-and-icons)).
 
 Each application is meant to call the registration function of every module it links, from a
 source file generated out of its module list (ADR-0017 rule 5). That is deferred until the first
@@ -229,16 +235,24 @@ leg gets the display packages. Formatting and clang-tidy run only in the Windows
 
 - Each suite is an executable `ith_<name>_tests` registered with CTest as `<name>`, using
   doctest.
-- Two lint checks also run as CTest tests:
+- Lint checks also run as CTest tests (label `lint`), among them:
   - `module_layering`: module layering rules ([ADR-0004](../decisions/0004-modules-and-layering.md))
     and the kind and application target rules
     ([ADR-0017](../decisions/0017-runtime-and-editor-separation.md)). The
     `module_layering_refuses_*` tests run the same check on made-up module tables and pass when
     it reports the expected violation.
   - `changelog_fragments`: changelog fragment format.
+  - `imgui_confined`: Dear ImGui only in the `editor_ui` module, its internals only in
+    `DockLayout.cpp` ([ADR-0029](../decisions/0029-editor-ui-toolkit.md) rule 2).
 - Each sample application runs once as `sample_<name>` (label `sample`). `window_player` runs
   for 10 frames on SDL's headless `offscreen` video driver. So does `scene_player`, which
   renders nothing there; the `scene_player` GPU suite draws its scenes.
+- The editor runs as `editor_automation_null` and `editor_automation_gpu` (labels `sample`, and
+  `gpu` for the second): `ironthorn_editor` on the `offscreen` driver runs
+  `tests/editor/open_edit_save_reopen.json` in a fresh project and exits 0, on the null device and
+  on the software GPU. Not in `Release`, where the editor isn't built.
+- `editor_ui_gpu` (label `gpu`) compares a golden screenshot of the editor shell on WARP and
+  lavapipe, stored as binary PPM with Git LFS ([editor UI guide](editor-ui.md#tests)).
 - Tests that need a GPU carry the `gpu` label. Skip them with `-ExcludeLabel gpu`
   (`ctest -LE gpu` on Linux). On Windows they run the Direct3D 12 backend on WARP, which every
   Windows machine has, so verify and CI run them. The Vulkan tests run on the machine's GPU, or

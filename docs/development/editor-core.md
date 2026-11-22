@@ -138,6 +138,13 @@ runs the bound command of a key press; letter keys follow the user's layout, so 
 that prints Z. While an interaction holds a transaction open, Escape cancels it
 (`Transactions::cancelOpen`) and other keys go on to the consumers below.
 
+## Preferences
+
+`ith::EditorPreferences` (`EditorPreferences.h`) is the `preferences` section of `Editor.json` in
+the layered configuration, read with `config.get(ith::kEditorPreferences)`. Today it holds the
+idle rates of the [editor UI](editor-ui.md#idle-policy): `idleFramesPerSecond` (10) and
+`idleFramesPerSecondUnfocused` (2).
+
 ## Automation
 
 ```cpp

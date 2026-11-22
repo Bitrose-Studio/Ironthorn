@@ -87,6 +87,13 @@ if(IRONTHORN_BUILD_TESTS)
             -P "${PROJECT_SOURCE_DIR}/cmake/CheckGlmIncludes.cmake")
     set_tests_properties(glm_includes PROPERTIES LABELS "lint")
 
+    # Dear ImGui stays inside editor_ui: only its sources include ImGui, only DockLayout.cpp its
+    # internals, and only its CMakeLists.txt links it (ADR-0029 rule 2).
+    add_test(NAME imgui_confined
+        COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/CheckImGuiConfined.cmake")
+    set_tests_properties(imgui_confined PROPERTIES LABELS "lint")
+
     # File I/O under engine/ith goes through the file_system module (ADR-0035 rule 10).
     add_test(NAME file_io_confined
         COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}"

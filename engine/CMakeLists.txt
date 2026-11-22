@@ -30,6 +30,7 @@ endif()
 add_subdirectory(ith/asset_database)
 add_subdirectory(ith/asset_importers)
 add_subdirectory(ith/editor_core)
+add_subdirectory(ith/editor_ui)
 
 # The engine's configuration layer (ADR-0035 rule 12): engine/config is copied to Config/ next to
 # the executables of every configuration, so applications find it at <exe>/Config/. Files removed

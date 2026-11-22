@@ -607,6 +607,15 @@ set_tests_properties(file_io_confined_refuses_file_io PROPERTIES
     LABELS "lint"
     PASS_REGULAR_EXPRESSION "UsesFileIo.cpp includes <filesystem>.*UsesFileIo.cpp includes <fstream>.*UsesFileIo.cpp calls fopen.*UsesFileIo.cpp calls CreateFileW")
 
+# The imgui_confined check must refuse ImGui outside editor_ui (ADR-0029 rule 2): an include of
+# imgui.h and of imgui_internal.h, and a CMakeLists.txt that links it. The fixtures are never built.
+add_test(NAME imgui_confined_refuses_imgui_outside_editor_ui
+    COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}" "-DDIRECTORIES=tests/layering"
+        -P "${PROJECT_SOURCE_DIR}/cmake/CheckImGuiConfined.cmake")
+set_tests_properties(imgui_confined_refuses_imgui_outside_editor_ui PROPERTIES
+    LABELS "lint"
+    PASS_REGULAR_EXPRESSION "IncludesImGui.cpp includes imgui.h: only the editor_ui module.*IncludesImGui.cpp includes imgui_internal.h: only engine/ith/editor_ui/DockLayout.cpp.*links_imgui/CMakeLists.txt links ImGui: only")
+
 ith_add_layering_failure_test(upward_layer
     MODULES "low:core:runtime=high|high:framework:runtime="
     EXPECT "low [(]layer 2[)] depends on high [(]layer 4[)], a higher layer")
@@ -827,4 +836,23 @@ if(TARGET ith_editor_core)
             editor_core/ModelTests.cpp
             editor_core/TransactionTests.cpp
         LIBRARIES ith::editor_core ith_test_editor_core_components)
+endif()
+
+# The editor UI (ADR-0029 rule 18), headless: ImGui on our platform backend with injected events
+# (routing, text, IME, clipboard, cursor, focus), on our renderer backend on the RHI's null device
+# (texture create, update and destroy, upload growth, scissors, recorded commands), the theme, the
+# fonts, the icons against the pinned codepoints.json, the shell and the idle policy. The fonts come
+# from the fonts/ folder the build fills next to the executable. Built wherever the editor modules
+# are, sanitizer builds included (ADR-0029 rule 19).
+if(TARGET ith_editor_ui)
+    ith_add_test_suite(editor_ui
+        SOURCES
+            editor_ui/EditorUiTestSupport.h
+            editor_ui/EditorUiTests.cpp
+            editor_ui/RendererTests.cpp
+            editor_ui/ShellTests.cpp
+        LIBRARIES ith::editor_ui ith::imgui)
+    target_compile_definitions(ith_editor_ui_tests PRIVATE
+        "ITH_LUCIDE_CODEPOINTS=\"${font_lucide_SOURCE_DIR}/codepoints.json\"")
+    add_dependencies(ith_editor_ui_tests ith_engine_config)
 endif()

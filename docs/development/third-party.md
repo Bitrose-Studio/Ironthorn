@@ -24,6 +24,10 @@ Every dependency is fetched at configure time as an archive pinned by URL and SH
 | [DirectX 12 Agility SDK](https://aka.ms/directx12agility) (NuGet `Microsoft.Direct3D.D3D12`) | 1.620.2 | Microsoft DirectX license terms (`LICENSE.txt` in the package): the redistributables `D3D12Core.dll` and `d3d12SDKLayers.dll` may be shipped with an application, solely for use on Windows, under the terms' distribution requirements | the Direct3D 12 runtime that players and editors load on Windows | `D3D12Core.dll` yes; `d3d12SDKLayers.dll` no (not in Shipping builds) |
 | [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | 1.4.363 (SDK 1.4.363.0) | Apache-2.0 OR MIT | Vulkan API declarations (C API only) in the `rhi_vulkan` client module | yes (compiled in) |
 | [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | 3.5.0 | MIT | GPU memory allocation in the `rhi_vulkan` client module | yes |
+| [Dear ImGui](https://github.com/ocornut/imgui) (docking branch) | 1.93.0 (`v1.93.0-docking`) | MIT; bundled stb_truetype, stb_rect_pack and stb_textedit under MIT or public domain (Unlicense) | the editor UI, private to the `editor_ui` module | no (editor only) |
+| [Inter](https://github.com/rsms/inter) | 4.1 | SIL OFL-1.1 (font; no Reserved Font Name) | the editor's UI font (Regular, SemiBold) | no (editor only) |
+| [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | 2.304 | SIL OFL-1.1 (font; no Reserved Font Name) | the editor's monospace font (Regular) | no (editor only) |
+| [Lucide](https://github.com/lucide-icons/lucide) (icon font) | 1.77.0 | ISC; icons derived from Feather under MIT | the editor's icons, by name (`editor_ui/Icons.h`) | no (editor only) |
 
 Slang and DXC are tools: only the `shader_compiler` module links them, and the build runs
 `slangc` with them for embedded sample shaders, only when `IRONTHORN_BUILD_TOOLS` is on (the
@@ -81,6 +85,26 @@ headers), without Vulkan-Hpp. VMA is one header, whose implementation `rhi_vulka
 of its own source files, without exceptions or RTTI. No Vulkan library is linked: `rhi_vulkan`
 opens the system's Vulkan loader at run time. Games ship both MIT license texts (Vulkan-Headers
 is also offered under Apache-2.0) in their third-party notices.
+
+Dear ImGui and the editor fonts are fetched only with `IRONTHORN_BUILD_EDITOR` on. ImGui is built
+from its release archive as a static library, without exceptions or RTTI and without our warning
+level, and only the `editor_ui` module links it (the `imgui_confined` test). Its configuration
+header, `engine/ith/editor_ui/ImGuiConfig.h`, is a public definition of `ith::imgui`, so every
+translation unit sees the same settings ([ADR-0029](../decisions/0029-editor-ui-toolkit.md) rule 4).
+The bundled stb_truetype rasterizes only the pinned fonts below: it does no range checking and has
+open CVEs for malformed fonts, so fonts a user picks would need FreeType first. ImGui's backends,
+own platform and renderer backends and its test engine are not used; `imgui_demo.cpp` is built, for the
+style editor during theme work.
+
+The fonts are data files, not code: Inter and JetBrains Mono under the SIL Open Font License 1.1,
+allowed for fonts only, and Lucide's icon font under ISC, with MIT for the icons derived from
+Feather. The release archives are fetched pinned by SHA-256; Lucide's font archive has no licence
+file, so its `LICENSE` is fetched from the same release tag, pinned too. The build copies the TTFs
+the editor uses (Inter Regular and SemiBold, JetBrains Mono Regular, `lucide.ttf`) and their licence
+texts (`Inter-LICENSE.txt`, `JetBrainsMono-OFL.txt`, `Lucide-LICENSE.txt`) to `fonts/` next to the
+executables. Editor distributions ship that folder and list ImGui (MIT, `LICENSE.txt` in its
+archive), Inter, JetBrains Mono and Lucide in their third-party notices. The fonts are shipped
+unmodified, so no Modified Version of an OFL font arises.
 
 ## Test tooling (not built, not shipped)
 

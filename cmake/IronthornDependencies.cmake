@@ -437,3 +437,50 @@ if(WIN32 AND IRONTHORN_BUILD_CLIENT)
             VERBATIM)
     endfunction()
 endif()
+
+# --- Dear ImGui (docking branch): the editor UI (MIT) ------------------------------------
+# Editor only and private to the editor_ui module (ADR-0029 rules 1 to 5; the imgui_confined test
+# checks that no other module links or includes it). The archive has no top-level CMakeLists.txt,
+# so FetchContent only unpacks it; the core sources are built here without exceptions or RTTI and
+# without our warning level, like every dependency. The configuration header is a public
+# definition (IMGUI_USER_CONFIG), so every translation unit that includes imgui.h sees the same
+# configuration: IM_ASSERT is ITH_ASSERT, ImWchar is 32 bits wide, and ImGui has no allocator,
+# Win32 or shell functions of its own. Sanitizer builds instrument it too (ADR-0029 rule 19).
+if(IRONTHORN_BUILD_EDITOR)
+    ith_declare_dependency(imgui
+        URL https://github.com/ocornut/imgui/archive/refs/tags/v1.93.0-docking.tar.gz
+        SHA256 746c265540bd3aa109570f29492ef4d8f5b421dd9fd0049c35ca35f21496f1a5)
+    FetchContent_MakeAvailable(imgui)
+    add_library(ith_imgui STATIC
+        "${imgui_SOURCE_DIR}/imgui.cpp"
+        "${imgui_SOURCE_DIR}/imgui_draw.cpp"
+        "${imgui_SOURCE_DIR}/imgui_tables.cpp"
+        "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
+        "${imgui_SOURCE_DIR}/imgui_demo.cpp")
+    add_library(ith::imgui ALIAS ith_imgui)
+    target_include_directories(ith_imgui SYSTEM PUBLIC "${imgui_SOURCE_DIR}")
+    target_compile_definitions(ith_imgui PUBLIC "IMGUI_USER_CONFIG=\"ith/editor_ui/ImGuiConfig.h\"")
+    # The configuration header includes ith/foundation/Assert.h, found through foundation's include
+    # directory; the header itself belongs to editor_ui, which links this target (no cycle).
+    target_link_libraries(ith_imgui PUBLIC ith::foundation)
+    target_link_libraries(ith_imgui PRIVATE ith::runtime_options)
+    set_target_properties(ith_imgui PROPERTIES FOLDER "ThirdParty")
+
+    # Editor fonts: data files under the SIL Open Font License (Inter, JetBrains Mono) and ISC with
+    # MIT (Lucide's icon font), not code (docs/development/third-party.md). The archives have no
+    # CMakeLists.txt, so FetchContent only unpacks them. The Lucide font archive has no licence
+    # file; it comes from the same release tag, pinned too.
+    ith_declare_dependency(font_inter
+        URL https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
+        SHA256 9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e)
+    ith_declare_dependency(font_jetbrains_mono
+        URL https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip
+        SHA256 6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf)
+    ith_declare_dependency(font_lucide
+        URL https://github.com/lucide-icons/lucide/releases/download/1.77.0/lucide-font-1.77.0.zip
+        SHA256 f7bb13abd330802d45938dd3d54cb001bcedeb126528c981b7df395a8ca4ccef)
+    FetchContent_MakeAvailable(font_inter font_jetbrains_mono font_lucide)
+    set(ITH_LUCIDE_LICENSE "${CMAKE_BINARY_DIR}/_deps/font_lucide-LICENSE")
+    file(DOWNLOAD https://raw.githubusercontent.com/lucide-icons/lucide/1.77.0/LICENSE "${ITH_LUCIDE_LICENSE}"
+        EXPECTED_HASH SHA256=b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57)
+endif()

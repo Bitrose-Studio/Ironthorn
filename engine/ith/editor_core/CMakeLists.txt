@@ -17,6 +17,7 @@ ith_add_module(editor_core
         EditorDocument.h
         EditorDocument.cpp
         EditorLabel.h
+        EditorPreferences.h
         EditorSession.h
         EditorSession.cpp
         FileCommands.cpp
