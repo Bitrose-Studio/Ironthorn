@@ -4,7 +4,7 @@
 // back, all or nothing.
 //
 //   std::vector<ith::serialization::Error> warnings;
-//   const auto text = ith::saveLevel(world, levelId, {.warnings = &warnings});
+//   const auto text = ith::saveLevel(world, levelId, registry, {.warnings = &warnings});
 //   // write *text to Maps/Harbour.ithmap
 //
 //   const auto info = ith::loadLevel(fileText, world, registry, {.source = "Maps/Harbour.ithmap",
@@ -64,6 +64,11 @@ namespace ith {
 // one loadLevel reads; there are no migrations yet.
 inline constexpr std::uint32_t kLevelVersion = 1;
 
+// Warnings, of a save or a load, are collected only when a list is given, and at most
+// kMaxLevelWarningsPerCode of each code are kept; one more warning of that code then counts the
+// ones dropped.
+inline constexpr std::size_t kMaxLevelWarningsPerCode = 100;
+
 struct LevelSaveOptions {
     // Receives the warnings of a successful save, appended (see saveLevel). Null to not collect
     // them.
@@ -80,8 +85,11 @@ struct LevelLoadOptions {
     // Receives the warnings of a successful load, appended (see loadLevel). Null to not collect
     // them.
     std::vector<serialization::Error>* warnings = nullptr;
-    // The bytes the read may allocate, for the JSON tree and for each component value; 0 means the
-    // default of serialization::allocationBudget for the size of the text.
+    // The bytes the load may allocate, as Document.h describes: the JSON tree is checked against
+    // it, and everything read from the tree (the records, every component value with its size, the
+    // names of unresolved components) shares one more budget of the same size. 0 means the default
+    // of serialization::allocationBudget for the size of the text. Exceeding it fails the load with
+    // "serialization.too_large".
     std::size_t allocationBudget = 0;
 };
 
@@ -101,16 +109,18 @@ struct LevelInfo {
 // - An Entity value that refers to no saved entity (one without a StableId, a stale handle, a
 //   handle of another world) is written as the nil id, with a "level.unsaved_reference" warning
 //   that names the referencing entity and the component type. A reference never fails a save.
-// - The entries of an entity's UnresolvedComponents are written back as they were read, except an
-//   entry whose type name the entity now has as a real component.
+// - The entries of an entity's UnresolvedComponents are written back as they were read, except
+//   those the next load would refuse: an entry whose type name the entity has as a written
+//   component, or whose name `registry` now resolves (FormerName included) to StableId or to a
+//   component type the record already writes.
 // Fails with "serialization.invalid_id" (a nil `levelId`) and the toValue errors of a component
 // value ("serialization.non_finite", "serialization.invalid_enum", ...), whose path is then
 // "$.entities[<record>].components.<type name>" (".editor." for an EditorOnly type) followed by
 // the path inside the value.
 // Precondition (asserted; the save then fails with "level.world_busy"): `world` is not being
 // iterated and no system or hook runs on it. Not thread-safe with changes to `world`.
-[[nodiscard]] Expected<std::string, serialization::Error> saveLevel(const World& world, const Uuid& levelId,
-                                                                    const LevelSaveOptions& options = {});
+[[nodiscard]] Expected<std::string, serialization::Error>
+saveLevel(const World& world, const Uuid& levelId, const TypeRegistry& registry, const LevelSaveOptions& options = {});
 
 // Replaces the entities of `world` with those of the level document `text`, with component types
 // found in `registry`. All or nothing: everything is read and checked before the world changes,
@@ -145,7 +155,9 @@ struct LevelInfo {
 //
 // Preconditions (asserted; the load then fails with "level.world_busy" and changes nothing):
 // `world` is not being iterated and no system or hook runs on it. Not thread-safe with other uses
-// of `world`; `registry` is only read.
+// of `world`; `registry` is only read. `text`, `options.source` and `options.warnings` must not
+// live in storage that world.clear() frees, such as a component or a hook's state: the warnings are
+// appended before the clear, and the clear destroys what the world owns.
 [[nodiscard]] Expected<LevelInfo, serialization::Error>
 loadLevel(std::string_view text, World& world, const TypeRegistry& registry, const LevelLoadOptions& options = {});
 

@@ -10,7 +10,7 @@ module writes and reads it; the editor saves and reloads scenes through it. The 
 #include "ith/level/Level.h"
 
 std::vector<ith::serialization::Error> warnings;
-const auto text = ith::saveLevel(world, levelId, {.warnings = &warnings});
+const auto text = ith::saveLevel(world, levelId, registry, {.warnings = &warnings});
 if (!text) {
     log(text.error().toString());
 }
@@ -28,10 +28,14 @@ if (!info) {
 - `registry` must know every component type the level uses: register the reflection of the
   `ecs` module and of each game and plugin module at startup
   ([reflection guide](reflection.md)). A type it doesn't know is kept, not lost (see
-  [Unresolved components](#unresolved-components)).
+  [Unresolved components](#unresolved-components)). Saving takes the registry too, to leave out
+  an unresolved component that the next load would refuse.
 - Both functions take the world between frames: not while a query iterates it, a system runs or
   a hook runs. That is asserted, and the call then fails with `level.world_busy`.
 - Saving reads the world and never changes it. Loading replaces all of the world's entities.
+- Pass `text`, the source name and the warnings list from storage the world doesn't own (not from
+  a component or a hook's state): loading clears the world.
+- Loading is linear in the size of the level, also for very deep or very wide hierarchies.
 
 ## The document
 
@@ -154,8 +158,8 @@ A component that can't be read is kept, never dropped, so a disabled plugin or a
 Each is a `level.unresolved_component` warning. Its raw value is kept on the entity in the
 Transient component `ith::UnresolvedComponents` (`ith/level/UnresolvedComponents.h`), and
 `saveLevel` writes it back under its type name, in the section it came from. Once the type is
-known again, the next load reads it. If the entity gets a real component with the same type name,
-the real one is saved instead.
+known again, the next load reads it. If the entity gets a real component of the same type, by its
+name or through a `FormerName` the registry knows, the real one is saved instead.
 
 Unknown fields inside a known component are different: they are warned about
 (`serialization.unknown_field`) and dropped, as in every text document. So are unknown keys in a
@@ -173,7 +177,16 @@ of reading a file.
 ## Errors and warnings
 
 Every error and warning is a `serialization::Error` with the source name and the path of the
-problem, such as `$.entities[3].components.game::Light.intensity`.
+problem, such as `$.entities[3].components.game::Light.intensity`. Names from the file are
+shortened and escaped in messages and paths.
+
+Warnings are built only when a list is passed, and at most 100 of each code
+(`kMaxLevelWarningsPerCode`) are kept; one more warning of that code counts the rest.
+
+Loading allocates within a budget (`LevelLoadOptions::allocationBudget`, by default the larger
+of 64 MiB and 16 times the size of the text): the JSON tree is checked against it, and everything
+read from the tree, every record and component value with its size included, shares one more
+budget of the same size. Exceeding either fails the load with `serialization.too_large`.
 
 | Code | Kind | Meaning |
 |---|---|---|

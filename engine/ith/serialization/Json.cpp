@@ -152,6 +152,14 @@ Expected<Value, Error> parseJson(std::string_view text, const JsonReadOptions& o
                                         "the document has " + std::to_string(text.size()) + " bytes; the limit is " +
                                             std::to_string(maxSize)));
     }
+    if (text.empty()) {
+        // Handled here: an empty view may have a null data pointer, which yyjson must not get.
+        Error error = makeError(options.source, "serialization.syntax", "the document is empty");
+        error.offset = 0;
+        error.line = 1;
+        error.column = 1;
+        return makeUnexpected(std::move(error));
+    }
     yyjson_read_flag flags = YYJSON_READ_NUMBER_AS_RAW;
     if (options.syntax == JsonSyntax::Config) {
         flags |= YYJSON_READ_ALLOW_COMMENTS;
@@ -163,9 +171,7 @@ Expected<Value, Error> parseJson(std::string_view text, const JsonReadOptions& o
     if (document == nullptr) {
         Error error = makeError(options.source, "serialization.syntax",
                                 readError.msg != nullptr ? readError.msg : "invalid JSON");
-        if (text.empty()) {
-            error.message = "the document is empty";
-        } else if (readError.code == YYJSON_READ_ERROR_DEPTH) {
+        if (readError.code == YYJSON_READ_ERROR_DEPTH) {
             error.code = "serialization.too_deep";
             error.message = "arrays and objects nest deeper than " + std::to_string(kMaxDepth);
         }

@@ -33,6 +33,9 @@ class AllocationBudget {
 public:
     explicit AllocationBudget(std::size_t bytes) noexcept : m_left(bytes) {}
 
+    // The bytes left.
+    [[nodiscard]] std::size_t left() const noexcept { return m_left; }
+
     // Takes `count` * `elementSize` bytes; false, taking nothing, when that is more than is left.
     bool take(std::size_t count, std::size_t elementSize) noexcept {
         if (elementSize != 0 && count > m_left / elementSize) {
@@ -46,9 +49,8 @@ private:
     std::size_t m_left;
 };
 
-// `text` made safe for a message: at most 64 bytes, with bytes outside printable ASCII and
-// backslashes written as \xNN, and "..." when it was cut.
-std::string printable(std::string_view text);
+// printable (Error.h), which the archives use for names and text from the data in messages.
+using serialization::printable;
 
 // Empties the DynamicArray or Optional of `type` at `object`, then gives it `count`
 // default-constructed elements, charging `budget` for count * the element size first. False,

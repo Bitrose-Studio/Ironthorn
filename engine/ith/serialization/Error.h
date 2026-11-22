@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace ith::serialization {
 
@@ -39,5 +40,9 @@ struct Error {
 
     friend bool operator==(const Error&, const Error&) = default;
 };
+
+// `text` from untrusted data made safe for an error message: at most 64 bytes, with bytes outside
+// printable ASCII and backslashes written as \xNN, and "..." when it was cut.
+std::string printable(std::string_view text);
 
 } // namespace ith::serialization

@@ -296,6 +296,8 @@ public:
 
     Error takeError() { return std::move(m_error); }
 
+    [[nodiscard]] std::size_t budgetLeft() const noexcept { return m_budget.left(); }
+
     // The collected warnings, with one that counts the unknown fields beyond kMaxWarnings.
     std::vector<Error> takeWarnings() {
         if (m_unknownCount > kMaxWarnings) {
@@ -824,9 +826,14 @@ Expected<void, Error> fromValue(const Value& value, const TypeInfo& type, void* 
             makeError("serialization.not_saved", std::string(type.name) + " is Transient and can't be loaded"));
     }
     OwnedValue result(type);
-    TextReader reader(options.unknownFields, options.warnings != nullptr, allocationBudget(0, options.allocationBudget),
-                      options.entities);
-    if (!reader.read(type, value, result.get(), 0)) {
+    const std::size_t budget =
+        options.sharedBudget != nullptr ? *options.sharedBudget : allocationBudget(0, options.allocationBudget);
+    TextReader reader(options.unknownFields, options.warnings != nullptr, budget, options.entities);
+    const bool read = reader.read(type, value, result.get(), 0);
+    if (options.sharedBudget != nullptr) {
+        *options.sharedBudget = reader.budgetLeft();
+    }
+    if (!read) {
         return makeUnexpected(reader.takeError());
     }
     result.moveInto(target);

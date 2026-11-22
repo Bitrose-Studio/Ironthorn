@@ -731,9 +731,13 @@ const void* World::add(Entity entity, const TypeInfo& type) {
 }
 
 const void* World::add(Entity entity, const TypeInfo& type, void* value) {
+    return addRecordValue(entity, type, value, true);
+}
+
+const void* World::addRecordValue(Entity entity, const TypeInfo& type, void* value, bool checkCycle) {
     ITH_ASSERT_MSG(value != nullptr, "ecs: add by record without a value");
     const detail::ComponentIndex index = detail::registerComponentType(type);
-    if (value == nullptr || !acceptsValue(entity, index, value)) {
+    if (value == nullptr || !acceptsValue(entity, index, value, checkCycle)) {
         return nullptr;
     }
     bool added = false;
@@ -951,7 +955,7 @@ Mat4 World::worldMatrixOf(Entity entity) const {
     return world;
 }
 
-bool World::acceptsValue(Entity entity, detail::ComponentIndex type, const void* value) const {
+bool World::acceptsValue(Entity entity, detail::ComponentIndex type, const void* value, bool checkCycle) const {
     if (type == detail::componentIndexOf<StableId>()) {
         if (!entity.isNull() && (entity.worldId() != m_id || !isAlive(entity))) {
             return true; // stale: add refuses it anyway, without asserting
@@ -978,8 +982,8 @@ bool World::acceptsValue(Entity entity, detail::ComponentIndex type, const void*
     if (!alive) {
         return false;
     }
-    if (spawning) {
-        return true; // a new entity has no descendants
+    if (spawning || !checkCycle) {
+        return true; // a new entity has no descendants; addAcyclic's caller proved there is no cycle
     }
     for (Entity ancestor = parent; !ancestor.isNull(); ancestor = parentOf(ancestor)) {
         if (ancestor == entity) {
@@ -1116,8 +1120,10 @@ void World::onChildOfInsert(HookContext& context) {
         const bool sameParent = placement.oldParent == parent && placement.oldIndex <= children->size();
         if (sameParent) {
             children->insert(children->begin() + static_cast<std::ptrdiff_t>(placement.oldIndex), entity);
-        } else if (std::ranges::find_if(*children, [entity](Entity entry) { return entry == entity; }) ==
-                   children->end()) {
+        } else if (children->empty() || children->back() != entity) {
+            // A new link, or a move from another parent, whose replace hook took the entity out of the
+            // old list: the entity is in no list of this parent, so appending needs no search, and a
+            // wide parent fills in linear time. The back check covers a LinkChild that already ran.
             children->push_back(entity);
         }
         world.markChanged(parent, detail::componentIndexOf<Children>());
@@ -1284,6 +1290,10 @@ void updateQueryState(QueryState& state, std::span<const std::unique_ptr<Archety
 bool changeFiltersAllowed(const ChangeClock& clock) noexcept {
     ITH_ASSERT_MSG(clock.inSystem, "ecs: Added and Changed filters work only while a system runs");
     return clock.inSystem;
+}
+
+const void* addAcyclic(World& world, Entity entity, const TypeInfo& type, void* value) {
+    return world.addRecordValue(entity, type, value, false);
 }
 
 void setChangeTickForTesting(World& world, std::uint32_t tick) {

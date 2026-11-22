@@ -16,6 +16,7 @@
 #include <optional>
 #include <ostream>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -182,5 +183,16 @@ TEST_SUITE("serialization.json") {
         const auto written = serialization::writeJson(Value::string("\xff\xfe"));
         REQUIRE_FALSE(written.hasValue());
         CHECK(written.error().code == "serialization.write_failed");
+    }
+}
+
+TEST_CASE("Json: an empty document is a syntax error, also from a view without data") {
+    for (const std::string_view text : {std::string_view(), std::string_view("")}) {
+        const auto parsed = serialization::parseJson(text, {.source = "empty.json"});
+        REQUIRE_FALSE(parsed.hasValue());
+        CHECK(parsed.error().code == "serialization.syntax");
+        CHECK(parsed.error().message == "the document is empty");
+        CHECK(parsed.error().source == "empty.json");
+        CHECK(parsed.error().offset == std::optional<std::size_t>(0));
     }
 }

@@ -7,6 +7,7 @@
 #include "ith/math/Types.h"
 #include "ith/reflection/Annotations.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -96,6 +97,14 @@ struct Scratch {
     ITH_TYPE(Component, Transient)
     ITH_FIELD()
     std::int32_t value = 0;
+};
+
+// A large value written as a small one: every missing field keeps its default, so "{}" reads into
+// 16 KiB. For the allocation budget test.
+struct Bulky {
+    ITH_TYPE(Component)
+    ITH_FIELD()
+    std::array<float, 4096> samples{};
 };
 
 // A world resource: levels don't save resources, and loading keeps them.

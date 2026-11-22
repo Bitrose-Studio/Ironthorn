@@ -154,6 +154,12 @@ struct PatchApplier;
 // Precondition: the world has no entities and no system has run on it.
 void setChangeTickForTesting(World& world, std::uint32_t tick);
 
+// World::add(entity, type, value) for a loader that has already proven the whole hierarchy it builds
+// free of cycles (ith::loadLevel): a ChildOf's parent is not searched for among the entity's
+// descendants, so building a deep hierarchy costs linear time. Every other check stays.
+// Precondition: adding `value` creates no cycle; otherwise the hierarchy is corrupt.
+const void* addAcyclic(World& world, Entity entity, const TypeInfo& type, void* value);
+
 // Destroys a resource value through its record and frees its aligned memory.
 struct ResourceDelete {
     const TypeInfo* type = nullptr;
@@ -380,6 +386,7 @@ private:
     friend struct detail::TransformPropagation;
     friend struct detail::PatchApplier;
     friend void detail::setChangeTickForTesting(World& world, std::uint32_t tick);
+    friend const void* detail::addAcyclic(World& world, Entity entity, const TypeInfo& type, void* value);
     friend bool copyWorld(const World& source, World& target, const WorldCopyOptions& options);
 
     // The run key of propagateTransforms called directly; Schedule gives its systems keys from 1.
@@ -529,8 +536,13 @@ private:
     // False, asserting, when `value` is a ChildOf whose parent `entity` may not have (the entity
     // itself, a descendant, a dead entity or one of another world), or a StableId whose id is nil or
     // already another live entity's. True for every other type.
-    // `entity` is null for an entity being spawned.
-    [[nodiscard]] bool acceptsValue(Entity entity, detail::ComponentIndex type, const void* value) const;
+    // `entity` is null for an entity being spawned. With `checkCycle` false, a ChildOf's parent isn't
+    // searched for among the entity's descendants (detail::addAcyclic).
+    [[nodiscard]] bool acceptsValue(Entity entity, detail::ComponentIndex type, const void* value,
+                                    bool checkCycle = true) const;
+
+    // add(entity, type, value), checking the value with `checkCycle` as acceptsValue does.
+    const void* addRecordValue(Entity entity, const TypeInfo& type, void* value, bool checkCycle);
 
     // The parent of a live entity, or null.
     [[nodiscard]] Entity parentOf(Entity entity) const;

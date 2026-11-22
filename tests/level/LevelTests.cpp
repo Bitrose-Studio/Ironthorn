@@ -24,6 +24,7 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -50,6 +51,7 @@ using ith::Uuid;
 using ith::World;
 using ith::serialization::Error;
 using ith::serialization::Value;
+using ith::test::level::Bulky;
 using ith::test::level::EditorColor;
 using ith::test::level::EditorNote;
 using ith::test::level::Leg;
@@ -130,7 +132,7 @@ std::string document(std::string_view entities) {
 }
 
 std::string save(const World& world, std::vector<Error>* warnings = nullptr) {
-    const auto text = ith::saveLevel(world, kLevelId, {.warnings = warnings});
+    const auto text = ith::saveLevel(world, kLevelId, editorRegistry(), {.warnings = warnings});
     REQUIRE(text.hasValue());
     return text.hasValue() ? *text : std::string();
 }
@@ -718,12 +720,12 @@ TEST_CASE("Level: saving fails on a nil level id and on values that can't be wri
     static_cast<void>(editorRegistry());
     World world;
     world.spawn(StableId{.id = id(1)}, Light{.intensity = std::numeric_limits<float>::infinity()});
-    auto result = ith::saveLevel(world, Uuid());
+    auto result = ith::saveLevel(world, Uuid(), editorRegistry());
     REQUIRE_FALSE(result.hasValue());
     CHECK(result.error().code == "serialization.invalid_id");
 
     std::vector<Error> warnings;
-    result = ith::saveLevel(world, kLevelId, {.warnings = &warnings});
+    result = ith::saveLevel(world, kLevelId, editorRegistry(), {.warnings = &warnings});
     REQUIRE_FALSE(result.hasValue());
     CHECK(result.error().code == "serialization.non_finite");
     CHECK(result.error().path == "$.entities[0].components.ith::test::level::Light.intensity");
@@ -740,7 +742,7 @@ TEST_CASE("Level: saving and loading while the world is iterated assert and chan
         const auto loaded = load(text, world);
         REQUIRE_FALSE(loaded.hasValue());
         CHECK(loaded.error().code == "level.world_busy");
-        const auto saved = ith::saveLevel(world, kLevelId);
+        const auto saved = ith::saveLevel(world, kLevelId, editorRegistry());
         REQUIRE_FALSE(saved.hasValue());
         CHECK(saved.error().code == "level.world_busy");
     });
@@ -748,4 +750,135 @@ TEST_CASE("Level: saving and loading while the world is iterated assert and chan
     CHECK(capture.count() == 2);
 #endif
     CHECK(world.isAlive(root));
+}
+
+TEST_CASE("Level: a very deep and a very wide hierarchy load in linear time") {
+    static_cast<void>(editorRegistry());
+    // 100,000 entities in one chain, then 50,000 children of its root. Checking each link against
+    // the entity's descendants, or searching a parent's children before each append, would take
+    // minutes; the bound is generous for Debug and sanitizer builds.
+    constexpr std::uint64_t kDepth = 100'000;
+    constexpr std::uint64_t kWidth = 50'000;
+    const auto stable = [](std::uint64_t n) { return Uuid(0xC0DE, n + 1).toString(); };
+    std::string entities;
+    entities.reserve((kDepth + kWidth) * 160);
+    for (std::uint64_t n = 0; n < kDepth + kWidth; ++n) {
+        entities += n > 0 ? ",\n" : "";
+        entities += R"({"id": ")" + stable(n) + R"(")";
+        if (n > 0) {
+            const std::uint64_t parent = n < kDepth ? n - 1 : 0;
+            entities += R"(, "components": {"ith::ChildOf": {"parent": ")" + stable(parent) + R"("}})";
+        }
+        entities += "}";
+    }
+    const std::string text = document(entities);
+
+    World world;
+    const auto start = std::chrono::steady_clock::now();
+    const auto info = ith::loadLevel(text, world, editorRegistry());
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    REQUIRE(info.hasValue());
+    CHECK(info->entityCount == kDepth + kWidth);
+    CHECK(seconds < 120.0);
+
+    const Entity root = world.findByStableId(Uuid(0xC0DE, 1));
+    const Entity leaf = world.findByStableId(Uuid(0xC0DE, kDepth));
+    REQUIRE(world.get<const ChildOf>(leaf) != nullptr);
+    CHECK(world.get<const ChildOf>(leaf)->parent == world.findByStableId(Uuid(0xC0DE, kDepth - 1)));
+    const Children* children = world.get<const Children>(root);
+    REQUIRE(children != nullptr);
+    CHECK(children->entities.size() == kWidth + 1);
+    CHECK(children->entities[1] == world.findByStableId(Uuid(0xC0DE, kDepth + 1)));
+    CHECK(children->entities.back() == world.findByStableId(Uuid(0xC0DE, kDepth + kWidth)));
+}
+
+TEST_CASE("Level: every value read from a level draws from one allocation budget") {
+    static_cast<void>(editorRegistry());
+    // 1,000 records of "{}" that each read into a 16 KiB value: a small tree, 16 MiB of values.
+    std::string entities;
+    for (std::uint64_t n = 1; n <= 1000; ++n) {
+        entities += n > 1 ? ", " : "";
+        entities += R"({"id": ")" + Uuid(0xB0, n).toString() + R"(", "components": {"ith::test::level::Bulky": {}}})";
+    }
+    const std::string text = document(entities);
+
+    World world;
+    const Entity kept = world.spawn(StableId{.id = id(1)});
+    const auto refused = ith::loadLevel(text, world, editorRegistry(), {.allocationBudget = std::size_t{4} << 20});
+    REQUIRE_FALSE(refused.hasValue());
+    CHECK(refused.error().code == "serialization.too_large");
+    CHECK(world.isAlive(kept));
+
+    const auto loaded = ith::loadLevel(text, world, editorRegistry());
+    REQUIRE(loaded.hasValue());
+    CHECK(world.entityCount() == 1000);
+    CHECK(world.has<Bulky>(world.findByStableId(Uuid(0xB0, 1000))));
+}
+
+TEST_CASE("Level: warnings are capped per code, and not built without a list") {
+    static_cast<void>(editorRegistry());
+    // 300 records with 50 unknown keys each, and an unknown field in a component value of each.
+    std::string entities;
+    for (std::uint64_t n = 1; n <= 300; ++n) {
+        entities += n > 1 ? ", " : "";
+        entities +=
+            R"({"id": ")" + Uuid(0xA0, n).toString() + R"(", "components": {"ith::test::level::Light": {"glow": 1}})";
+        for (int key = 0; key < 50; ++key) {
+            entities += R"(, "k)" + std::to_string(key) + R"(": 0)";
+        }
+        entities += "}";
+    }
+    const std::string text = document(entities);
+
+    World world;
+    std::vector<Error> warnings;
+    REQUIRE(load(text, world, &warnings).hasValue());
+    REQUIRE(warnings.size() == ith::kMaxLevelWarningsPerCode + 1);
+    CHECK(warnings.back().code == "serialization.unknown_field");
+    CHECK(warnings.back().message == "15200 more serialization.unknown_field warnings are dropped");
+    CHECK(warnings.back().source == "test.ithmap");
+
+    World quiet;
+    REQUIRE(ith::loadLevel(text, quiet, editorRegistry()).hasValue());
+    CHECK(quiet.entityCount() == 300);
+}
+
+TEST_CASE("Level: an unresolved component the registry now knows doesn't make the save unloadable") {
+    World world;
+    std::vector<Error> warnings;
+    // The value doesn't read, so the component is kept under its former name.
+    REQUIRE(
+        load(document(R"({"id": "#1", "components": {"ith::test::level::OldName": {"value": "x"}}})"), world, &warnings)
+            .hasValue());
+    CHECK(codes(warnings) == std::vector<std::string>{"level.unresolved_component"});
+    const Entity entity = find(world, 1);
+    world.add(entity, Renamed{.value = 5});
+
+    // Writing both names would be refused as one type given twice; the real component wins.
+    const std::string text = save(world);
+    CHECK(text.find("OldName") == std::string::npos);
+    World again;
+    REQUIRE(load(text, again).hasValue());
+    CHECK(again.get<const Renamed>(find(again, 1))->value == 5);
+    CHECK_FALSE(again.has<UnresolvedComponents>(find(again, 1)));
+}
+
+TEST_CASE("Level: names from the file are printable and short in messages and paths") {
+    World world;
+    const std::string key = "game::" + std::string(300, 'x') + '\x01';
+    const std::string json = "game::" + std::string(300, 'x') + R"(\u0001)"; // the key as JSON escapes it
+    std::vector<Error> warnings;
+    REQUIRE(
+        load(document(R"({"id": "#1", "components": {")" + json + R"(": {}}, ")" + json + R"(": 1})"), world, &warnings)
+            .hasValue());
+    REQUIRE(warnings.size() == 2);
+    for (const Error& warning : warnings) {
+        CAPTURE(warning.path);
+        CHECK(warning.path.size() < 120);
+        CHECK(warning.path.ends_with("..."));
+        CHECK(warning.message.size() < 300);
+        CHECK(warning.message.find('\x01') == std::string::npos);
+    }
+    // The kept value still has its full name, so it is saved back as it was.
+    CHECK(world.get<const UnresolvedComponents>(find(world, 1))->entries[0].typeName == key);
 }

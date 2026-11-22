@@ -164,6 +164,11 @@ const auto result = ith::serialization::fromValue(*tree, ith::typeOf<game::Healt
 - `fromValue` takes `ValueReadOptions`: the unknown-field mode, a warnings list, the allocation
   budget (by default `kMinAllocationBudget`) and the entity mapping. It builds the whole value
   first, so a failed read leaves the target unchanged.
+- Reading many values from one document, pass `sharedBudget`, a pointer to the bytes left of one
+  budget for all of them: each read draws from it, so the document as a whole stays within its
+  budget instead of each value getting a budget of its own.
+- `serialization::printable(text)` (`Error.h`) makes names and text from the data safe for
+  messages: at most 64 bytes, other bytes escaped.
 - `Entity` values need an `EntityMapping`, as in documents.
 
 ### Free-form JSON

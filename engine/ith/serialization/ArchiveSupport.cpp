@@ -22,6 +22,10 @@ std::size_t PathBuilder::pushIndex(std::size_t index) {
     return length;
 }
 
+} // namespace ith::serialization::detail
+
+namespace ith::serialization {
+
 std::string printable(std::string_view text) {
     constexpr std::size_t kMaxBytes = 64;
     constexpr std::string_view kHex = "0123456789abcdef";
@@ -41,6 +45,10 @@ std::string printable(std::string_view text) {
     }
     return result;
 }
+
+} // namespace ith::serialization
+
+namespace ith::serialization::detail {
 
 bool resizeWithin(const TypeInfo& type, void* object, std::size_t count, AllocationBudget& budget) {
     if (!budget.take(count, type.element().size)) {

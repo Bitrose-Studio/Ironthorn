@@ -133,8 +133,13 @@ struct ValueReadOptions {
     UnknownFields unknownFields = UnknownFields::Warn;
     // Receives the warnings of a successful read, appended, as for readText. Null to not collect.
     std::vector<Error>* warnings = nullptr;
-    // The bytes the read may allocate; 0 means kMinAllocationBudget (Document.h).
+    // The bytes the read may allocate; 0 means kMinAllocationBudget (Document.h). Ignored when
+    // `sharedBudget` is set.
     std::size_t allocationBudget = 0;
+    // Not null: the bytes left of a budget that several reads share, such as the values of one
+    // document read one by one. The read may allocate at most that much, and lowers it by what it
+    // took, also when it fails.
+    std::size_t* sharedBudget = nullptr;
     // How Entity values are read (Document.h); null: a saved Entity fails as for readText.
     const EntityMapping* entities = nullptr;
 };
