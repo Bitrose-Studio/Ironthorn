@@ -96,9 +96,11 @@ inline constexpr std::string_view kTemporaryMarker = ".tmp-";
 // The whole file as bytes, following symbolic links. Fails with "fs.too_large" when the file is
 // larger than `maxSize` (checked before anything is allocated), "fs.is_a_directory", or the
 // codes above. On Windows the file is opened with read, write and delete sharing, so a reader
-// never blocks an atomic replacement or a rename by another thread or process, and a file that
-// isn't found is looked for again up to three times: the POSIX rename of a concurrent
-// writeFileAtomic leaves the name empty for an instant.
+// never blocks an atomic replacement or a rename by another thread or process. The POSIX rename
+// of a concurrent writeFileAtomic makes the name delete-pending, then missing, for a moment: while
+// its temporary file "<name>.tmp-<uuid>" exists, an open that fails with not found, access denied
+// or a sharing violation is tried again for up to a second; otherwise the error is reported at
+// once.
 [[nodiscard]] Expected<std::string> readFile(std::string_view path, std::size_t maxSize);
 
 // Replaces the file at `path` with `bytes` so that readers see the old file or the new one, never

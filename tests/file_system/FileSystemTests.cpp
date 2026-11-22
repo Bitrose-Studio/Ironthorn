@@ -279,20 +279,35 @@ TEST_SUITE("file_system.files") {
 #endif
 
     TEST_CASE("a replacement goes through while a reader holds the file open") {
-        // Readers open with delete sharing (readFile does), so they never hold up a replacement:
-        // the writer doesn't wait and the reader keeps reading the old content.
+        // Readers open with delete sharing (readFile does), so they never hold up a replacement: the
+        // write succeeds while the reader holds the file (a held-up one fails with fs.busy after its
+        // retries), and the reader keeps reading the old content.
         const TempDirectory directory;
         const std::string file = directory.path("held.bin");
         REQUIRE(fs::writeFileAtomic(file, "old content").hasValue());
         const ReaderHandle reader(file);
         REQUIRE(reader.valid());
-        const auto start = std::chrono::steady_clock::now();
         const ith::Expected<void> written = fs::writeFileAtomic(file, "new content");
         CHECK(errorCode(written).empty());
-        CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(150));
         CHECK(reader.readAll() == "old content");
         CHECK(readText(file) == "new content");
         CHECK(namesIn(directory.path()) == std::vector<std::string>{"held.bin"});
+    }
+
+    TEST_CASE("a missing file is reported at once, or on Windows after a wait next to a temporary file") {
+        const TempDirectory directory;
+        const auto start = std::chrono::steady_clock::now();
+        CHECK(fs::readFile(directory.path("missing.txt"), 100).error().code == "fs.not_found");
+        CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(900)); // not the wait below
+#ifdef _WIN32
+        // A temporary file next to the name means a replacement may be in progress: the reader waits
+        // for it for up to a second before it reports the file missing.
+        REQUIRE(fs::writeFileAtomic(directory.path("missing.txt.tmp-3f2b8c1e-9d4a-4c1b-8e2f-0a1b2c3d4e5f"), "x")
+                    .hasValue());
+        const auto waited = std::chrono::steady_clock::now();
+        CHECK(fs::readFile(directory.path("missing.txt"), 100).error().code == "fs.not_found");
+        CHECK(std::chrono::steady_clock::now() - waited >= std::chrono::milliseconds(900));
+#endif
     }
 
     TEST_CASE("readers see the old or the new file, never a partial one") {

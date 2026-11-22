@@ -24,8 +24,8 @@ namespace {
 
 using detail::pathError;
 
-// How often readFile looks again for a file that isn't found (see there).
-constexpr int kNotFoundRetries = 3;
+// How long readFile waits for a replacement in progress (see there).
+constexpr auto kReplacementWait = std::chrono::seconds(1);
 
 // Closes a file or directory handle.
 class FileHandle {
@@ -370,6 +370,20 @@ Expected<void> replaceWithRetry(const NativePath& target, Attempt attempt) {
     }
 }
 
+// The errors a reader can see while writeFileAtomic replaces the file.
+bool isReplacementError(DWORD error) noexcept {
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_ACCESS_DENIED || error == ERROR_SHARING_VIOLATION;
+}
+
+// True while a temporary file of writeFileAtomic exists next to `path` ("<name>.tmp-*"): a
+// replacement of `path` is in progress, or one was interrupted.
+bool replacementInProgress(const std::wstring& path) {
+    WIN32_FIND_DATAW data{};
+    const FindHandle search(
+        FindFirstFileExW((path + L".tmp-*").c_str(), FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, 0));
+    return search.get() != INVALID_HANDLE_VALUE;
+}
+
 Expected<std::string> knownFolder(const KNOWNFOLDERID& id, std::string_view name) {
     PWSTR raw = nullptr;
     const HRESULT result = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, nullptr, &raw);
@@ -395,15 +409,20 @@ Expected<std::string> readFile(std::string_view path, std::size_t maxSize) {
                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     };
     FileHandle file(open());
-    // A writer's POSIX rename (writeFileAtomic) removes the old name a moment before the new file
-    // takes it, so a reader racing it can find nothing there; it looks again a few times.
-    for (int attempt = 0; !file.valid() && GetLastError() == ERROR_FILE_NOT_FOUND && attempt < kNotFoundRetries;
-         ++attempt) {
-        SwitchToThread();
+    DWORD error = file.valid() ? ERROR_SUCCESS : GetLastError();
+    // A writer's POSIX rename (writeFileAtomic) takes steps that a reader can see: the old file is
+    // delete-pending for a moment (access denied), then the name is gone (not found) until the new
+    // file takes it. Its temporary file "<name>.tmp-<uuid>" exists throughout, so while one does, the
+    // reader opens again, for up to a second; otherwise the error is reported at once.
+    const auto start = std::chrono::steady_clock::now();
+    for (DWORD delay = 0; !file.valid() && isReplacementError(error) && replacementInProgress(native->wide) &&
+                          std::chrono::steady_clock::now() - start < kReplacementWait;
+         delay = std::min<DWORD>(delay * 2 + 1, 10)) {
+        Sleep(delay);
         file.reset(open());
+        error = file.valid() ? ERROR_SUCCESS : GetLastError();
     }
     if (!file.valid()) {
-        const DWORD error = GetLastError();
         const DWORD attributes = GetFileAttributesW(native->wide.c_str());
         if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
             return pathError("fs.is_a_directory", "can't read", native->utf8, "it is a directory");

@@ -49,7 +49,7 @@ Three roots are recognized: `/`, a drive root `C:/` and a UNC root `//server/sha
 
 | Function | What it does |
 |---|---|
-| `readFile(path, maxSize)` | The whole file. The size is checked before anything is allocated (`fs.too_large`). On Windows the file is opened with read, write and delete sharing, so a reader never blocks a replacement, and a file that isn't found is looked for again up to three times (see below). |
+| `readFile(path, maxSize)` | The whole file. The size is checked before anything is allocated (`fs.too_large`). On Windows the file is opened with read, write and delete sharing, so a reader never blocks a replacement, and an open that races a replacement in progress is tried again (see below). |
 | `writeFileAtomic(path, bytes, options)` | Readers see the old file or the new one, never a partial one. See below. |
 | `fileInfo(path)` | Kind, size and modification time (nanoseconds since 1970 UTC), or `nullopt` when nothing is there. A final link is reported as a link, with its target's kind and size. |
 | `listDirectory(path)` | One level: name, kind, size and `validName`. |
@@ -92,10 +92,15 @@ is removed on every failure; `isTemporaryFileName()` lets scans report the ones 
   and they keep reading the old content, as on POSIX. Where it is refused (`ERROR_INVALID_PARAMETER`,
   `ERROR_NOT_SUPPORTED`, `ERROR_INVALID_FUNCTION` or `ERROR_CALL_NOT_IMPLEMENTED`: FAT, some
   network shares, older Windows), `MoveFileExW` is used, with the old behaviour.
-- **The POSIX rename removes the old name a moment before the new file takes it**, so a reader
-  that opens the name at that instant can find nothing. `readFile` therefore looks again for a
-  file it doesn't find, up to three times with a yield in between, before it reports
-  `fs.not_found`.
+- **The POSIX rename takes steps a reader can see.** For a moment the old file is delete-pending,
+  and an open fails with access denied; then the name is gone, and an open fails with not found,
+  until the new file takes it. Under load the writer can be descheduled between the steps, so the
+  window can last milliseconds. The temporary file `<name>.tmp-<uuid>` exists throughout, so when
+  `readFile` fails with not found, access denied or a sharing violation and such a file exists next
+  to the name, it opens again, with growing sleeps of up to 10 ms, for up to a second. Without one
+  it reports the error at once, so a missing file or a real permission error costs one extra
+  directory lookup. A temporary file left by a crash makes reads of a missing target wait the full
+  second; scans report such files (`isTemporaryFileName`).
 - **Durability on Windows:** with `Durable` the temporary file's data is flushed before the
   rename. The rename itself is not forced to the disk: Windows documents no directory flush, and
   `MOVEFILE_WRITE_THROUGH` (on the fallback path) is documented only for moves done as copy and
@@ -171,6 +176,8 @@ Tests, tools and samples are not checked.
 - a replacement that goes through at once while a reader holds the file open (the reader keeps
   the old content), and two reader threads that never see a partial file while another thread
   replaces it 100 times;
+- a missing file reported at once, and on Windows after the one-second wait when a temporary file
+  is next to it;
 - long paths (over 400 characters) and names outside ASCII; a busy target on Windows (`fs.busy`
   after the retries); permission bits kept and names that are not UTF-8 in listings on Linux;
 - `fileInfo`, `listDirectory`, links (skipped on Windows without the symbolic-link privilege),
