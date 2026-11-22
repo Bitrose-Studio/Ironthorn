@@ -212,9 +212,9 @@ Each phase ends when its exit criteria pass in CI.
 
 | Phase | Content | State |
 |---|---|---|
-| P0 | Repository, build, CI, foundation module, first ADRs | **in progress** |
-| P1 | Platform, jobs, RHI (Vulkan, D3D12), render graph, reflection, serialization, assets, input | planned |
-| P2 | Editor shell following Unreal Engine workflow conventions ([ADR-0008](decisions/0008-editor-familiar-to-unreal-developers.md)): viewport, outliner, details, content browser, dockable saved layouts, remappable input with the Unreal-style default preset, undo, play-in-editor, prefabs | planned |
+| P0 | Repository, build, CI, foundation module, first ADRs | done |
+| P1 | Platform, jobs, RHI (Vulkan, D3D12), render graph, reflection, serialization, assets, input | done |
+| P2 | Editor shell following Unreal Engine workflow conventions ([ADR-0008](decisions/0008-editor-familiar-to-unreal-developers.md)): viewport, outliner, details, content browser, dockable saved layouts, remappable input with the Unreal-style default preset, undo, play-in-editor, prefabs | **next** |
 | P3 | Renderer v1 and the scalability framework | planned |
 | P4 | Game UI framework and designer | planned |
 | P5 | Gameplay core: physics, animation, audio, scripting, abilities, networking, dedicated server | planned |
