@@ -19,7 +19,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0012](0012-windowing-and-event-loop.md) | Windowing and the platform event loop | Accepted, amended by [0025](0025-job-system.md), [0027](0027-input-rules-completed.md) |
 | [0013](0013-input.md) | Input: events, state, routing and consumption | Accepted, amended by [0027](0027-input-rules-completed.md) |
 | [0014](0014-ecs-storage-and-world.md) | ECS storage and the world | Accepted, amended by [0030](0030-ecs-hooks-registration-and-immutable-components.md), [0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md), [0032](0032-entity-references-stable-ids-and-world-copy.md) |
-| [0015](0015-asset-identity-and-reimport.md) | Asset identity and non-destructive reimport | Accepted, amended by [0024](0024-asset-document-envelope-and-extension.md), [0033](0033-reflection-property-paths-and-patches.md) |
+| [0015](0015-asset-identity-and-reimport.md) | Asset identity and non-destructive reimport | Accepted, amended by [0024](0024-asset-document-envelope-and-extension.md), [0033](0033-reflection-property-paths-and-patches.md), [0034](0034-level-documents.md) |
 | [0016](0016-gameplay-model-on-the-ecs.md) | Gameplay model on the ECS | Accepted |
 | [0017](0017-runtime-and-editor-separation.md) | Runtime and editor separation | Accepted |
 | [0018](0018-reflection.md) | Reflection | Accepted, amended by [0019](0019-reflection-rules-corrected.md), [0030](0030-ecs-hooks-registration-and-immutable-components.md), [0032](0032-entity-references-stable-ids-and-world-copy.md), [0033](0033-reflection-property-paths-and-patches.md) |
@@ -28,16 +28,17 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0021](0021-rhi-device-structure-and-backend-modules.md) | RHI: device structure and backend modules | Accepted |
 | [0022](0022-gpu-minimum-features-completed.md) | GPU minimum features completed for the RHI (amends 0005) | Accepted |
 | [0023](0023-build-time-shaders-for-samples-and-tests.md) | Build-time shaders for samples and tests (amends 0011) | Accepted |
-| [0024](0024-asset-document-envelope-and-extension.md) | Asset documents: the envelope id and native asset extensions (amends 0015, 0020) | Accepted |
+| [0024](0024-asset-document-envelope-and-extension.md) | Asset documents: the envelope id and native asset extensions (amends 0015, 0020) | Accepted, amended by [0034](0034-level-documents.md) |
 | [0025](0025-job-system.md) | The job system (amends 0012) | Accepted, amended by [0026](0026-job-system-rules-corrected.md) |
 | [0026](0026-job-system-rules-corrected.md) | Job system: rules corrected after the first implementation (amends 0025) | Accepted |
 | [0027](0027-input-rules-completed.md) | Input: rules completed after the first implementation (amends 0012, 0013) | Accepted |
 | [0028](0028-render-graph-v1.md) | Render graph v1 | Accepted |
 | [0029](0029-editor-ui-toolkit.md) | Editor UI toolkit | Accepted |
 | [0030](0030-ecs-hooks-registration-and-immutable-components.md) | ECS: component hooks registration and immutable components (amends 0014, 0018) | Accepted |
-| [0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md) | ECS: hierarchy, enabled state and transform propagation completed (amends 0014) | Accepted |
-| [0032](0032-entity-references-stable-ids-and-world-copy.md) | Entity references, stable ids and world copy (amends 0014, 0018, 0020) | Accepted |
+| [0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md) | ECS: hierarchy, enabled state and transform propagation completed (amends 0014) | Accepted, amended by [0034](0034-level-documents.md) |
+| [0032](0032-entity-references-stable-ids-and-world-copy.md) | Entity references, stable ids and world copy (amends 0014, 0018, 0020) | Accepted, amended by [0034](0034-level-documents.md) |
 | [0033](0033-reflection-property-paths-and-patches.md) | Reflection property paths and patches (amends 0015, 0018, 0020) | Accepted |
+| [0034](0034-level-documents.md) | Level documents (amends 0015, 0024, 0031, 0032) | Accepted |
 
 ## Planned
 

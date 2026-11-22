@@ -1,6 +1,7 @@
 # ADR-0024: Asset documents: the envelope id and native asset extensions
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0034](0034-level-documents.md)
 - **Date:** 2026-11-21
 - **Related:** amends [ADR-0020](0020-serialization-rules-completed.md) rule 1 (text document
   layout) and [ADR-0015](0015-asset-identity-and-reimport.md) rule 2 (native assets);

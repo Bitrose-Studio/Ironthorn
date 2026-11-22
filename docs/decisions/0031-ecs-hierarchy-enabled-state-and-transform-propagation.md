@@ -1,6 +1,7 @@
 # ADR-0031: ECS: hierarchy, enabled state and transform propagation completed
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0034](0034-level-documents.md)
 - **Date:** 2026-11-22
 - **Related:** amends [ADR-0014](0014-ecs-storage-and-world.md) (ECS) rules 12–14, 19 and 20;
   [ADR-0006](0006-math-and-coordinate-conventions.md) (math, glm configuration),
