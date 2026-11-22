@@ -7,6 +7,7 @@
 // (ADR-0010) is in tests/serialization/RoundTripTests.cpp.
 
 #include "ith/reflection/TypeInfo.h"
+#include "ith/reflection/TypeOf.h"
 #include "ith/reflection/TypeRegistry.h"
 
 #include "Loadout.h"
@@ -81,6 +82,7 @@ TEST_SUITE("reflection.round_trip") {
                 CHECK_FALSE(type->equals(fieldCopy.get(), original.get()));
             }
         }
-        CHECK(structs == 9);
+        // The 9 structs of test_reflected and the math types.
+        CHECK(structs == 9 + static_cast<int>(ith::detail::kMathTypes.size()));
     }
 }

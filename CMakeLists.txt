@@ -78,4 +78,11 @@ if(IRONTHORN_BUILD_TESTS)
         COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}"
             -P "${PROJECT_SOURCE_DIR}/cmake/CheckChangelog.cmake")
     set_tests_properties(changelog_fragments PROPERTIES LABELS "lint")
+
+    # Engine code includes glm only through ith/math headers (ADR-0006 rule 2). tests/layering
+    # holds lint fixtures that exist to be refused.
+    add_test(NAME glm_includes
+        COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}" "-DSKIP=tests/layering"
+            -P "${PROJECT_SOURCE_DIR}/cmake/CheckGlmIncludes.cmake")
+    set_tests_properties(glm_includes PROPERTIES LABELS "lint")
 endif()

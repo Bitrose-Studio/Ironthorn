@@ -9,6 +9,10 @@
 // T is one of:
 // - a leaf type, described here by hand: bool, std::int8_t to std::int64_t, std::uint8_t to
 //   std::uint64_t, float, double, std::string, ith::Uuid;
+// - a math type, described here by hand as a struct (ADR-0006): ith::Vec2/3/4, IVec2/3/4,
+//   UVec2/3/4 and DVec3 with the fields x, y, z, w; ith::Quat with x, y, z, w (its storage
+//   order); ith::Mat3 and Mat4 with the columns c0 to c3; ith::Transform with translation,
+//   rotation and scale. ith::DMat4 is not reflected;
 // - a struct or class annotated with ITH_TYPE, or an enum class annotated with ITH_ENUM, whose
 //   record the ith_reflect generator writes into the owning module (a type derived from a
 //   reflected type is not reflected);
@@ -24,6 +28,8 @@
 #include "ith/foundation/Assert.h"
 #include "ith/foundation/Hash.h"
 #include "ith/foundation/Uuid.h"
+#include "ith/math/Transform.h"
+#include "ith/math/Types.h"
 #include "ith/reflection/TypeInfo.h"
 
 #include <array>
@@ -207,6 +213,90 @@ inline constexpr std::array<const TypeInfo*, 13> kLeafTypes = {
     &TypeOfImpl<std::uint16_t>::kInfo, &TypeOfImpl<std::uint32_t>::kInfo, &TypeOfImpl<std::uint64_t>::kInfo,
     &TypeOfImpl<float>::kInfo,         &TypeOfImpl<double>::kInfo,        &TypeOfImpl<std::string>::kInfo,
     &TypeOfImpl<Uuid>::kInfo,
+};
+
+// The math types (ADR-0006), described as structs whose fields are their components or columns,
+// so the archives save them field by field ({"x": 1, "y": 2, "z": 3}) without special cases.
+// glm stores the components of a vector or quaternion, and the columns of a matrix, contiguously
+// in the order x, y, z, w (checked by contiguousFields and the math tests).
+inline constexpr std::array<std::string_view, 4> kVectorFieldNames{"x", "y", "z", "w"};
+inline constexpr std::array<std::string_view, 4> kColumnFieldNames{"c0", "c1", "c2", "c3"};
+
+// Fields named `names` of type Element, laid out contiguously from offset 0.
+template <typename T, typename Element, std::size_t N>
+constexpr std::array<FieldInfo, N> contiguousFields(const std::array<std::string_view, 4>& names) noexcept {
+    static_assert(std::is_standard_layout_v<T> && sizeof(T) == N * sizeof(Element),
+                  "a math type must hold its N elements contiguously, without padding");
+    std::array<FieldInfo, N> fields{};
+    for (std::size_t index = 0; index < N; ++index) {
+        fields[index] = FieldInfo{.id = fnv1a64(names[index]),
+                                  .name = names[index],
+                                  .offset = index * sizeof(Element),
+                                  .type = &typeOf<Element>};
+    }
+    return fields;
+}
+
+template <typename T, std::size_t N>
+constexpr TypeInfo makeMathType(std::string_view name, const std::array<FieldInfo, N>& fields) noexcept {
+    TypeInfo info = makeValueType<T>(TypeKind::Struct, name, &equalValues<T>);
+    info.role = TypeRole::Struct;
+    info.fields = fields;
+    return info;
+}
+
+// clang-format off
+#define ITH_DETAIL_MATH_TYPE(cppType, typeName, fieldArray)                                                            \
+    template <>                                                                                                        \
+    struct TypeOfImpl<cppType> {                                                                                       \
+        static constexpr auto kFields = fieldArray;                                                                    \
+        static constexpr TypeInfo kInfo = makeMathType<cppType>(typeName, kFields);                                    \
+        static const TypeInfo& get() noexcept {                                                                        \
+            return kInfo;                                                                                              \
+        }                                                                                                              \
+    }
+#define ITH_DETAIL_MATH_VECTOR(cppType, typeName)                                                                      \
+    ITH_DETAIL_MATH_TYPE(cppType, typeName,                                                                            \
+                         (contiguousFields<cppType, cppType::value_type, cppType::length()>(kVectorFieldNames)))
+#define ITH_DETAIL_MATH_MATRIX(cppType, typeName)                                                                      \
+    ITH_DETAIL_MATH_TYPE(cppType, typeName,                                                                            \
+                         (contiguousFields<cppType, cppType::col_type, cppType::length()>(kColumnFieldNames)))
+// clang-format on
+
+ITH_DETAIL_MATH_VECTOR(Vec2, "ith::Vec2");
+ITH_DETAIL_MATH_VECTOR(Vec3, "ith::Vec3");
+ITH_DETAIL_MATH_VECTOR(Vec4, "ith::Vec4");
+ITH_DETAIL_MATH_VECTOR(IVec2, "ith::IVec2");
+ITH_DETAIL_MATH_VECTOR(IVec3, "ith::IVec3");
+ITH_DETAIL_MATH_VECTOR(IVec4, "ith::IVec4");
+ITH_DETAIL_MATH_VECTOR(UVec2, "ith::UVec2");
+ITH_DETAIL_MATH_VECTOR(UVec3, "ith::UVec3");
+ITH_DETAIL_MATH_VECTOR(UVec4, "ith::UVec4");
+ITH_DETAIL_MATH_VECTOR(DVec3, "ith::DVec3");
+ITH_DETAIL_MATH_VECTOR(Quat, "ith::Quat");
+ITH_DETAIL_MATH_MATRIX(Mat3, "ith::Mat3");
+ITH_DETAIL_MATH_MATRIX(Mat4, "ith::Mat4");
+
+inline constexpr std::array<FieldInfo, 3> kTransformFields{{
+    {.id = fnv1a64("translation"),
+     .name = "translation",
+     .offset = offsetof(Transform, translation),
+     .type = &typeOf<Vec3>},
+    {.id = fnv1a64("rotation"), .name = "rotation", .offset = offsetof(Transform, rotation), .type = &typeOf<Quat>},
+    {.id = fnv1a64("scale"), .name = "scale", .offset = offsetof(Transform, scale), .type = &typeOf<Vec3>},
+}};
+ITH_DETAIL_MATH_TYPE(Transform, "ith::Transform", kTransformFields);
+
+#undef ITH_DETAIL_MATH_MATRIX
+#undef ITH_DETAIL_MATH_VECTOR
+#undef ITH_DETAIL_MATH_TYPE
+
+// The math records, for registering them with a TypeRegistry.
+inline constexpr std::array<const TypeInfo*, 14> kMathTypes = {
+    &TypeOfImpl<Vec2>::kInfo,  &TypeOfImpl<Vec3>::kInfo,      &TypeOfImpl<Vec4>::kInfo,  &TypeOfImpl<IVec2>::kInfo,
+    &TypeOfImpl<IVec3>::kInfo, &TypeOfImpl<IVec4>::kInfo,     &TypeOfImpl<UVec2>::kInfo, &TypeOfImpl<UVec3>::kInfo,
+    &TypeOfImpl<UVec4>::kInfo, &TypeOfImpl<DVec3>::kInfo,     &TypeOfImpl<Quat>::kInfo,  &TypeOfImpl<Mat3>::kInfo,
+    &TypeOfImpl<Mat4>::kInfo,  &TypeOfImpl<Transform>::kInfo,
 };
 
 // Containers. Their records are built on first use, because the id depends on the element's.

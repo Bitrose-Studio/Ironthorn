@@ -15,7 +15,7 @@
 //   }
 //
 // Records are immutable static data, written by the ith_reflect generator for annotated types
-// and by hand for the few leaf types (TypeOf.h). They live for the whole program, so pointers
+// and by hand for the few leaf and math types (TypeOf.h). They live for the whole program, so pointers
 // and references to them never dangle, and reading them is thread-safe.
 // Compare records by id, never by address: the record of a container type is built once per
 // binary, so one type can have several records in a process (ADR-0019).

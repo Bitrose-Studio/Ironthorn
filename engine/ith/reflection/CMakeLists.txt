@@ -10,4 +10,5 @@ ith_add_module(reflection
         TypeRegistry.h
         TypeRegistry.cpp
     DEPENDS
-        foundation)
+        foundation
+        math)

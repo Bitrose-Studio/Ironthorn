@@ -4,6 +4,7 @@
 // own equality. Writing the read value again gives the same bytes.
 
 #include "ith/reflection/TypeInfo.h"
+#include "ith/reflection/TypeOf.h"
 #include "ith/reflection/TypeRegistry.h"
 #include "ith/serialization/BinaryArchive.h"
 #include "ith/serialization/TextArchive.h"
@@ -81,9 +82,10 @@ TEST_SUITE("serialization.round_trip") {
             enums += type->kind == ith::TypeKind::Enum ? 1 : 0;
             roundTrip(*type, seed);
         }
-        // Leaf types, 3 enums of test_reflected, 9 structs of test_reflected and 3 of test_archive.
+        // Leaf types, the math types (structs), 3 enums of test_reflected, 9 structs of
+        // test_reflected and 3 of test_archive.
         CHECK(enums == 3);
-        CHECK(structs == 12);
+        CHECK(structs == ith::detail::kMathTypes.size() + 12);
         CHECK(registry.types().size() == ith::detail::kLeafTypes.size() + enums + structs);
     }
 

@@ -11,6 +11,7 @@
 #include <doctest/doctest.h>
 
 // doctest prints std::string_view operands of failed checks through an ostream.
+#include <cstddef>
 #include <cstdint>
 #include <ostream>
 #include <set>
@@ -19,6 +20,9 @@
 ITH_DECLARE_REFLECTION_MODULE(test_reflected)
 
 namespace {
+
+// The types every new registry holds.
+constexpr std::size_t kBuiltIn = ith::detail::kLeafTypes.size() + ith::detail::kMathTypes.size();
 
 // A record that claims the name "ith::test::Health" without being that type.
 constexpr ith::TypeInfo kImpostor = ith::detail::makeValueType<std::int32_t>(ith::TypeKind::Struct, "ith::test::Health",
@@ -41,9 +45,9 @@ ith::TypeRegistry makeRegistry() {
 } // namespace
 
 TEST_SUITE("reflection.registry") {
-    TEST_CASE("a new registry holds the leaf types") {
+    TEST_CASE("a new registry holds the leaf and math types") {
         const ith::TypeRegistry registry;
-        CHECK(registry.types().size() == 13);
+        CHECK(registry.types().size() == kBuiltIn);
         CHECK(registry.find("int32") == &ith::typeOf<std::int32_t>());
         CHECK(registry.find("std::string") == &ith::typeOf<std::string>());
         CHECK(registry.find(ith::fnv1a64("ith::Uuid")) == &ith::typeOf<ith::Uuid>());
@@ -51,8 +55,8 @@ TEST_SUITE("reflection.registry") {
 
     TEST_CASE("a module's registration function adds its types in declaration order") {
         const ith::TypeRegistry registry = makeRegistry();
-        CHECK(registry.types().size() == 13 + 12);
-        CHECK(registry.types()[13] == &ith::typeOf<ith::test::DamageKind>());
+        CHECK(registry.types().size() == kBuiltIn + 12);
+        CHECK(registry.types()[kBuiltIn] == &ith::typeOf<ith::test::DamageKind>());
         CHECK(registry.types().back() == &ith::typeOf<GlobalCounter>());
     }
 
@@ -96,7 +100,7 @@ TEST_SUITE("reflection.registry") {
         REQUIRE_FALSE(added.hasValue());
         CHECK(added.error().code == "reflection.duplicate_id");
         CHECK(added.error().message.find("ith::test::Health") != std::string::npos);
-        CHECK(registry.types().size() == 13 + 12);
+        CHECK(registry.types().size() == kBuiltIn + 12);
     }
 
     TEST_CASE("a FormerName that collides with another type's id is refused") {

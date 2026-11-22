@@ -14,6 +14,7 @@ Every dependency is fetched at configure time as an archive pinned by URL and SH
 |---|---|---|---|---|
 | [doctest](https://github.com/doctest/doctest) | 2.5.3 | MIT | unit tests | no |
 | [yyjson](https://github.com/ibireme/yyjson) | 0.13.0 | MIT | JSON reading and writing for source data and config, private to the `serialization` module | yes |
+| [glm](https://github.com/g-truc/glm) | 1.0.3 | MIT (offered as "Happy Bunny" or MIT; used under MIT) | vectors, matrices and quaternions behind the `ith/math` aliases ([ADR-0006](../decisions/0006-math-and-coordinate-conventions.md)), header-only | yes (compiled in) |
 | [xxHash](https://github.com/Cyan4973/xxHash) | 0.8.4 | BSD-2-Clause (the library header; the archive's `xxhsum` tool, GPL-2.0, is not built) | XXH3-128 content hashes for derived-data cache keys, private to the `asset_database` tools module (`Hash128.cpp`) | no |
 | [SDL](https://github.com/libsdl-org/SDL) | 3.4.20 | zlib; its bundled HIDAPI is used under HIDAPI's BSD-style license (HIDAPI is offered under GPL-3, a BSD-style or its original license, at the user's choice) | windows, the event loop and the clipboard in the `platform` client module; later keyboard, mouse, gamepads, text input, cursors and file dialogs | yes |
 | [Slang](https://github.com/shader-slang/slang) | 2026.22.1 (prebuilt release) | Apache-2.0 WITH LLVM-exception | shader compilation in the `shader_compiler` tools module, and its `slangc` at build time for the shaders samples embed (`ith_embed_shaders()`) | no |
@@ -44,6 +45,14 @@ dialogs, power, joystick and HIDAPI on) are in `cmake/IronthornDependencies.cmak
 reasons in [ADR-0012](../decisions/0012-windowing-and-event-loop.md). zlib needs no notice in a
 shipped game, but games ship SDL's and HIDAPI's license texts in their third-party notices
 (`LICENSE.txt` and `src/hidapi/LICENSE-bsd.txt` in the archive).
+
+glm is header-only and its own CMake project is not used: FetchContent only unpacks the archive,
+and the `ith::glm` INTERFACE target carries its include directory (as a system include) and the
+ADR-0006 configuration defines as interface definitions, so no translation unit sees glm without
+them. Only the `math` module links it, and only files in `engine/ith/math` include it (the
+`glm_includes` test). Its `test/` and `doc/` directories are never built. Games ship its MIT
+license text (`copying.txt` in the archive) in their third-party notices. A future dependency
+that includes glm itself must be checked for a conflicting configuration ([ADR-0006](../decisions/0006-math-and-coordinate-conventions.md)).
 
 yyjson is built from its release archive as a static library and linked only by the
 `serialization` module, whose `Json.cpp` is the only file that includes it

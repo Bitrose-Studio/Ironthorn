@@ -272,7 +272,7 @@ std::optional<Image> renderTriangle(Device& device) {
 }
 
 std::optional<Image> renderCubes(Device& device, std::span<const scene_player::CubeInstance> instances,
-                                 const scene_player::Matrix& viewProjection, std::uint32_t width, std::uint32_t height,
+                                 const ith::Mat4& viewProjection, std::uint32_t width, std::uint32_t height,
                                  std::uint32_t frames = 1) {
     Expected<scene_player::Cubes, Error> cubes = scene_player::createCubes(device, kColorFormat, instances);
     if (!cubes) {
@@ -293,11 +293,12 @@ struct Projected {
     double w = 0.0;
 };
 
-Projected project(const scene_player::Matrix& m, const std::array<float, 3>& point, const Image& image) {
+Projected project(const ith::Mat4& m, const std::array<float, 3>& point, const Image& image) {
+    // In double precision: m[c][r] is the element in row r of column c.
     std::array<double, 4> clip{};
-    for (std::size_t row = 0; row < 4; ++row) {
-        clip[row] = double{m[row]} * point[0] + double{m[4 + row]} * point[1] + double{m[8 + row]} * point[2] +
-                    double{m[12 + row]};
+    for (int row = 0; row < 4; ++row) {
+        clip[static_cast<std::size_t>(row)] = double{m[0][row]} * point[0] + double{m[1][row]} * point[1] +
+                                              double{m[2][row]} * point[2] + double{m[3][row]};
     }
     return {.x = (clip[0] / clip[3] + 1.0) * 0.5 * image.width,
             .y = (1.0 - clip[1] / clip[3]) * 0.5 * image.height,
@@ -347,11 +348,11 @@ constexpr std::uint32_t kFieldCount = 10'000;
 constexpr std::uint32_t kFieldWidth = 640;
 constexpr std::uint32_t kFieldHeight = 360;
 
-scene_player::Matrix occlusionView() {
+ith::Mat4 occlusionView() {
     return scene_player::viewProjection({.eye = {0.0f, 0.0f, 5.0f}, .target = {0.0f, 0.0f, 0.0f}}, 1.0f);
 }
 
-scene_player::Matrix fieldView() {
+ith::Mat4 fieldView() {
     return scene_player::viewProjection(scene_player::fieldCamera(0.0),
                                         static_cast<float>(kFieldWidth) / static_cast<float>(kFieldHeight));
 }
@@ -396,7 +397,7 @@ void checkTriangle(const Image& image) {
 // The near red cube hides the far green one where both are, although it is drawn first: the
 // depth test works, reversed. The green cube shows around it, and the clear color outside both.
 void checkOcclusion(const Image& image) {
-    const scene_player::Matrix view = occlusionView();
+    const ith::Mat4 view = occlusionView();
     const Projected center = project(view, {0.0f, 0.0f, 0.5f}, image);
     const std::array<int, 4> red = texelAt(image, center);
     CAPTURE(red);
@@ -417,7 +418,7 @@ void checkField(const Image& image) {
     CHECK(similar(image.texel(image.width - 1, 0), clear, 1));
 
     const std::vector<scene_player::CubeInstance> field = scene_player::cubeField(kFieldCount);
-    const scene_player::Matrix view = fieldView();
+    const ith::Mat4 view = fieldView();
     std::vector<std::pair<Projected, std::size_t>> visible;
     for (std::size_t i = 0; i < field.size(); ++i) {
         const Projected center = project(view, field[i].position, image);

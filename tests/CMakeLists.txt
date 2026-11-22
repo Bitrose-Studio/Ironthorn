@@ -205,7 +205,7 @@ endif()
 if(TARGET scene_player)
     ith_add_test_suite(scene_player
         SOURCES scene_player/SceneTests.cpp "${PROJECT_SOURCE_DIR}/samples/scene_player/Scenes.cpp"
-        LIBRARIES ith::rhi ith::rhi_select ith::render_graph
+        LIBRARIES ith::math ith::rhi ith::rhi_select ith::render_graph
         LABELS gpu)
     target_include_directories(ith_scene_player_tests PRIVATE "${PROJECT_SOURCE_DIR}/samples/scene_player")
     ith_scene_player_shaders(ith_scene_player_tests)
@@ -334,6 +334,31 @@ ith_add_test_suite(reflection
         reflection/TypeRegistryTests.cpp
     LIBRARIES ith_test_reflected)
 
+# A reflected test component with math fields, generated like an engine module's records.
+add_library(ith_test_math_reflected STATIC)
+target_include_directories(ith_test_math_reflected PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/math")
+target_link_libraries(ith_test_math_reflected
+    PUBLIC ith::build_options ith::reflection
+    PRIVATE ith::runtime_options)
+set_target_properties(ith_test_math_reflected PROPERTIES
+    FOLDER "Ironthorn/Tests"
+    COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+ith_reflect_target(ith_test_math_reflected
+    MODULE test_math
+    KIND runtime
+    INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/math"
+    HEADERS math/MathComponents.h)
+
+# Math (ADR-0006): the conventions pinned (glm's configuration, axes, matrix layout and order,
+# quaternions, projections), bounds, frustums and rays, and the math types in reflection, the
+# archives and the ECS.
+ith_add_test_suite(math
+    SOURCES
+        math/ConventionTests.cpp
+        math/GeometryTests.cpp
+        math/ReflectionTests.cpp
+    LIBRARIES ith::math ith::ecs ith::serialization ith_test_math_reflected)
+
 # Reflected types for the serialization tests: a runtime module and an editor module, the only
 # kind that may use EditorOnly.
 add_library(ith_test_archive STATIC)
@@ -442,6 +467,15 @@ function(ith_add_layering_failure_test name)
         LABELS "lint"
         PASS_REGULAR_EXPRESSION "${arg_EXPECT}")
 endfunction()
+
+# The glm_includes check must refuse a direct glm include outside engine/ith/math (ADR-0006 rule
+# 2); the fixture includes glm and is never compiled.
+add_test(NAME glm_includes_refuses_direct_include
+    COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}" "-DDIRECTORIES=tests/layering"
+        -P "${PROJECT_SOURCE_DIR}/cmake/CheckGlmIncludes.cmake")
+set_tests_properties(glm_includes_refuses_direct_include PROPERTIES
+    LABELS "lint"
+    PASS_REGULAR_EXPRESSION "tests/layering/IncludesGlm.cpp includes \"glm/glm.hpp\".*tests/layering/IncludesGlm.cpp includes <glm/vec3.hpp>")
 
 ith_add_layering_failure_test(upward_layer
     MODULES "low:core:runtime=high|high:framework:runtime="

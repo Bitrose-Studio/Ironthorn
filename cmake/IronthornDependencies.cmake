@@ -66,6 +66,29 @@ ith_dependency_option(YYJSON_READER_DEPTH_LIMIT 64)
 ith_dependency_option(YYJSON_WRITER_DEPTH_LIMIT 64)
 FetchContent_MakeAvailable(yyjson)
 
+# --- glm: vectors, matrices and quaternions (MIT) ------------------------------------------
+# Header only, behind the math module's aliases (ADR-0006). glm's own CMakeLists.txt is not used:
+# it sets directory-wide compile options and builds a static library of every header. Its util/
+# directory has no CMakeLists.txt, so as SOURCE_SUBDIR it makes FetchContent only unpack the
+# archive. The configuration defines are interface definitions of ith::glm, so every translation
+# unit that can include glm sees the same configuration (ADR-0006 rule 3). Never add a SIMD or
+# alignment define (GLM_FORCE_INTRINSICS, GLM_FORCE_SSE*, GLM_FORCE_AVX*,
+# GLM_FORCE_DEFAULT_ALIGNED_GENTYPES): each changes layout or constexpr-ness. Only the math module
+# links ith::glm, and only its files include glm (the glm_includes test).
+ith_declare_dependency(glm
+    URL https://github.com/g-truc/glm/archive/refs/tags/1.0.3.tar.gz
+    SHA256 6775e47231a446fd086d660ecc18bcd076531cfedd912fbd66e576b118607001
+    SOURCE_SUBDIR util)
+FetchContent_MakeAvailable(glm)
+add_library(ith_glm INTERFACE)
+add_library(ith::glm ALIAS ith_glm)
+target_include_directories(ith_glm SYSTEM INTERFACE "${glm_SOURCE_DIR}")
+target_compile_definitions(ith_glm INTERFACE
+    GLM_FORCE_DEPTH_ZERO_TO_ONE
+    GLM_FORCE_CTOR_INIT
+    GLM_FORCE_XYZW_ONLY
+    GLM_FORCE_QUAT_DATA_XYZW)
+
 # --- xxHash: 128-bit content hashes for the derived-data cache (BSD-2-Clause) -------------
 # Header only and private to asset_database (ADR-0015 rule 11): Hash128.cpp includes xxhash.h
 # with XXH_INLINE_ALL, so no library is built. The archive has no top-level CMakeLists.txt, so

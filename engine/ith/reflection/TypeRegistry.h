@@ -4,12 +4,12 @@
 //
 //   ITH_DECLARE_REFLECTION_MODULE(gameplay) // the function ith_reflect generates for a module
 //
-//   ith::TypeRegistry registry;                         // holds the leaf types already
+//   ith::TypeRegistry registry;                         // holds the leaf and math types already
 //   ith::generated::registerReflection_gameplay(registry); // at startup, once per module
 //   const ith::TypeInfo* health = registry.find("game::Health");
 //
 // The registry holds pointers to the static records of the generated files and of the leaf
-// types; it owns no records. Each module's generated registration function adds its types;
+// and math types; it owns no records. Each module's generated registration function adds its types;
 // applications call these functions explicitly at startup (ADR-0017 rule 5), since static
 // initializers are dropped from static libraries. A FormerName registers the old name and id
 // as aliases, so data written under the old name still finds the type.
@@ -34,7 +34,7 @@ namespace ith {
 class TypeRegistry {
 public:
     // A registry that holds the leaf types (bool, the integers, float, double, std::string,
-    // ith::Uuid).
+    // ith::Uuid), then the math types (ith::Vec3, ith::Quat, ith::Mat4, ...; TypeOf.h).
     TypeRegistry();
 
     // Adds a named type: a leaf, an ITH_TYPE struct or an ITH_ENUM enum. The record must have
@@ -55,7 +55,7 @@ public:
     // The type with this fully qualified name or FormerName; null when there is none.
     [[nodiscard]] const TypeInfo* find(std::string_view name) const noexcept;
 
-    // Every registered type in registration order, leaf types first.
+    // Every registered type in registration order: leaf types, math types, then the added ones.
     [[nodiscard]] std::span<const TypeInfo* const> types() const noexcept { return m_types; }
 
 private:

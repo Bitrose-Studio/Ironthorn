@@ -71,11 +71,14 @@ ITH_ENUM(DamageKind, Tooltip = "How damage is dealt")
 
 - `bool`, `std::int8_t` to `std::int64_t`, `std::uint8_t` to `std::uint64_t`, `float`,
   `double`, `std::string` and `ith::Uuid`;
+- the math types `ith::Vec2/3/4`, `IVec2/3/4`, `UVec2/3/4`, `DVec3`, `Quat`, `Mat3`, `Mat4` and
+  `Transform`, described by hand as structs of their components (`x, y, z, w`), columns
+  (`c0` to `c3`) or parts ([math guide](math.md#layout-reflection-the-ecs-and-the-gpu));
 - reflected enums and reflected structs (composition);
 - `std::array<T, N>`, `std::vector<T>` and `std::optional<T>` of these.
 
-Any other field type is a compile error in the generated file. Handles, asset references,
-gameplay tags and math types join the list as those modules arrive.
+Any other field type is a compile error in the generated file. Handles, asset references and
+gameplay tags join the list as those modules arrive.
 
 ### Syntax rules
 
@@ -149,7 +152,7 @@ compile out the human-facing text: `Category`, `DisplayName`, `Tooltip` and `Met
 
 ITH_DECLARE_REFLECTION_MODULE(gameplay)
 
-ith::TypeRegistry registry;                          // holds the leaf types
+ith::TypeRegistry registry;                          // holds the leaf and math types
 ith::generated::registerReflection_gameplay(registry); // once per module, at startup
 
 const ith::TypeInfo& health = ith::typeOf<game::Health>();

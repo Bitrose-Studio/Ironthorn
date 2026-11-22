@@ -19,6 +19,7 @@
 // thread); draw() records into a list on any thread, as a render graph pass's execute callable.
 
 #include "ith/foundation/Expected.h"
+#include "ith/math/Types.h"
 #include "ith/rhi/CommandList.h"
 #include "ith/rhi/Device.h"
 #include "ith/rhi/Error.h"
@@ -36,23 +37,20 @@ namespace scene_player {
 // it to 0, nearer is greater.
 inline constexpr ith::rhi::Format kDepthFormat = ith::rhi::Format::D32Float;
 
-// A column-major 4x4 matrix: element (row, column) is at [column * 4 + row].
-using Matrix = std::array<float, 16>;
-
 // A camera of the engine's right-handed space (ADR-0006: +Y up, -Z forward).
 struct Camera {
-    std::array<float, 3> eye{0.0f, 0.0f, 0.0f};
-    std::array<float, 3> target{0.0f, 0.0f, -1.0f};
+    ith::Vec3 eye{0.0f, 0.0f, 0.0f};
+    ith::Vec3 target{0.0f, 0.0f, -1.0f};
     // Vertical field of view in radians, and the near plane's distance; positive.
     float verticalFov = 0.785398f;
     float nearPlane = 0.1f;
 };
 
-// World space to clip space for a camera and an aspect ratio (width / height, positive): a
-// perspective projection with reversed depth and no far plane (depth 1 at the near plane, 0 at
-// infinity), in Direct3D's clip space, which the Vulkan backend shares by flipping its viewport.
+// World space to clip space for a camera and an aspect ratio (width / height, positive):
+// ith::perspectiveReversedInfinite (depth 1 at the near plane, 0 at infinity) times glm::lookAt,
+// in the engine's clip space, which the Vulkan backend shares by flipping its viewport.
 // Precondition: the eye differs from the target, and they are not on one vertical line.
-[[nodiscard]] Matrix viewProjection(const Camera& camera, float aspect);
+[[nodiscard]] ith::Mat4 viewProjection(const Camera& camera, float aspect);
 
 // One cube, as Cubes.slang reads it: 32 bytes.
 struct CubeInstance {
@@ -114,7 +112,7 @@ ith::Expected<Cubes, ith::rhi::Error> createCubes(ith::rhi::Device& device, ith:
 // given. Precondition: the list is rendering to one color target of the pipeline's format and a
 // kDepthFormat depth buffer.
 void draw(ith::rhi::CommandList& list, const ith::rhi::Device& device, const Cubes& cubes,
-          const Matrix& viewProjection);
+          const ith::Mat4& viewProjection);
 
 // Destroys the cubes' objects (deferred; null handles are skipped).
 void destroy(ith::rhi::Device& device, const Cubes& cubes);

@@ -186,8 +186,7 @@ bool render(Renderer& renderer, ith::rg::RenderGraph& graph, ith::rg::ResourcePo
     const Frame& current = **frame;
     const bool cubes = renderer.kind == SceneKind::Cubes;
     const float aspect = static_cast<float>(current.width) / static_cast<float>(current.height);
-    const scene_player::Matrix viewProjection =
-        scene_player::viewProjection(scene_player::fieldCamera(seconds), aspect);
+    const ith::Mat4 viewProjection = scene_player::viewProjection(scene_player::fieldCamera(seconds), aspect);
 
     graph.reset();
     const rg::Texture backbuffer = graph.importBackbuffer(current);

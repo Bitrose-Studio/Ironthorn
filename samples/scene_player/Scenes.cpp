@@ -1,6 +1,7 @@
 #include "Scenes.h"
 
 #include "ith/foundation/Assert.h"
+#include "ith/math/Math.h"
 #include "ith/rhi/Capabilities.h"
 #include "ith/rhi/Pipeline.h"
 #include "ith/rhi/Resources.h"
@@ -68,7 +69,7 @@ struct TriangleConstants {
 };
 
 struct CubeConstants {
-    Matrix viewProjection{};
+    ith::Mat4 viewProjection;
     std::uint32_t vertices = 0;
     std::uint32_t instances = 0;
 };
@@ -81,28 +82,11 @@ struct TriangleVertex {
 };
 
 struct CubeVertex {
-    std::array<float, 3> position;
-    std::array<float, 3> normal;
+    ith::Vec3 position;
+    ith::Vec3 normal;
 };
 
-using Vector = std::array<float, 3>;
-
-Vector subtract(const Vector& a, const Vector& b) {
-    return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
-}
-
-Vector cross(const Vector& a, const Vector& b) {
-    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
-}
-
-float dot(const Vector& a, const Vector& b) {
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-Vector normalize(const Vector& v) {
-    const float length = std::sqrt(dot(v, v));
-    return {v[0] / length, v[1] / length, v[2] / length};
-}
+static_assert(sizeof(CubeVertex) == 24, "Cubes.slang reads vertices of 24 bytes");
 
 // A buffer filled with `data`, in Upload memory.
 template <typename T>
@@ -121,7 +105,7 @@ ith::Expected<BufferHandle, Error> upload(Device& device, std::span<const T> dat
 void makeCube(std::vector<CubeVertex>& vertices, std::vector<std::uint16_t>& indices) {
     // Each face's normal and one axis across the face; the other axis is normal x axis, so that
     // axis x other = normal and the corners below run counter-clockwise.
-    constexpr std::array<std::pair<Vector, Vector>, 6> kFaces{{
+    constexpr std::array<std::pair<ith::Vec3, ith::Vec3>, 6> kFaces{{
         {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
         {{-1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
         {{0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
@@ -132,13 +116,10 @@ void makeCube(std::vector<CubeVertex>& vertices, std::vector<std::uint16_t>& ind
     constexpr std::array<std::array<float, 2>, 4> kCorners{
         {{-1.0f, -1.0f}, {1.0f, -1.0f}, {1.0f, 1.0f}, {-1.0f, 1.0f}}};
     for (const auto& [normal, axis] : kFaces) {
-        const Vector other = cross(normal, axis);
+        const ith::Vec3 other = glm::cross(normal, axis);
         const auto first = static_cast<std::uint16_t>(vertices.size());
         for (const auto& [u, v] : kCorners) {
-            vertices.push_back({.position = {0.5f * (normal[0] + u * axis[0] + v * other[0]),
-                                             0.5f * (normal[1] + u * axis[1] + v * other[1]),
-                                             0.5f * (normal[2] + u * axis[2] + v * other[2])},
-                                .normal = normal});
+            vertices.push_back({.position = 0.5f * (normal + u * axis + v * other), .normal = normal});
         }
         constexpr std::array<std::uint16_t, 6> kTriangles{0, 1, 2, 0, 2, 3};
         for (const std::uint16_t corner : kTriangles) {
@@ -164,28 +145,11 @@ float unit(std::uint32_t bits, float low) {
 
 } // namespace
 
-Matrix viewProjection(const Camera& camera, float aspect) {
-    ITH_ASSERT(aspect > 0.0f && camera.verticalFov > 0.0f && camera.nearPlane > 0.0f);
-    const Vector forward = normalize(subtract(camera.target, camera.eye));
-    const Vector across = cross(forward, Vector{0.0f, 1.0f, 0.0f});
-    ITH_ASSERT_MSG(dot(across, across) > 1e-12f, "the camera looks straight up or down, or its eye is its target");
-    const Vector side = normalize(across);
-    const Vector up = cross(side, forward);
-    const float f = 1.0f / std::tan(camera.verticalFov * 0.5f);
-    // With the eye at the origin: clip x = f / aspect * side, clip y = f * up, clip z = near and
-    // clip w = the distance along forward, so depth = near / distance.
-    const float sx = f / aspect;
-    Matrix m{};
-    for (std::size_t column = 0; column < 3; ++column) {
-        m[column * 4 + 0] = sx * side[column];
-        m[column * 4 + 1] = f * up[column];
-        m[column * 4 + 3] = forward[column];
-    }
-    m[12] = -sx * dot(side, camera.eye);
-    m[13] = -f * dot(up, camera.eye);
-    m[14] = camera.nearPlane;
-    m[15] = -dot(forward, camera.eye);
-    return m;
+ith::Mat4 viewProjection(const Camera& camera, float aspect) {
+    ITH_ASSERT_MSG(glm::length(glm::cross(glm::normalize(camera.target - camera.eye), ith::kWorldUp)) > 1e-6f,
+                   "the camera looks straight up or down, or its eye is its target");
+    return ith::perspectiveReversedInfinite(camera.verticalFov, aspect, camera.nearPlane) *
+           glm::lookAt(camera.eye, camera.target, ith::kWorldUp);
 }
 
 std::vector<CubeInstance> cubeField(std::uint32_t count) {
@@ -308,7 +272,7 @@ ith::Expected<Cubes, Error> createCubes(Device& device, Format colorFormat, std:
     return cubes;
 }
 
-void draw(CommandList& list, const Device& device, const Cubes& cubes, const Matrix& viewProjection) {
+void draw(CommandList& list, const Device& device, const Cubes& cubes, const ith::Mat4& viewProjection) {
     constexpr std::uint32_t kCubeIndices = 36;
     list.setPipeline(cubes.pipeline);
     list.setIndexBuffer(cubes.indices, 0, IndexFormat::Uint16);

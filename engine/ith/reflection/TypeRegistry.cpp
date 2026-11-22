@@ -27,6 +27,7 @@ std::string hexId(std::uint64_t id) {
 
 TypeRegistry::TypeRegistry() {
     addAll(detail::kLeafTypes);
+    addAll(detail::kMathTypes);
 }
 
 Expected<void> TypeRegistry::add(const TypeInfo& type) {
