@@ -68,8 +68,9 @@ struct DirectoryEntry {
 
 // How hard writeFileAtomic() works to keep the new content through a power loss.
 enum class Durability : std::uint8_t {
-    // The data, the rename and (on POSIX) the directory entries are flushed to the disk before the
-    // call returns. For documents the user made: levels, sidecars, settings.
+    // The data is flushed to the disk before the rename. On POSIX the rename and the directory
+    // entries are flushed too; Windows documents no way to force the rename itself to the disk
+    // (ADR-0036). For documents the user made: levels, sidecars, settings.
     Durable,
     // Readers still see the old or the new file, never a partial one, but nothing is flushed, so a
     // power loss can lose the latest write. For data that can be rebuilt, such as cache entries.
