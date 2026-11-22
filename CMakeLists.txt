@@ -3,10 +3,10 @@ cmake_minimum_required(VERSION 3.28)
 # The engine version (SemVer). main always carries the next version with the "-dev" suffix;
 # a release commit removes the suffix (ADR-0002).
 project(Ironthorn
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "Ironthorn - a modular 3D-first game engine"
     LANGUAGES C CXX)
-set(IRONTHORN_VERSION_SUFFIX "")
+set(IRONTHORN_VERSION_SUFFIX "-dev")
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
     message(FATAL_ERROR "In-source builds are not supported. Use a preset: cmake --preset <name>")
