@@ -37,10 +37,11 @@ else()
     endif()
 endif()
 
-# Editor modules may depend on every kind, so the editor is built only with the client and tools,
-# the shader compiler included.
-if(IRONTHORN_BUILD_EDITOR AND NOT (IRONTHORN_BUILD_CLIENT AND ITH_BUILD_SHADER_COMPILER))
-    message(STATUS "The client modules or the shader compiler are off: building without the editor (IRONTHORN_BUILD_EDITOR=OFF).")
+# Editor modules may depend on every kind, so they are built only with the client and tools. The
+# editor application also needs the shader compiler, which sanitizer builds leave out; its modules
+# don't, so editor_core and its headless tests are still built and checked there (ADR-0029 rule 19).
+if(IRONTHORN_BUILD_EDITOR AND NOT (IRONTHORN_BUILD_CLIENT AND IRONTHORN_BUILD_TOOLS))
+    message(STATUS "The client or tools modules are off: building without the editor (IRONTHORN_BUILD_EDITOR=OFF).")
     set(IRONTHORN_BUILD_EDITOR OFF)
 endif()
 

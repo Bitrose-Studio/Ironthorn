@@ -797,3 +797,30 @@ set_target_properties(ith_jobs_benchmark PROPERTIES
     COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
 add_test(NAME jobs_benchmark COMMAND ith_jobs_benchmark)
 set_tests_properties(jobs_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
+
+# The editor's core (ADR-0037): commands, transactions and undo, selection and the model test,
+# headless. Built wherever the editor modules are, sanitizer builds included (ADR-0029 rule 19).
+if(TARGET ith_editor_core)
+    add_library(ith_test_editor_core_components STATIC)
+    target_include_directories(ith_test_editor_core_components PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/editor_core")
+    target_link_libraries(ith_test_editor_core_components
+        PUBLIC ith::build_options ith::reflection
+        PRIVATE ith::runtime_options)
+    set_target_properties(ith_test_editor_core_components PROPERTIES
+        FOLDER "Ironthorn/Tests"
+        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    ith_reflect_target(ith_test_editor_core_components
+        MODULE test_editor_core
+        KIND runtime
+        INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/editor_core"
+        HEADERS editor_core/EditorCoreComponents.h)
+
+    ith_add_test_suite(editor_core
+        SOURCES
+            editor_core/EditCommandTests.cpp
+            editor_core/EditorCoreComponents.h
+            editor_core/EditorTestSupport.h
+            editor_core/ModelTests.cpp
+            editor_core/TransactionTests.cpp
+        LIBRARIES ith::editor_core ith_test_editor_core_components)
+endif()

@@ -172,10 +172,12 @@ tests still build and run in `Release`, so `verify` covers them in every configu
 samples `minimal_player`, `window_player`, `scene_player` (built only with the shader compiler,
 whose `slangc` compiles its shaders) and `minimal_server` (`samples/`) are the applications today.
 
-Sanitizer builds leave out the shader compiler, and with it the editor, so `editor` modules get no
-sanitizer coverage. That needs a follow-up when the first editor module lands. The same goes for
-`scene_player` and its GPU test, which need the shader compiler's `slangc`: their code
-(`samples/scene_player/Scenes.cpp`) gets no sanitizer coverage either.
+Sanitizer builds leave out the shader compiler. The `editor` modules don't need it, so they and their
+headless tests (`editor_core`) are built and run under ASan, UBSan and TSan too
+([ADR-0029](../decisions/0029-editor-ui-toolkit.md) rule 19); the editor application, which compiles its
+shaders at start-up, needs the shader compiler and will be left out there. `scene_player` and its
+GPU test need the shader compiler's `slangc`, so their code (`samples/scene_player/Scenes.cpp`) gets
+no sanitizer coverage.
 
 Each application is meant to call the registration function of every module it links, from a
 source file generated out of its module list (ADR-0017 rule 5). That is deferred until the first
