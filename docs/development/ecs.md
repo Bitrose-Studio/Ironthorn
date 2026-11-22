@@ -2,9 +2,9 @@
 
 The `ecs` module stores the game world as entities with components, in archetype tables. The
 design is [ADR-0014](../decisions/0014-ecs-storage-and-world.md); this page shows how to use what
-exists today, which is the ADR's first slice: entities, archetype tables, typed queries and `has`.
-Deferred commands, the schedule, resources, dynamic queries, hooks, the hierarchy and change
-detection follow in later slices.
+exists today, which is the ADR's first two slices: entities, archetype tables, typed queries and
+`has`; then component access and queries by reflection record, and resources. Deferred commands,
+the schedule, hooks, the hierarchy and change detection follow in later slices.
 
 ## Components
 
@@ -121,6 +121,103 @@ world.query<const game::Position>().forEach([](ith::Entity entity, const game::P
 - **No structural changes inside `forEach`.** They assert and are refused. Collect the entities
   and change them after the loop; deferred commands come with the schedule.
 
+## Access by type record
+
+The editor, serialization and the visual-script VM know component types only at run time, as
+reflection records (`const ith::TypeInfo&`, for example from `TypeRegistry::find(id)`). The world
+takes them in place of a C++ type:
+
+```cpp
+const ith::TypeInfo& health = *typeRegistry.find("game::Health");
+
+if (world.has(ship, health)) { ... }
+void* value = world.get(ship, health);   // null when the entity has none
+void* added = world.add(ship, health);   // default-constructed; replaces an existing value
+world.remove(ship, health);
+
+world.forEachComponent(ship, [](const ith::TypeInfo& type, void* value) {
+    // every component of the entity, with its record
+});
+```
+
+- These behave like the typed functions: the same stale-handle rules, the same refusal while a
+  query iterates, and the same pointer lifetime.
+- The record must be a reflected struct with the `Component` role; anything else asserts and the
+  call fails as for a stale handle. A record of the same type from another binary works: the
+  component id is the record's type id.
+- `add` builds the value with the record's default constructor. Write fields through the pointer
+  afterwards (the serializer reads into it).
+- `forEachComponent` visits in an unspecified order, stable while the entity's set of types stays
+  the same. Sort by `type.id` or `type.name` where a fixed order matters, such as in saved files.
+- Each call looks the type up in the process-wide component table under a mutex. Typed access
+  doesn't; prefer it in systems.
+
+### Dynamic queries
+
+```cpp
+#include "ith/ecs/DynamicQuery.h" // included by World.h
+
+const std::array terms{
+    ith::QueryTerm{.type = &position, .access = ith::Access::Write},
+    ith::QueryTerm{.type = &velocity, .access = ith::Access::Read},
+};
+ith::DynamicQuery query = world.dynamicQuery(terms);
+query.forEach([](ith::Entity entity, std::span<void* const> components) {
+    // components[0] is the Position, components[1] the Velocity
+});
+```
+
+- A dynamic query matches archetypes with the same code as a typed query and visits the same
+  entities in the same order.
+- **A query without terms visits every entity**, which is how a level is saved.
+- Each term declares read or write access. The schedule and change detection will use it; don't
+  write through a read term's pointer.
+- A null type, a type that isn't a component, or a type named twice asserts, and the query then
+  visits nothing.
+- The query keeps its own cache of matching archetypes. Keep the `DynamicQuery` object to reuse
+  it; it's valid while the world lives.
+- Structural changes inside `forEach` are refused, as for typed queries.
+
+## Resources
+
+Resources are typed singletons of a world: time, input state, match rules, settings. A resource
+type is a reflected struct with the `Resource` role:
+
+```cpp
+struct MatchRules {
+    ITH_TYPE(Resource)
+    ITH_FIELD()
+    std::int32_t scoreLimit = 10;
+};
+
+world.insertResource(MatchRules{.scoreLimit = 20}); // inserts or replaces
+if (MatchRules* rules = world.resource<MatchRules>()) {
+    rules->scoreLimit += 5;
+}
+world.removeResource<MatchRules>();
+
+// By record, for tools: insertResource(type) default-constructs.
+void* value = world.insertResource(rulesType);
+```
+
+| Call | Result |
+|---|---|
+| `insertResource(value)` | Stores the value, replacing the current one; returns the stored value |
+| `resource<T>()` | The world's `T`, or null; `resource<const T>()` for read-only access |
+| `removeResource<T>()` | Destroys the resource; `false` when there is none |
+| `insertResource(type)`, `resource(type)`, `removeResource(type)` | The same by reflection record |
+| `resourceCount()` | The number of resources |
+
+- **A resource keeps its address** until it is removed or the world is destroyed, also when
+  `insertResource` replaces its value.
+- Resources are not entities: inserting and removing them is not a structural change, so it's
+  allowed inside a query. `clear()` keeps them.
+- Each world has its own resources. Resources that live across worlds (ADR-0016's app scope)
+  belong to the application, not to a world.
+- Using a type without the `Resource` role asserts, and nothing is stored.
+- Systems will declare their resource access like their component access when the schedule
+  arrives.
+
 ## How storage works
 
 - Entities with the same set of component types share an **archetype**: one table with a column
@@ -155,6 +252,16 @@ with the targets from ADR-0014 (5.1 ms and 0.34 ms). Record results with the mac
 
 ## Tests
 
-`tests/ecs` holds the unit tests (`WorldTests.cpp`) and a randomized model test
-(`ModelTests.cpp`) that runs thousands of random operations against a simple reference model and
-checks every handle, value and query result.
+`tests/ecs` holds:
+
+- the unit tests: `WorldTests.cpp`, `DynamicAccessTests.cpp` (access and queries by record) and
+  `ResourceTests.cpp`;
+- a randomized model test (`ModelTests.cpp`) that runs thousands of random operations, typed and
+  by record, against a simple reference model and checks every handle, value, resource and query
+  result;
+- `ConcurrencyTests.cpp`: worlds and component types created from several threads, worlds built
+  by record in parallel jobs, and a world handed from job to job. CI runs it under
+  ThreadSanitizer;
+- `DynamicAccessFuzz.cpp`: a libFuzzer target (`ith_ecs_dynamic_fuzz`) that reads its input as
+  operations on the record-based paths and checks them against a model. It is built in the Clang
+  sanitizer builds, and CTest runs a short smoke run (label `fuzz`).

@@ -64,8 +64,9 @@ World::World() : m_id(acquireWorldId()) {
 
 World::~World() {
     ITH_ASSERT_MSG(m_iterationDepth == 0, "ecs: a World destroyed while a query iterates it");
-    // The archetypes destroy their values.
+    // The archetypes destroy their values, then the resources go.
     m_archetypes.clear();
+    m_resources.clear();
     releaseWorldId(m_id);
 }
 
@@ -262,19 +263,139 @@ detail::QueryState& World::queryState(std::size_t slot, std::span<const detail::
     std::unique_ptr<detail::QueryState>& state = m_queries[slot];
     if (state == nullptr) {
         state = std::make_unique<detail::QueryState>();
-        state->terms.assign(terms.begin(), terms.end());
-        for (const detail::ComponentIndex term : terms) {
-            if (term == detail::kNoComponent) {
-                state->matchesNothing = true; // registering the type asserted
-            } else {
-                state->required.set(term);
-            }
-        }
+        detail::initQueryState(*state, terms);
     }
     return *state;
 }
 
+bool World::has(Entity entity, const TypeInfo& type) const {
+    const detail::ComponentIndex index = detail::registerComponentType(type);
+    const EntityRecord* record = findRecord(entity);
+    return record != nullptr && m_archetypes[record->archetype]->has(index);
+}
+
+void* World::get(Entity entity, const TypeInfo& type) {
+    return findComponent(entity, detail::registerComponentType(type));
+}
+
+const void* World::get(Entity entity, const TypeInfo& type) const {
+    return findComponent(entity, detail::registerComponentType(type));
+}
+
+void* World::add(Entity entity, const TypeInfo& type) {
+    const detail::ComponentIndex index = detail::registerComponentType(type);
+    void* memory = prepareAdd(entity, index);
+    if (memory != nullptr) {
+        // The registered record builds the value, as it destroys it later.
+        detail::componentType(index).construct(memory);
+    }
+    return memory;
+}
+
+bool World::remove(Entity entity, const TypeInfo& type) {
+    return removeComponent(entity, detail::registerComponentType(type));
+}
+
+DynamicQuery World::dynamicQuery(std::span<const QueryTerm> terms) {
+    DynamicQuery query(terms, m_archetypes, m_iterationDepth);
+    std::vector<detail::ComponentIndex> indices;
+    indices.reserve(terms.size());
+    for (const QueryTerm& term : terms) {
+        ITH_ASSERT_MSG(term.type != nullptr, "ecs: a dynamic query term without a type");
+        indices.push_back(term.type != nullptr ? detail::registerComponentType(*term.type) : detail::kNoComponent);
+    }
+    detail::initQueryState(query.m_state, indices);
+    return query;
+}
+
+DynamicQuery::DynamicQuery(std::span<const QueryTerm> terms,
+                           std::vector<std::unique_ptr<detail::Archetype>>& archetypes, std::uint32_t& iterationDepth)
+    : m_terms(terms.begin(), terms.end()), m_archetypes(&archetypes), m_iterationDepth(&iterationDepth) {}
+
+namespace {
+
+bool isResourceType(const TypeInfo& type) noexcept {
+    const bool isResource = type.kind == TypeKind::Struct && type.role == TypeRole::Resource;
+    ITH_ASSERT_MSG(isResource, "ecs: a resource type must be a reflected struct with ITH_TYPE(Resource)");
+    return isResource;
+}
+
+} // namespace
+
+void* World::prepareResource(const TypeInfo& type) {
+    if (!isResourceType(type)) {
+        return nullptr;
+    }
+    if (const auto found = m_resources.find(type.id); found != m_resources.end()) {
+        const TypeInfo& known = *found->second.get_deleter().type;
+        if (known.name != type.name || known.size != type.size || known.alignment != type.alignment) {
+            ITH_FATAL("ecs: two resource types with the same id but a different name or layout");
+        }
+        // The value is replaced in place, so the resource keeps its address.
+        std::byte* memory = found->second.get();
+        known.destroy(memory);
+        return memory;
+    }
+    std::unique_ptr<std::byte, detail::ResourceDelete> memory(
+        static_cast<std::byte*>(::operator new(type.size, std::align_val_t(type.alignment))),
+        detail::ResourceDelete{&type});
+    std::byte* value = memory.get();
+    m_resources.emplace(type.id, std::move(memory));
+    return value;
+}
+
+void* World::findResource(const TypeInfo& type) const noexcept {
+    if (!isResourceType(type)) {
+        return nullptr;
+    }
+    const auto found = m_resources.find(type.id);
+    return found != m_resources.end() ? found->second.get() : nullptr;
+}
+
+void* World::insertResource(const TypeInfo& type) {
+    void* memory = prepareResource(type);
+    if (memory != nullptr) {
+        // The stored record destroys the value later, so it builds it too.
+        m_resources.find(type.id)->second.get_deleter().type->construct(memory);
+    }
+    return memory;
+}
+
+void* World::resource(const TypeInfo& type) {
+    return findResource(type);
+}
+
+const void* World::resource(const TypeInfo& type) const {
+    return findResource(type);
+}
+
+bool World::removeResource(const TypeInfo& type) {
+    if (!isResourceType(type)) {
+        return false;
+    }
+    return m_resources.erase(type.id) == 1;
+}
+
 namespace detail {
+
+void ResourceDelete::operator()(std::byte* memory) const noexcept {
+    type->destroy(memory);
+    ::operator delete(memory, std::align_val_t(type->alignment));
+}
+
+void initQueryState(QueryState& state, std::span<const ComponentIndex> terms) {
+    state.terms.assign(terms.begin(), terms.end());
+    for (const ComponentIndex term : terms) {
+        if (term == kNoComponent) {
+            state.matchesNothing = true; // registering the type asserted
+            continue;
+        }
+        const bool repeated = state.required[term];
+        ITH_ASSERT_MSG(!repeated, "ecs: a query names a component type twice");
+        state.matchesNothing = state.matchesNothing || repeated;
+        state.required[term] = true;
+    }
+}
 
 void updateQueryState(QueryState& state, std::span<const std::unique_ptr<Archetype>> archetypes) {
     for (std::size_t index = state.archetypesSeen; index < archetypes.size(); ++index) {

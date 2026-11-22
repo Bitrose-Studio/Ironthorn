@@ -1,8 +1,8 @@
 #pragma once
 
 // The process-wide table of component types (ADR-0014 rule 5). Internal to the ecs module:
-// gameplay code names components by type (World::add<T>) and, from slice 2 on, by reflection
-// type id; it never sees these indices.
+// gameplay code names components by type (World::add<T>) or by reflection record
+// (World::add(entity, type), whose id is the component id); it never sees these indices.
 //
 // A component type is a reflected struct with the Component role (ITH_TYPE(Component)). Its
 // identity is reflection's stable type id; the first time a type is used, the table gives it a

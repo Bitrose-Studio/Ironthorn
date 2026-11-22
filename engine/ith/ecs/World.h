@@ -35,13 +35,34 @@
 // A World has a stable address: it can't be copied or moved. It is not thread-safe: one thread
 // at a time uses it. Creating and destroying worlds is thread-safe.
 //
-// Not yet here (later ADR-0014 slices): deferred commands and the schedule, dynamic queries by
-// type id, resources, hooks, hierarchy and change ticks.
+// Access by type record: has, get, add and remove also take a component type's reflection record
+// (`const TypeInfo&`, e.g. from TypeRegistry::find(id)) instead of a C++ type, and
+// forEachComponent and dynamicQuery (DynamicQuery.h) visit components whose types are known only
+// at run time. This is how the editor, serialization and the visual-script VM reach components.
+//
+//   const ith::TypeInfo& health = *typeRegistry.find("game::Health");
+//   if (void* value = world.add(ship, health)) { ... } // default-constructed
+//
+// Resources are typed singletons of a world (time, input state, settings): one value per resource
+// type, a reflected struct with the Resource role (ITH_TYPE(Resource)), kept apart from entities.
+//
+//   world.insertResource(game::MatchRules{.scoreLimit = 10});
+//   if (game::MatchRules* rules = world.resource<game::MatchRules>()) { ... }
+//
+// A resource's address stays the same until it is removed or the world is destroyed, also when
+// insertResource replaces its value. Inserting and removing resources is not a structural change:
+// it is allowed while a query iterates. clear() keeps the resources.
+//
+// Not yet here (later ADR-0014 slices): deferred commands and the schedule with declared access to
+// components and resources, hooks, hierarchy and change ticks.
 
 #include "ith/ecs/Archetype.h"
 #include "ith/ecs/ComponentRegistry.h"
+#include "ith/ecs/DynamicQuery.h"
 #include "ith/ecs/Entity.h"
 #include "ith/ecs/Query.h"
+#include "ith/reflection/TypeInfo.h"
+#include "ith/reflection/TypeOf.h"
 
 #include <algorithm>
 #include <array>
@@ -57,6 +78,21 @@
 #include <vector>
 
 namespace ith {
+
+namespace detail {
+
+// Destroys a resource value through its record and frees its aligned memory.
+struct ResourceDelete {
+    const TypeInfo* type = nullptr;
+    void operator()(std::byte* memory) const noexcept;
+};
+
+// True for T that a World's typed component and resource functions take as a value; a
+// TypeInfo selects the functions that take a type record.
+template <typename T>
+inline constexpr bool kIsValueArgument = !std::is_same_v<std::remove_cvref_t<T>, TypeInfo>;
+
+} // namespace detail
 
 class World {
 public:
@@ -107,6 +143,7 @@ public:
     // component stored in this world. Returns null, doing nothing, for a stale handle and while a
     // query iterates (asserted).
     template <typename T>
+        requires detail::kIsValueArgument<T>
     std::remove_cvref_t<T>* add(Entity entity, T&& value);
 
     // Removes the entity's T. Returns false, doing nothing, when the entity is stale or has no
@@ -122,6 +159,67 @@ public:
     // are distinct component types, `const T` to read and `T` to write.
     template <typename... Terms>
     [[nodiscard]] Query<Terms...> query();
+
+    // Access by type record. `type` is the reflection record of a component type: a reflected
+    // struct with the Component role. Any other type asserts, and the call then fails as for a
+    // stale handle. Each call looks the type up in the process-wide component table under its
+    // mutex; typed access doesn't.
+
+    // True when the entity is alive and has a value of `type`. Constant time.
+    [[nodiscard]] bool has(Entity entity, const TypeInfo& type) const;
+
+    // The entity's value of `type`, or null when the entity is stale or has none. The pointer is
+    // valid until the next structural change of this world.
+    [[nodiscard]] void* get(Entity entity, const TypeInfo& type);
+    [[nodiscard]] const void* get(Entity entity, const TypeInfo& type) const;
+
+    // Gives the entity a default-constructed value of `type`, replacing one it already has, and
+    // returns it. Returns null, doing nothing, for a stale handle and while a query iterates
+    // (asserted).
+    void* add(Entity entity, const TypeInfo& type);
+
+    // Removes the entity's value of `type`. Returns false, doing nothing, when the entity is stale
+    // or has none, and while a query iterates (asserted).
+    bool remove(Entity entity, const TypeInfo& type);
+
+    // Calls `function(const TypeInfo& type, void* value)` for each component of the entity, in an
+    // unspecified order that is stable while its set of component types stays the same; nothing
+    // for a stale handle. Structural changes inside `function` are refused, as in a query.
+    template <typename Function>
+    void forEachComponent(Entity entity, Function&& function);
+
+    // A query over the entities that have every component type in `terms`; no terms visit every
+    // entity. See DynamicQuery.h. The query copies the terms and keeps its own cache.
+    [[nodiscard]] DynamicQuery dynamicQuery(std::span<const QueryTerm> terms);
+
+    // Resources. A resource type is a reflected struct with the Resource role; any other type
+    // asserts, and the call then fails as for a missing resource.
+
+    // Stores `value` as the world's resource of its type, replacing the value it has, and returns
+    // the stored value. Like add, the value is copied or moved into a local first, so it may be
+    // the resource's current value.
+    template <typename T>
+        requires detail::kIsValueArgument<T>
+    std::remove_cvref_t<T>* insertResource(T&& value);
+
+    // The world's T resource, or null when it has none. resource<const T> gives read-only access.
+    template <typename T>
+    [[nodiscard]] T* resource();
+    template <typename T>
+    [[nodiscard]] const T* resource() const;
+
+    // Destroys the world's T resource. Returns false when it has none.
+    template <typename T>
+    bool removeResource();
+
+    // The same by type record: insertResource default-constructs the value.
+    void* insertResource(const TypeInfo& type);
+    [[nodiscard]] void* resource(const TypeInfo& type);
+    [[nodiscard]] const void* resource(const TypeInfo& type) const;
+    bool removeResource(const TypeInfo& type);
+
+    // The number of resources the world has.
+    [[nodiscard]] std::size_t resourceCount() const noexcept { return m_resources.size(); }
 
 private:
     struct EntityRecord {
@@ -160,6 +258,11 @@ private:
     detail::ArchetypeIndex spawnArchetype(std::size_t slot, std::span<const detail::ComponentIndex> types);
     detail::QueryState& queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms);
 
+    // The memory where insertResource constructs the value: the old value's memory, destroyed, or
+    // new uninitialized memory. Null when `type` is not a resource type.
+    void* prepareResource(const TypeInfo& type);
+    [[nodiscard]] void* findResource(const TypeInfo& type) const noexcept;
+
     std::uint8_t m_id;
     std::uint32_t m_iterationDepth = 0;
     std::size_t m_entityCount = 0;
@@ -173,6 +276,8 @@ private:
     std::vector<std::unique_ptr<detail::QueryState>> m_queries;
     // The archetype of each spawn signature, by type list slot; kNoArchetype when not cached yet.
     std::vector<detail::ArchetypeIndex> m_spawnArchetypes;
+    // Resource values by type id; each deleter keeps the value's type record.
+    std::unordered_map<std::uint64_t, std::unique_ptr<std::byte, detail::ResourceDelete>> m_resources;
 };
 
 #ifdef _MSC_VER
@@ -238,6 +343,7 @@ const T* World::get(Entity entity) const {
 }
 
 template <typename T>
+    requires detail::kIsValueArgument<T>
 std::remove_cvref_t<T>* World::add(Entity entity, T&& value) {
     using Component = std::remove_cvref_t<T>;
     Component local(std::forward<T>(value)); // see spawn
@@ -255,6 +361,47 @@ Query<Terms...> World::query() {
     const std::array<detail::ComponentIndex, sizeof...(Terms)> terms{
         detail::componentIndexOf<std::remove_const_t<Terms>>()...};
     return Query<Terms...>(queryState(detail::typeListSlot<Terms...>(), terms), m_archetypes, m_iterationDepth);
+}
+
+template <typename Function>
+void World::forEachComponent(Entity entity, Function&& function) {
+    static_assert(std::is_invocable_v<Function&, const TypeInfo&, void*>,
+                  "the function must take (const ith::TypeInfo&, void*)");
+    const EntityRecord* record = findRecord(entity);
+    if (record == nullptr) {
+        return;
+    }
+    detail::Archetype& archetype = *m_archetypes[record->archetype];
+    const std::uint32_t row = record->row;
+    const detail::IterationScope scope(m_iterationDepth);
+    const std::span<const detail::ComponentIndex> types = archetype.types();
+    for (std::size_t column = 0; column < types.size(); ++column) {
+        function(detail::componentType(types[column]), archetype.column(column).at(row));
+    }
+}
+
+template <typename T>
+    requires detail::kIsValueArgument<T>
+std::remove_cvref_t<T>* World::insertResource(T&& value) {
+    using Resource = std::remove_cvref_t<T>;
+    Resource local(std::forward<T>(value)); // see spawn
+    void* memory = prepareResource(typeOf<Resource>());
+    return memory != nullptr ? ::new (memory) Resource(std::move(local)) : nullptr;
+}
+
+template <typename T>
+T* World::resource() {
+    return static_cast<T*>(findResource(typeOf<std::remove_const_t<T>>()));
+}
+
+template <typename T>
+const T* World::resource() const {
+    return static_cast<const T*>(findResource(typeOf<std::remove_const_t<T>>()));
+}
+
+template <typename T>
+bool World::removeResource() {
+    return removeResource(typeOf<std::remove_const_t<T>>());
 }
 
 } // namespace ith

@@ -1,8 +1,9 @@
 #pragma once
 
-// Component types for the ECS tests and benchmark. The build generates their records into the
-// test library ith_test_ecs_components (module name "test_ecs").
+// Component and resource types for the ECS tests and benchmark. The build generates their
+// records into the test library ith_test_ecs_components (module name "test_ecs").
 
+#include "ith/math/Types.h"
 #include "ith/reflection/Annotations.h"
 
 #include <cstdint>
@@ -94,6 +95,31 @@ struct NotAComponent {
     ITH_TYPE(Struct)
     ITH_FIELD()
     std::int32_t value = 0;
+};
+
+// Resources: typed singletons of a world.
+struct GameClock {
+    ITH_TYPE(Resource)
+    ITH_FIELD()
+    double seconds = 0.0;
+    ITH_FIELD()
+    std::uint64_t frame = 0;
+};
+
+// A resource with a math field.
+struct Gravity {
+    ITH_TYPE(Resource)
+    ITH_FIELD()
+    ith::Vec3 acceleration{0.0f, 0.0f, -9.81f};
+};
+
+// Owns heap memory, so replacing and destroying it must go through the type's record.
+struct MatchRules {
+    ITH_TYPE(Resource)
+    ITH_FIELD()
+    std::string mode = "default rules, long enough to live on the heap";
+    ITH_FIELD()
+    std::vector<std::string> maps;
 };
 
 } // namespace ith::test

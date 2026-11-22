@@ -1,9 +1,11 @@
-// The process-wide parts of the ECS under concurrent use: world ids and the component registry.
-// Each thread uses only its own worlds, as the World's contract requires. Most useful under
-// ThreadSanitizer.
+// The ECS under concurrent use: world ids and the component registry from several threads, worlds
+// built by type record in parallel jobs, and a world handed from job to job. Each world is used by
+// one thread at a time, as the World's contract requires. Most useful under ThreadSanitizer.
 
 #include "ith/ecs/World.h"
 #include "ith/foundation/Hash.h"
+#include "ith/jobs/JobSystem.h"
+#include "ith/reflection/TypeOf.h"
 
 #include "EcsComponents.h"
 
@@ -12,7 +14,9 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <set>
+#include <span>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -86,4 +90,96 @@ TEST_CASE("World: worlds and component types can be created from several threads
     };
     CHECK(indices.size() == kNames.size());
     static_assert(kThreads * kTypesPerThread == 8);
+}
+
+namespace {
+
+constexpr std::array<std::string_view, 4> kRecordNames = {
+    "ecs_test::ByRecord0",
+    "ecs_test::ByRecord1",
+    "ecs_test::ByRecord2",
+    "ecs_test::ByRecord3",
+};
+
+// Component types reached only through their records, registered for the first time by
+// different jobs.
+template <int N>
+struct ByRecord {
+    ITH_TYPE(Component)
+
+    int value = N;
+};
+
+template <int N>
+const ith::TypeInfo& ByRecord<N>::ithTypeInfo() noexcept {
+    static constexpr ith::TypeInfo kInfo = ith::detail::makeStructType<ByRecord<N>>(
+        ith::fnv1a64(kRecordNames[N]), kRecordNames[N], ith::TypeRole::Component, ith::ReflectionFlags::None, {}, {});
+    return kInfo;
+}
+
+} // namespace
+
+TEST_CASE("World: jobs build worlds by type record, with resources, in parallel") {
+    const std::array<const ith::TypeInfo*, kRecordNames.size()> records = {
+        &ith::typeOf<ByRecord<0>>(), &ith::typeOf<ByRecord<1>>(), &ith::typeOf<ByRecord<2>>(),
+        &ith::typeOf<ByRecord<3>>()};
+    std::atomic<int> failures{0};
+    ith::JobSystem jobs(ith::JobSystemConfig{.foregroundWorkers = 4, .backgroundWorkers = 0});
+    constexpr std::size_t kWorlds = 64;
+    jobs.parallelFor("Worlds", kWorlds, 1, [&](std::size_t begin, std::size_t end) {
+        for (std::size_t index = begin; index < end; ++index) {
+            ith::World world;
+            const ith::TypeInfo& first = *records[index % records.size()];
+            const ith::TypeInfo& second = *records[(index + 1) % records.size()];
+            const ith::Entity entity = world.spawn(ith::test::Health{.value = static_cast<int>(index)});
+            world.add(entity, first);
+            world.add(entity, second);
+            world.insertResource(ith::test::GameClock{.frame = static_cast<std::uint64_t>(index)});
+            world.insertResource(ith::typeOf<ith::test::MatchRules>());
+            const std::array terms{ith::QueryTerm{.type = &first}, ith::QueryTerm{.type = &second}};
+            int sum = 0;
+            world.dynamicQuery(terms).forEach([&](ith::Entity, std::span<void* const> values) {
+                sum += *static_cast<const int*>(values[0]) + *static_cast<const int*>(values[1]);
+            });
+            const auto expected = static_cast<int>((index % records.size()) + ((index + 1) % records.size()));
+            if (sum != expected || world.resource<ith::test::GameClock>()->frame != index ||
+                world.resource<ith::test::MatchRules>() == nullptr) {
+                failures.fetch_add(1);
+            }
+        }
+    });
+    CHECK(failures.load() == 0);
+}
+
+TEST_CASE("World: a world handed from job to job keeps its entities and resources") {
+    // One thread at a time uses the world; the waits order the jobs that use it.
+    ith::JobSystem jobs(ith::JobSystemConfig{.foregroundWorkers = 2, .backgroundWorkers = 0});
+    ith::World world;
+    ith::JobCounter counter;
+    jobs.submit(
+        ith::JobLane::Foreground, "Fill",
+        [&world] {
+            for (int index = 0; index < 100; ++index) {
+                world.spawn(ith::test::Health{.value = index});
+            }
+            world.insertResource(ith::test::GameClock{.frame = 1});
+        },
+        &counter);
+    jobs.wait(counter);
+    jobs.submit(
+        ith::JobLane::Foreground, "Update",
+        [&world] {
+            const ith::TypeInfo& health = ith::typeOf<ith::test::Health>();
+            const std::array terms{ith::QueryTerm{.type = &health, .access = ith::Access::Write}};
+            world.dynamicQuery(terms).forEach([](ith::Entity, std::span<void* const> values) {
+                static_cast<ith::test::Health*>(values[0])->value += 1;
+            });
+            world.resource<ith::test::GameClock>()->frame += 1;
+        },
+        &counter);
+    jobs.wait(counter);
+    int sum = 0;
+    world.query<const ith::test::Health>().forEach([&](const ith::test::Health& health) { sum += health.value; });
+    CHECK(sum == 5050);
+    CHECK(world.resource<ith::test::GameClock>()->frame == 2);
 }

@@ -20,6 +20,9 @@
 // it asserts and is refused. Gather the entities and change them afterwards; deferred commands
 // arrive in slice 3.
 //
+// Code that knows its component types only at run time uses ith::DynamicQuery (DynamicQuery.h),
+// which shares the matching code.
+//
 // A Query refers to its World and is valid while the World lives. Not thread-safe: use it on the
 // thread that owns the World.
 
@@ -46,11 +49,16 @@ namespace detail {
 struct QueryState {
     std::vector<ComponentIndex> terms; // in the query's order
     ComponentMask required;
-    bool matchesNothing = false; // a term is not a component type
+    bool matchesNothing = false; // a term is not a component type, or is repeated
     std::size_t archetypesSeen = 0;
     std::vector<ArchetypeIndex> archetypes; // the matching archetypes
     std::vector<std::uint32_t> columns;     // per matching archetype, the column of each term
 };
+
+// Fills a new query state with its terms. A term that is kNoComponent (its type is not a
+// component; registering it asserted) or that repeats an earlier term (asserted) makes the query
+// match nothing. No terms match every archetype.
+void initQueryState(QueryState& state, std::span<const ComponentIndex> terms);
 
 // Adds the archetypes created since the last update that match the query.
 void updateQueryState(QueryState& state, std::span<const std::unique_ptr<Archetype>> archetypes);

@@ -435,9 +435,30 @@ ith_reflect_target(ith_test_ecs_components
 ith_add_test_suite(ecs
     SOURCES
         ecs/ConcurrencyTests.cpp
+        ecs/DynamicAccessTests.cpp
         ecs/ModelTests.cpp
+        ecs/ResourceTests.cpp
         ecs/WorldTests.cpp
-    LIBRARIES ith_test_ecs_components Threads::Threads)
+    LIBRARIES ith_test_ecs_components ith::jobs Threads::Threads)
+
+# A libFuzzer target for the ECS paths that take type records (ADR-0014 rule 19), in Clang
+# sanitizer builds only, with a short smoke run like the others. It needs no seeds: any input is
+# a sequence of operations.
+if(IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+        AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    add_executable(ith_ecs_dynamic_fuzz ecs/DynamicAccessFuzz.cpp)
+    target_link_libraries(ith_ecs_dynamic_fuzz PRIVATE ith_test_ecs_components)
+    target_compile_options(ith_ecs_dynamic_fuzz PRIVATE -fsanitize=fuzzer)
+    target_link_options(ith_ecs_dynamic_fuzz PRIVATE -fsanitize=fuzzer)
+    set_target_properties(ith_ecs_dynamic_fuzz PROPERTIES
+        FOLDER "Ironthorn/Tests"
+        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    set(corpus "${CMAKE_CURRENT_BINARY_DIR}/ecs_dynamic_fuzz_corpus")
+    file(MAKE_DIRECTORY "${corpus}")
+    add_test(NAME ecs_dynamic_fuzz
+        COMMAND ith_ecs_dynamic_fuzz -runs=20000 -max_len=4096 -malloc_limit_mb=512 "${corpus}")
+    set_tests_properties(ecs_dynamic_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
+endif()
 
 # The ECS benchmark (docs/development/ecs.md). Its test only prints numbers and never fails on
 # them; the "benchmark" label keeps it out of normal test runs, which exclude that label.
