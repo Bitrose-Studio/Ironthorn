@@ -856,3 +856,22 @@ if(TARGET ith_editor_ui)
         "ITH_LUCIDE_CODEPOINTS=\"${font_lucide_SOURCE_DIR}/codepoints.json\"")
     add_dependencies(ith_editor_ui_tests ith_engine_config)
 endif()
+
+# The golden screenshot of the empty editor shell (ADR-0029 rule 18) on the software GPU of each
+# backend the machine has (WARP, lavapipe), with the UI shader compiled at run time. The images are
+# binary PPM files in tests/editor_ui_gpu/golden, stored with Git LFS; ITH_UPDATE_GOLDEN=1 rewrites
+# them. Needs the shader compiler, so not in sanitizer builds.
+if(TARGET ith_editor_ui AND ITH_BUILD_SHADER_COMPILER)
+    ith_add_test_suite(editor_ui_gpu
+        SOURCES editor_ui_gpu/ShellGoldenTests.cpp
+        LIBRARIES ith::editor_ui ith::rhi_select ith::shader_compiler
+        LABELS gpu)
+    target_compile_definitions(ith_editor_ui_gpu_tests PRIVATE
+        "ITH_GOLDEN_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/editor_ui_gpu/golden\"")
+    ith_copy_shader_compiler_runtime(ith_editor_ui_gpu_tests)
+    add_dependencies(ith_editor_ui_gpu_tests ith_engine_config)
+    if(TARGET ith_rhi_d3d12)
+        target_compile_definitions(ith_editor_ui_gpu_tests PRIVATE ITH_EDITOR_UI_GPU_HAS_D3D12=1)
+        ith_use_d3d12_agility_sdk(ith_editor_ui_gpu_tests)
+    endif()
+endif()

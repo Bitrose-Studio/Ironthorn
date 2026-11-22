@@ -70,6 +70,7 @@ endif()
 add_subdirectory(engine)
 add_subdirectory(tools)
 add_subdirectory(samples)
+add_subdirectory(editor)
 
 if(IRONTHORN_BUILD_TESTS)
     add_subdirectory(tests)

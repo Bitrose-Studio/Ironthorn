@@ -29,6 +29,9 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
+        # The golden images of the GPU tests are stored with Git LFS.
+        with:
+          lfs: true
       # The pinned CMake, Ninja, clang-format and clang-tidy, the same as on developer machines.
       - name: Bootstrap pinned tools
         shell: pwsh
@@ -64,6 +67,9 @@ jobs:
             configure: linux-tsan
     steps:
       - uses: actions/checkout@v4
+        # The golden images of the GPU tests are stored with Git LFS.
+        with:
+          lfs: true
       # libclang-rt-18-dev holds the sanitizer runtimes and headers; the runner image has it, a
       # minimal Ubuntu doesn't.
       - name: Install build tools and display development packages
