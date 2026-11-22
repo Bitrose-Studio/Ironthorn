@@ -22,7 +22,7 @@ std::string quoted(std::string_view name) {
 }
 
 // Resolves a system's access list. Fails for a null type, a type that is neither a component nor
-// a resource, and a type named twice.
+// a resource, a type named twice, and write access to an immutable component type.
 Expected<detail::SystemAccess> resolveAccess(const SystemDescriptor& system) {
     detail::SystemAccess access;
     std::vector<std::uint64_t> seen;
@@ -39,6 +39,12 @@ Expected<detail::SystemAccess> resolveAccess(const SystemDescriptor& system) {
                              "system " + quoted(system.name) + " declares " + quoted(type->name) + " twice");
         }
         seen.push_back(type->id);
+        if (type->role == TypeRole::Component && term.access == Access::Write &&
+            hasFlags(type->flags, ReflectionFlags::Immutable)) {
+            return makeError("ecs.schedule.invalid_access",
+                             "system " + quoted(system.name) + " declares write access to " + quoted(type->name) +
+                                 ", which is immutable; read it and replace it with a command");
+        }
         if (type->role == TypeRole::Component) {
             access.components.push_back({detail::registerComponentType(*type), term.access});
         } else {

@@ -71,6 +71,7 @@ enum class ReflectionFlags : std::uint8_t {
     Replicated = 1u << 3, // sent over the network
     SaveGame = 1u << 4,   // stored in save games
     Flags = 1u << 5,      // an enum whose values combine as bit flags
+    Immutable = 1u << 6,  // a component type changed only by replacing its value (ADR-0030)
 };
 
 constexpr ReflectionFlags operator|(ReflectionFlags a, ReflectionFlags b) noexcept {

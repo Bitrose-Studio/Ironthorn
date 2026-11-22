@@ -18,7 +18,8 @@
 // detection (slice 6) will use it. Code must not write through the pointer of a read term.
 //
 // Invalid terms are programmer errors: a null type, a type that is not a reflected struct with the
-// Component role, or a component type named twice asserts, and the query then visits nothing.
+// Component role, a component type named twice, or a write term of an immutable component type
+// (ADR-0030) asserts, and the query then visits nothing.
 //
 // The query keeps its own cache of matching archetypes and extends it with the archetypes created
 // since it last ran. No structural change may happen while it iterates (asserted and refused), as

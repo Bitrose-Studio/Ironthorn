@@ -13,6 +13,7 @@
 // Thread safety: registering takes a mutex; reading a registered type does not. Every function
 // here may be called from any thread.
 
+#include "ith/foundation/Assert.h"
 #include "ith/reflection/TypeInfo.h"
 #include "ith/reflection/TypeOf.h"
 
@@ -20,6 +21,10 @@
 #include <cstdint>
 #include <limits>
 #include <type_traits>
+
+namespace ith {
+struct ComponentHooks;
+} // namespace ith
 
 namespace ith::detail {
 
@@ -47,6 +52,30 @@ ComponentIndex registerComponentType(const TypeInfo& type);
 // The record of a registered index. Precondition: `index` was returned by
 // registerComponentType and is not kNoComponent; anything else is fatal.
 [[nodiscard]] const TypeInfo& componentType(ComponentIndex index) noexcept;
+
+// Sets the hooks of a registered index (ith::setComponentHooks). Returns false, asserting, when
+// the index already has hooks or was stored by a World.
+bool setComponentHooks(ComponentIndex index, const ComponentHooks& hooks);
+
+// Marks a registered index as stored by a World, after which its hooks can't be set, and returns
+// its hooks, or null when it has none. The hooks never change afterwards, so the pointer can be
+// kept and read without a lock. Archetypes call it when they are created.
+[[nodiscard]] const ComponentHooks* useComponentType(ComponentIndex index);
+
+// True when values of `type` may be written in place; asserts for an immutable component type
+// (ADR-0030), which changes only by being replaced through add.
+inline bool isWritableComponent(const TypeInfo& type) noexcept {
+    const bool writable = !hasFlags(type.flags, ReflectionFlags::Immutable);
+    ITH_ASSERT_MSG(writable, "ecs: an immutable component can't be written in place; replace it with add");
+    return writable;
+}
+
+// True when T is an immutable component type. After the first call per type this is a single load.
+template <typename T>
+bool isImmutableComponent() {
+    static const bool kImmutable = hasFlags(typeOf<T>().flags, ReflectionFlags::Immutable);
+    return kImmutable;
+}
 
 // The index of component type T. After the first call per type this is a single load.
 template <typename T>

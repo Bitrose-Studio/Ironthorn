@@ -113,6 +113,16 @@ public:
     // The column at `position` (from columnOf). Precondition: position < types().size().
     [[nodiscard]] Column& column(std::size_t position) noexcept { return m_columns[position]; }
 
+    // The hooks of the column at `position`, or null when its type has none.
+    [[nodiscard]] const ComponentHooks* hooks(std::size_t position) const noexcept { return m_hooks[position]; }
+
+    // True when a column's type has hooks.
+    [[nodiscard]] bool hasHooks() const noexcept { return !m_hookedColumns.empty(); }
+
+    // The positions of the columns with hooks, sorted by the stable type id of their types: the
+    // order of despawn and clear() hooks (ADR-0030).
+    [[nodiscard]] std::span<const std::uint32_t> hookedColumns() const noexcept { return m_hookedColumns; }
+
     // The entity in each row.
     [[nodiscard]] std::span<const Entity> entities() const noexcept { return m_entities; }
 
@@ -146,6 +156,8 @@ private:
 
     std::vector<ComponentIndex> m_types;
     std::vector<Column> m_columns;
+    std::vector<const ComponentHooks*> m_hooks; // per column
+    std::vector<std::uint32_t> m_hookedColumns; // see hookedColumns()
     ComponentMask m_mask;
     std::vector<Entity> m_entities;
     std::size_t m_capacity = 0;

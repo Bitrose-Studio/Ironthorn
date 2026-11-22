@@ -162,6 +162,11 @@ TEST_SUITE("reflect_tool.generator") {
             CHECK_FALSE(contains(text, "debugOnly"));
         }
 
+        SUBCASE("Immutable on a component") {
+            const std::string text = generatedText("struct T {\nITH_TYPE(Component, Immutable)\n};\n");
+            CHECK(contains(text, "::ith::ReflectionFlags::Immutable"));
+        }
+
         SUBCASE("EditorOnly in an editor module") {
             auto result = generateOne("struct T {\nITH_TYPE(Component, EditorOnly)\n};\n", ModuleKind::Editor);
             REQUIRE(result.hasValue());
@@ -289,6 +294,12 @@ TEST_SUITE("reflect_tool.generator") {
         checkRefused(field(", SaveGame"), 3, "empty attribute");
         checkRefused(type("Component, EditorOnly"), 2, "EditorOnly is only allowed in editor modules");
         checkRefused(field("EditorOnly"), 3, "EditorOnly is only allowed in editor modules");
+        checkRefused(type("Struct, Immutable"), 2, "Immutable is only allowed on a type with the Component role");
+        checkRefused(type("Resource, Immutable"), 2, "Immutable is only allowed on a type with the Component role");
+        checkRefused(type("Event, Immutable"), 2, "Immutable is only allowed on a type with the Component role");
+        checkRefused(field("Immutable"), 3, "'Immutable' can't be used on a field");
+        checkRefused("enum class E { A };\nITH_ENUM(E, Immutable)\n", 2, "'Immutable' can't be used on an enum");
+        checkRefused(type("Component, Immutable, Immutable"), 2, "duplicate attribute 'Immutable'");
     }
 
     TEST_CASE("refused: malformed headers") {

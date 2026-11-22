@@ -1,5 +1,6 @@
 #include "ith/ecs/World.h"
 
+#include "ith/ecs/Hooks.h"
 #include "ith/foundation/Assert.h"
 #include "ith/foundation/Hash.h"
 #include "ith/foundation/Mutex.h"
@@ -64,7 +65,8 @@ World::World() : m_id(acquireWorldId()) {
 
 World::~World() {
     ITH_ASSERT_MSG(m_iterationDepth == 0, "ecs: a World destroyed while a query iterates it");
-    // The archetypes destroy their values, then the resources go.
+    // No hooks run. The archetypes destroy their values, then the resources go.
+    m_hookCommands.clear();
     m_archetypes.clear();
     m_resources.clear();
     releaseWorldId(m_id);
@@ -229,15 +231,88 @@ bool World::despawn(Entity entity) {
     if (record == nullptr) {
         return false;
     }
-    const Entity moved = m_archetypes[record->archetype]->removeRow(record->row);
+    detail::Archetype& archetype = *m_archetypes[record->archetype];
+    if (archetype.hasHooks()) {
+        runRemovalHooks(archetype, record->row); // while the entity is whole
+    }
+    const Entity moved = archetype.removeRow(record->row);
     if (!moved.isNull()) {
         m_records[moved.index()].row = record->row;
     }
     releaseSlot(entity.index());
+    flushHookCommands();
     return true;
 }
 
-void* World::prepareAdd(Entity entity, detail::ComponentIndex type) {
+void World::runHook(HookKind kind, detail::Archetype& archetype, std::size_t column, std::uint32_t row) {
+    const ComponentHooks* hooks = archetype.hooks(column);
+    if (hooks == nullptr) {
+        return;
+    }
+    ComponentHook hook = nullptr;
+    switch (kind) {
+        case HookKind::Add:
+            hook = hooks->onAdd;
+            break;
+        case HookKind::Insert:
+            hook = hooks->onInsert;
+            break;
+        case HookKind::Replace:
+            hook = hooks->onReplace;
+            break;
+        case HookKind::Remove:
+            hook = hooks->onRemove;
+            break;
+    }
+    if (hook == nullptr) {
+        return;
+    }
+    if (m_hookCommands.size() <= m_hookDepth) {
+        m_hookCommands.push_back(std::make_unique<Commands>(*this));
+    }
+    HookContext context(*this, *m_hookCommands[m_hookDepth], archetype.entities()[row],
+                        detail::componentType(archetype.types()[column]), archetype.column(column).at(row));
+    // Direct structural changes are refused while the hook runs, so `row` stays where it is.
+    const detail::IterationScope scope(m_iterationDepth);
+    hook(context);
+}
+
+void World::runRemovalHooks(detail::Archetype& archetype, std::uint32_t row) {
+    for (const std::uint32_t column : archetype.hookedColumns()) {
+        runHook(HookKind::Replace, archetype, column, row);
+    }
+    for (const std::uint32_t column : archetype.hookedColumns()) {
+        runHook(HookKind::Remove, archetype, column, row);
+    }
+}
+
+void World::runSpawnHooks(Entity entity, std::span<const detail::ComponentIndex> types) {
+    const EntityRecord& record = *findRecord(entity);
+    detail::Archetype& archetype = *m_archetypes[record.archetype];
+    for (const detail::ComponentIndex type : types) {
+        runHook(HookKind::Add, archetype, archetype.columnOf(type), record.row);
+    }
+    for (const detail::ComponentIndex type : types) {
+        runHook(HookKind::Insert, archetype, archetype.columnOf(type), record.row);
+    }
+    flushHookCommands();
+}
+
+void World::flushHookCommands() {
+    if (m_hookDepth >= m_hookCommands.size() || m_hookCommands[m_hookDepth]->empty()) {
+        return;
+    }
+    if (m_hookDepth >= kMaxHookDepth) {
+        ITH_FATAL("ecs: hook commands nested too deep; hooks keep triggering each other");
+    }
+    Commands& commands = *m_hookCommands[m_hookDepth];
+    ++m_hookDepth;
+    apply(commands);
+    --m_hookDepth;
+}
+
+void* World::prepareAdd(Entity entity, detail::ComponentIndex type, bool& added) {
+    added = false;
     if (!canChangeStructure() || type == detail::kNoComponent) {
         return nullptr;
     }
@@ -247,10 +322,12 @@ void* World::prepareAdd(Entity entity, detail::ComponentIndex type) {
     }
     detail::Archetype& current = *m_archetypes[record->archetype];
     if (const std::size_t column = current.columnOf(type); column != detail::Archetype::kNoColumn) {
+        runHook(HookKind::Replace, current, column, record->row); // the old value is still there
         void* value = current.column(column).at(record->row);
         current.column(column).destroy(value);
         return value;
     }
+    added = true;
     detail::ArchetypeIndex target = detail::kNoArchetype;
     if (const auto edge = current.addEdges.find(type); edge != current.addEdges.end()) {
         target = edge->second;
@@ -278,6 +355,12 @@ bool World::removeComponent(Entity entity, detail::ComponentIndex type) {
     if (!current.has(type)) {
         return false;
     }
+    const std::size_t column = current.columnOf(type);
+    const bool hooked = current.hooks(column) != nullptr;
+    if (hooked) {
+        runHook(HookKind::Replace, current, column, record->row);
+        runHook(HookKind::Remove, current, column, record->row);
+    }
     detail::ArchetypeIndex target = detail::kNoArchetype;
     if (const auto edge = current.removeEdges.find(type); edge != current.removeEdges.end()) {
         target = edge->second;
@@ -289,7 +372,24 @@ bool World::removeComponent(Entity entity, detail::ComponentIndex type) {
         m_archetypes[target]->addEdges.emplace(type, record->archetype);
     }
     moveEntity(*record, target);
+    if (hooked) {
+        flushHookCommands();
+    }
     return true;
+}
+
+void World::finishAdd(Entity entity, detail::ComponentIndex type, bool added) {
+    const EntityRecord& record = *findRecord(entity);
+    detail::Archetype& archetype = *m_archetypes[record.archetype];
+    const std::size_t column = archetype.columnOf(type);
+    if (archetype.hooks(column) == nullptr) {
+        return; // no hook ran, onReplace included
+    }
+    if (added) {
+        runHook(HookKind::Add, archetype, column, record.row);
+    }
+    runHook(HookKind::Insert, archetype, column, record.row);
+    flushHookCommands();
 }
 
 void* World::findComponent(Entity entity, detail::ComponentIndex type) const noexcept {
@@ -306,12 +406,21 @@ void World::clear() {
     if (!canChangeStructure()) {
         return;
     }
+    // Every remove hook runs while the whole world is still there.
+    for (const std::unique_ptr<detail::Archetype>& archetype : m_archetypes) {
+        if (archetype->hasHooks()) {
+            for (std::uint32_t row = 0; row < archetype->size(); ++row) {
+                runRemovalHooks(*archetype, row);
+            }
+        }
+    }
     for (const std::unique_ptr<detail::Archetype>& archetype : m_archetypes) {
         for (const Entity entity : archetype->entities()) {
             releaseSlot(entity.index());
         }
         archetype->clear();
     }
+    flushHookCommands();
 }
 
 void World::apply(Commands& commands) {
@@ -323,6 +432,7 @@ void World::apply(Commands& commands) {
     // Consecutive spawns of one set of types share an archetype lookup.
     std::vector<detail::ComponentIndex> types;
     std::vector<detail::ComponentIndex> spawnTypes;
+    std::vector<detail::ComponentIndex> hookOrder;
     detail::ArchetypeIndex spawnArchetype = detail::kNoArchetype;
     for (const Commands::Command& command : commands.m_commands) {
         const std::span<Commands::Value> values(commands.m_values.data() + command.firstValue, command.valueCount);
@@ -343,6 +453,14 @@ void World::apply(Commands& commands) {
                     detail::Column& column = archetype.column(archetype.columnOf(value.type));
                     column.relocate(column.at(row), value.memory);
                 }
+                if (archetype.hasHooks()) {
+                    // In the order the values were recorded, which is the order they were given.
+                    hookOrder.clear();
+                    for (const Commands::Value& value : values) {
+                        hookOrder.push_back(value.type);
+                    }
+                    runSpawnHooks(command.entity, hookOrder);
+                }
                 break;
             }
             case Commands::Kind::Despawn:
@@ -350,8 +468,10 @@ void World::apply(Commands& commands) {
                 break;
             case Commands::Kind::Add: {
                 const Commands::Value& value = values.front();
-                if (void* memory = prepareAdd(command.entity, value.type); memory != nullptr) {
+                bool added = false;
+                if (void* memory = prepareAdd(command.entity, value.type, added); memory != nullptr) {
                     detail::relocateValue(detail::componentType(value.type), memory, value.memory);
+                    finishAdd(command.entity, value.type, added);
                 } else {
                     detail::componentType(value.type).destroy(value.memory);
                 }
@@ -376,7 +496,7 @@ detail::ArchetypeIndex World::spawnArchetype(std::size_t slot, std::span<const d
     return cached;
 }
 
-detail::QueryState& World::queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms) {
+detail::QueryState& World::queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms, bool refused) {
     if (slot >= m_queries.size()) {
         m_queries.resize(slot + 1);
     }
@@ -384,6 +504,7 @@ detail::QueryState& World::queryState(std::size_t slot, std::span<const detail::
     if (state == nullptr) {
         state = std::make_unique<detail::QueryState>();
         detail::initQueryState(*state, terms);
+        state->matchesNothing = state->matchesNothing || refused;
     }
     return *state;
 }
@@ -395,7 +516,11 @@ bool World::has(Entity entity, const TypeInfo& type) const {
 }
 
 void* World::get(Entity entity, const TypeInfo& type) {
-    return findComponent(entity, detail::registerComponentType(type));
+    const detail::ComponentIndex index = detail::registerComponentType(type);
+    if (index == detail::kNoComponent || !detail::isWritableComponent(type)) {
+        return nullptr;
+    }
+    return findComponent(entity, index);
 }
 
 const void* World::get(Entity entity, const TypeInfo& type) const {
@@ -404,10 +529,28 @@ const void* World::get(Entity entity, const TypeInfo& type) const {
 
 void* World::add(Entity entity, const TypeInfo& type) {
     const detail::ComponentIndex index = detail::registerComponentType(type);
-    void* memory = prepareAdd(entity, index);
+    bool added = false;
+    void* memory = prepareAdd(entity, index, added);
     if (memory != nullptr) {
         // The registered record builds the value, as it destroys it later.
         detail::componentType(index).construct(memory);
+        finishAdd(entity, index, added);
+    }
+    return memory;
+}
+
+void* World::add(Entity entity, const TypeInfo& type, void* value) {
+    ITH_ASSERT_MSG(value != nullptr, "ecs: add by record without a value");
+    const detail::ComponentIndex index = detail::registerComponentType(type);
+    if (value == nullptr) {
+        return nullptr;
+    }
+    bool added = false;
+    void* memory = prepareAdd(entity, index, added);
+    if (memory != nullptr) {
+        // The registered record builds the value, as it destroys it later.
+        detail::componentType(index).move(memory, value);
+        finishAdd(entity, index, added);
     }
     return memory;
 }
@@ -420,11 +563,16 @@ DynamicQuery World::dynamicQuery(std::span<const QueryTerm> terms) {
     DynamicQuery query(terms, m_archetypes, m_iterationDepth);
     std::vector<detail::ComponentIndex> indices;
     indices.reserve(terms.size());
+    bool writesImmutable = false;
     for (const QueryTerm& term : terms) {
         ITH_ASSERT_MSG(term.type != nullptr, "ecs: a dynamic query term without a type");
         indices.push_back(term.type != nullptr ? detail::registerComponentType(*term.type) : detail::kNoComponent);
+        if (term.type != nullptr && term.access == Access::Write && !detail::isWritableComponent(*term.type)) {
+            writesImmutable = true;
+        }
     }
     detail::initQueryState(query.m_state, indices);
+    query.m_state.matchesNothing = query.m_state.matchesNothing || writesImmutable;
     return query;
 }
 

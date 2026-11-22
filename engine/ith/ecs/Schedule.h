@@ -35,8 +35,8 @@
 //
 // build() checks everything before anything runs and fails with an ith::Error when a name is empty
 // or used twice, a system has no function, a constraint names an unknown system or one of another
-// stage, the constraints form a cycle, or an access entry is not a component or resource type or
-// names a type twice. Codes: "ecs.schedule.invalid_system", "ecs.schedule.duplicate_name",
+// stage, the constraints form a cycle, or an access entry is not a component or resource type,
+// names a type twice or writes an immutable component type (ADR-0030). Codes: "ecs.schedule.invalid_system", "ecs.schedule.duplicate_name",
 // "ecs.schedule.unknown_system", "ecs.schedule.other_stage", "ecs.schedule.cycle",
 // "ecs.schedule.invalid_access". The message names the systems involved.
 //

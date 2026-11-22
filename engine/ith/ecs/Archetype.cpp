@@ -66,10 +66,17 @@ Archetype::Archetype(std::span<const ComponentIndex> types) : m_types(types.begi
     ITH_ASSERT_MSG(std::ranges::adjacent_find(m_types, std::greater_equal<>()) == m_types.end(),
                    "ecs: archetype types must be sorted and unique");
     m_columns.reserve(m_types.size());
-    for (const ComponentIndex type : m_types) {
+    m_hooks.reserve(m_types.size());
+    for (std::size_t position = 0; position < m_types.size(); ++position) {
+        const ComponentIndex type = m_types[position];
         m_columns.emplace_back(componentType(type));
         m_mask.set(type);
+        m_hooks.push_back(useComponentType(type));
+        if (m_hooks.back() != nullptr) {
+            m_hookedColumns.push_back(static_cast<std::uint32_t>(position));
+        }
     }
+    std::ranges::sort(m_hookedColumns, {}, [&](std::uint32_t position) { return componentType(m_types[position]).id; });
 }
 
 Archetype::~Archetype() {

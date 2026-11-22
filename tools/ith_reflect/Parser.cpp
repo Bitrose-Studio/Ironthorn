@@ -30,13 +30,14 @@ struct AttributeSpec {
     bool onEnum;
 };
 
-constexpr std::array<AttributeSpec, 14> kAttributes = {{
+constexpr std::array<AttributeSpec, 15> kAttributes = {{
     {.name = "EditorOnly", .kind = ValueKind::Flag, .onType = true, .onField = true, .onEnum = true},
     {.name = "Transient", .kind = ValueKind::Flag, .onType = true, .onField = true, .onEnum = false},
     {.name = "ReadOnly", .kind = ValueKind::Flag, .onType = false, .onField = true, .onEnum = false},
     {.name = "Replicated", .kind = ValueKind::Flag, .onType = false, .onField = true, .onEnum = false},
     {.name = "SaveGame", .kind = ValueKind::Flag, .onType = false, .onField = true, .onEnum = false},
     {.name = "Flags", .kind = ValueKind::Flag, .onType = false, .onField = false, .onEnum = true},
+    {.name = "Immutable", .kind = ValueKind::Flag, .onType = true, .onField = false, .onEnum = false},
     {.name = "Min", .kind = ValueKind::Number, .onType = false, .onField = true, .onEnum = false},
     {.name = "Max", .kind = ValueKind::Number, .onType = false, .onField = true, .onEnum = false},
     {.name = "Unit", .kind = ValueKind::Text, .onType = false, .onField = true, .onEnum = false},
@@ -426,6 +427,10 @@ private:
                 }
                 if (name == "EditorOnly" && m_kind != ModuleKind::Editor) {
                     error(line, "EditorOnly is only allowed in editor modules (ADR-0017)");
+                    return false;
+                }
+                if (name == "Immutable" && attributes.role != "Component") {
+                    error(line, "Immutable is only allowed on a type with the Component role (ADR-0030)");
                     return false;
                 }
                 attributes.flags.emplace_back(name);

@@ -2,8 +2,11 @@
 // removes, query writes, resource changes and clears, checked after every step against a simple
 // reference model (a map from handle to optional components). Adds, removes and query writes go
 // through the typed functions or through type records at random, so both paths are exercised
-// against the same model. The seeds are fixed, so a failure reproduces.
+// against the same model. An immutable component with hooks (Tracked) is spawned, replaced,
+// removed, despawned and cleared too; its hooks count their calls into a resource, which is checked
+// against the counts the model expects (ADR-0030). The seeds are fixed, so a failure reproduces.
 
+#include "ith/ecs/Hooks.h"
 #include "ith/ecs/World.h"
 #include "ith/reflection/TypeOf.h"
 
@@ -29,20 +32,47 @@ using ith::Entity;
 using ith::World;
 using ith::test::GameClock;
 using ith::test::Health;
+using ith::test::HookCounts;
 using ith::test::Name;
 using ith::test::Position;
 using ith::test::Tag0;
+using ith::test::Tracked;
+
+// Tracked's hooks count their calls into the world's HookCounts.
+void setTrackedHooks() {
+    static const bool kSet = ith::setComponentHooks<Tracked>({
+        .onAdd = [](ith::HookContext& context) { ++context.resource<HookCounts>()->adds; },
+        .onInsert =
+            [](ith::HookContext& context) {
+                HookCounts& counts = *context.resource<HookCounts>();
+                ++counts.inserts;
+                counts.insertedSum += context.value<const Tracked>()->value;
+            },
+        .onReplace = [](ith::HookContext& context) { ++context.resource<HookCounts>()->replaces; },
+        .onRemove =
+            [](ith::HookContext& context) {
+                HookCounts& counts = *context.resource<HookCounts>();
+                ++counts.removes;
+                counts.removedSum += context.value<const Tracked>()->value;
+            },
+    });
+    REQUIRE(kSet);
+}
 
 struct ModelEntity {
     std::optional<std::int32_t> health;
     std::optional<std::string> name;
     std::optional<float> position;
     bool tag = false;
+    std::optional<std::int64_t> tracked;
 };
 
 class ModelTest {
 public:
-    explicit ModelTest(std::uint32_t seed) : m_random(seed) {}
+    explicit ModelTest(std::uint32_t seed) : m_random(seed) {
+        setTrackedHooks();
+        m_world.insertResource(HookCounts{});
+    }
 
     void run(int steps) {
         for (int step = 0; step < steps; ++step) {
@@ -86,11 +116,23 @@ private:
         } else if (operation < 35) {
             const auto health = static_cast<std::int32_t>(pick(1000));
             const auto position = static_cast<float>(pick(1000));
-            spawned(m_world.spawn(Position{.x = position}, Tag0{}, Health{.value = health}),
-                    {.health = health, .position = position, .tag = true});
+            if (pick(2) == 0) {
+                spawned(m_world.spawn(Position{.x = position}, Tag0{}, Health{.value = health}),
+                        {.health = health, .position = position, .tag = true});
+            } else {
+                const std::int64_t tracked = pick(1000);
+                spawned(m_world.spawn(Position{.x = position}, Tracked{.value = tracked}, Health{.value = health}),
+                        {.health = health, .position = position, .tracked = tracked});
+                expectInsert(tracked, true);
+            }
         } else if (operation < 50) {
             const Entity entity = anyHandle();
-            const bool alive = m_model.erase(entity.bits()) == 1;
+            const auto found = m_model.find(entity.bits());
+            const bool alive = found != m_model.end();
+            if (alive) {
+                expectRemoval(found->second);
+                m_model.erase(found);
+            }
             CHECK(m_world.despawn(entity) == alive);
         } else if (operation < 75) {
             add(anyHandle());
@@ -115,6 +157,9 @@ private:
                 }
             }
         } else if (pick(4) == 0) {
+            for (const auto& [bits, entity] : m_model) {
+                expectRemoval(entity);
+            }
             m_world.clear(); // keeps the resources
             m_model.clear();
         } else {
@@ -141,11 +186,32 @@ private:
         }
     }
 
-    // Adds a value through World::add<T> or through the type's record.
+    // Tracked's hooks for a value given to a live entity: onAdd or onReplace, then onInsert.
+    void expectInsert(std::int64_t value, bool added) {
+        ++(added ? m_counts.adds : m_counts.replaces);
+        ++m_counts.inserts;
+        m_counts.insertedSum += value;
+    }
+
+    // Tracked's hooks when a live entity loses its Tracked, if it has one.
+    void expectRemoval(const ModelEntity& entity) {
+        if (entity.tracked) {
+            ++m_counts.replaces;
+            ++m_counts.removes;
+            m_counts.removedSum += *entity.tracked;
+        }
+    }
+
+    // Adds a value through World::add<T>, or through the type's record, either moved from a value or
+    // default-constructed and then written. An immutable type is never written in place.
     template <typename T>
     bool addValue(Entity entity, T value) {
-        if (pick(2) == 0) {
+        const std::uint32_t path = pick(3);
+        if (path == 0) {
             return m_world.add(entity, std::move(value)) != nullptr;
+        }
+        if (path == 1 || hasFlags(ith::typeOf<T>().flags, ith::ReflectionFlags::Immutable)) {
+            return m_world.add(entity, ith::typeOf<T>(), &value) != nullptr;
         }
         auto* stored = static_cast<T*>(m_world.add(entity, ith::typeOf<T>()));
         if (stored != nullptr) {
@@ -163,9 +229,16 @@ private:
     void add(Entity entity) {
         const auto found = m_model.find(entity.bits());
         ModelEntity* model = found != m_model.end() ? &found->second : nullptr;
-        const std::uint32_t component = pick(4);
+        const std::uint32_t component = pick(5);
         bool added = false;
-        if (component == 0) {
+        if (component == 4) {
+            const std::int64_t value = pick(1000);
+            added = addValue(entity, Tracked{.value = value});
+            if (model != nullptr) {
+                expectInsert(value, !model->tracked.has_value());
+                model->tracked = value;
+            }
+        } else if (component == 0) {
             const auto value = static_cast<std::int32_t>(pick(1000));
             added = addValue(entity, Health{.value = value});
             if (model != nullptr) {
@@ -195,10 +268,17 @@ private:
     void remove(Entity entity) {
         const auto found = m_model.find(entity.bits());
         ModelEntity* model = found != m_model.end() ? &found->second : nullptr;
-        const std::uint32_t component = pick(4);
+        const std::uint32_t component = pick(5);
         bool had = false;
         bool removed = false;
-        if (component == 0) {
+        if (component == 4) {
+            had = model != nullptr && model->tracked.has_value();
+            removed = removeValue<Tracked>(entity);
+            if (model != nullptr) {
+                expectRemoval(*model);
+                model->tracked.reset();
+            }
+        } else if (component == 0) {
             had = model != nullptr && model->health.has_value();
             removed = removeValue<Health>(entity);
             if (model != nullptr) {
@@ -254,20 +334,39 @@ private:
                 CHECK(position->x == *model.position);
             }
             CHECK(m_world.has<Tag0>(entity) == model.tag);
+            const Tracked* tracked = m_world.get<const Tracked>(entity);
+            REQUIRE((tracked != nullptr) == model.tracked.has_value());
+            if (tracked != nullptr) {
+                CHECK(tracked->value == *model.tracked);
+            }
 
-            // Access by record finds the same values, and forEachComponent visits each once.
+            // Access by record finds the same values, and forEachComponent visits each once; the
+            // const form visits immutable components too.
+            const World& world = m_world;
             CHECK(m_world.get(entity, ith::typeOf<Health>()) == health);
+            CHECK(world.get(entity, ith::typeOf<Tracked>()) == tracked);
             CHECK(m_world.has(entity, ith::typeOf<Tag0>()) == model.tag);
             const std::size_t components =
                 static_cast<std::size_t>(model.health.has_value()) + static_cast<std::size_t>(model.name.has_value()) +
-                static_cast<std::size_t>(model.position.has_value()) + static_cast<std::size_t>(model.tag);
+                static_cast<std::size_t>(model.position.has_value()) + static_cast<std::size_t>(model.tag) +
+                static_cast<std::size_t>(model.tracked.has_value());
             std::size_t visits = 0;
-            m_world.forEachComponent(entity, [&](const ith::TypeInfo& type, void* value) {
+            world.forEachComponent(entity, [&](const ith::TypeInfo& type, const void* value) {
                 ++visits;
-                CHECK(value == m_world.get(entity, type));
+                CHECK(value == world.get(entity, type));
             });
             CHECK(visits == components);
         }
+
+        // Tracked's hooks ran exactly as often as the model expects, with the expected values.
+        const HookCounts* counts = m_world.resource<const HookCounts>();
+        REQUIRE(counts != nullptr);
+        CHECK(counts->adds == m_counts.adds);
+        CHECK(counts->inserts == m_counts.inserts);
+        CHECK(counts->replaces == m_counts.replaces);
+        CHECK(counts->removes == m_counts.removes);
+        CHECK(counts->insertedSum == m_counts.insertedSum);
+        CHECK(counts->removedSum == m_counts.removedSum);
 
         // Resources are untouched by entity operations and clear().
         const GameClock* clock = m_world.resource<GameClock>();
@@ -319,6 +418,7 @@ private:
     std::map<std::uint64_t, ModelEntity> m_model;
     std::vector<Entity> m_issued;
     std::optional<std::uint64_t> m_clock; // the GameClock resource's frame, when it exists
+    HookCounts m_counts;                  // the counts Tracked's hooks should have reached
     int m_names = 0;
 };
 

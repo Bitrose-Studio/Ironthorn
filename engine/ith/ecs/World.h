@@ -63,8 +63,18 @@
 //   const ith::Entity bullet = commands.spawn(Position{}, Velocity{.x = 10.0f}); // reserved now
 //   world.apply(commands); // alive from here
 //
-// Not yet here (later ADR-0014 slices): hooks and immutable components, hierarchy and change
-// ticks.
+// Hooks (Hooks.h, ADR-0030): a component type can have onAdd, onInsert, onReplace and onRemove
+// hooks, set once per process, which every World runs as it adds, replaces and removes the type's
+// values; the commands they record are applied before the changing call returns.
+//
+// Immutable components (ITH_TYPE(Component, Immutable), ADR-0030) change only by being replaced
+// through add, so their hooks always run. Everything that would hand out a writable value of one
+// asserts and is refused: get<T> with a non-const T and get(entity, type) give null, a query or
+// dynamic query that writes one visits nothing, and the non-const forEachComponent skips it. Read
+// it with get<const T>, a const term, or the const forEachComponent. The pointer add returns
+// is for reading only when the type is immutable.
+//
+// Not yet here (later ADR-0014 slices): hierarchy and change ticks.
 
 #include "ith/ecs/Archetype.h"
 #include "ith/ecs/Commands.h"
@@ -145,7 +155,8 @@ public:
     [[nodiscard]] bool has(Entity entity) const;
 
     // The entity's T, or null when the entity is stale or has no T. The pointer is valid until
-    // the next structural change of this world. get<const T> gives read-only access.
+    // the next structural change of this world. get<const T> gives read-only access; a non-const
+    // T of an immutable type asserts and gives null.
     template <typename T>
     [[nodiscard]] T* get(Entity entity);
     template <typename T>
@@ -154,22 +165,25 @@ public:
     // Gives the entity `value` as its T, replacing a T it already has, and returns the stored
     // value. Like spawn, the value is copied or moved into a local first, so it may be a
     // component stored in this world. Returns null, doing nothing, for a stale handle and while a
-    // query iterates (asserted).
+    // query iterates (asserted). Runs onReplace before an existing value is destroyed, then onAdd
+    // (for a new type) and onInsert, then the commands they recorded.
     template <typename T>
         requires detail::kIsValueArgument<T>
     std::remove_cvref_t<T>* add(Entity entity, T&& value);
 
-    // Removes the entity's T. Returns false, doing nothing, when the entity is stale or has no
-    // T, and while a query iterates (asserted).
+    // Removes the entity's T, after its onReplace and onRemove hooks. Returns false, doing nothing,
+    // when the entity is stale or has no T, and while a query iterates (asserted).
     template <typename T>
     bool remove(Entity entity);
 
     // Despawns every entity; their handles become stale. Archetypes and query caches stay, so
-    // refilling the world is cheap. Refused (asserted) while a query iterates.
+    // refilling the world is cheap. Refused (asserted) while a query iterates. Runs the remove
+    // hooks of every entity first (see Hooks.h); entities spawned by their commands survive.
     void clear();
 
     // A query over the entities that have every component type in Terms; see Query.h. Terms
-    // are distinct component types, `const T` to read and `T` to write.
+    // are distinct component types, `const T` to read and `T` to write. A writable term of an
+    // immutable type asserts, and the query visits nothing.
     template <typename... Terms>
     [[nodiscard]] Query<Terms...> query();
 
@@ -182,14 +196,21 @@ public:
     [[nodiscard]] bool has(Entity entity, const TypeInfo& type) const;
 
     // The entity's value of `type`, or null when the entity is stale or has none. The pointer is
-    // valid until the next structural change of this world.
+    // valid until the next structural change of this world. The non-const form asserts and gives
+    // null for an immutable type; read it through a const World.
     [[nodiscard]] void* get(Entity entity, const TypeInfo& type);
     [[nodiscard]] const void* get(Entity entity, const TypeInfo& type) const;
 
     // Gives the entity a default-constructed value of `type`, replacing one it already has, and
     // returns it. Returns null, doing nothing, for a stale handle and while a query iterates
-    // (asserted).
+    // (asserted). Hooks run as for add<T>, with the default value; to add a value with its
+    // fields set, so that hooks see it, use the overload below.
     void* add(Entity entity, const TypeInfo& type);
+
+    // Gives the entity a value of `type` moved from `value`, which points to a valid value of
+    // that type and stays a moved-from value the caller destroys. Otherwise as above. This is how
+    // a loader adds a value it has read, immutable or with hooks.
+    void* add(Entity entity, const TypeInfo& type, void* value);
 
     // Removes the entity's value of `type`. Returns false, doing nothing, when the entity is stale
     // or has none, and while a query iterates (asserted).
@@ -197,12 +218,17 @@ public:
 
     // Calls `function(const TypeInfo& type, void* value)` for each component of the entity, in an
     // unspecified order that is stable while its set of component types stays the same; nothing
-    // for a stale handle. Structural changes inside `function` are refused, as in a query.
+    // for a stale handle. Structural changes inside `function` are refused, as in a query. The
+    // non-const form skips immutable components, asserting; the const form, with
+    // `function(const TypeInfo&, const void*)`, visits every component.
     template <typename Function>
     void forEachComponent(Entity entity, Function&& function);
+    template <typename Function>
+    void forEachComponent(Entity entity, Function&& function) const;
 
     // A query over the entities that have every component type in `terms`; no terms visit every
-    // entity. See DynamicQuery.h. The query copies the terms and keeps its own cache.
+    // entity. See DynamicQuery.h. The query copies the terms and keeps its own cache. A write term
+    // of an immutable type asserts, and the query visits nothing.
     [[nodiscard]] DynamicQuery dynamicQuery(std::span<const QueryTerm> terms);
 
     // Resources. A resource type is a reflected struct with the Resource role; any other type
@@ -238,7 +264,8 @@ public:
     // for reuse. Each command behaves like the World function of the same name: a command on a
     // stale handle does nothing, and a spawn makes its reserved handle alive. Refused (asserted;
     // the commands stay) while a query iterates or a system runs, and for a buffer of another
-    // world (asserted).
+    // world (asserted). The commands that each command's hooks record are applied before the next
+    // command.
     void apply(Commands& commands);
 
 private:
@@ -293,15 +320,41 @@ private:
     // are left uninitialized. Updates the records.
     void moveEntity(EntityRecord& record, detail::ArchetypeIndex target);
 
-    // The memory where add() constructs the value: the old value's memory, destroyed, or a new
-    // uninitialized slot after moving the entity. Null when add() must fail.
-    void* prepareAdd(Entity entity, detail::ComponentIndex type);
+    // The memory where add() constructs the value: the old value's memory, destroyed after its
+    // onReplace hook, or a new uninitialized slot after moving the entity. Null when add() must
+    // fail. `added` tells whether the entity gains the type. After constructing the value, the
+    // caller calls finishAdd, which runs onAdd and onInsert and applies their commands.
+    void* prepareAdd(Entity entity, detail::ComponentIndex type, bool& added);
+    void finishAdd(Entity entity, detail::ComponentIndex type, bool added);
+
+    // Runs onAdd for each of a new entity's components, then onInsert for each, in the order of
+    // `types` (the order they were given), then applies their commands.
+    void runSpawnHooks(Entity entity, std::span<const detail::ComponentIndex> types);
+
+    enum class HookKind : std::uint8_t {
+        Add,
+        Insert,
+        Replace,
+        Remove,
+    };
+
+    // Runs one hook, when the column's type has it, for the value in `row`. Structural changes are
+    // refused meanwhile; the hook records its commands in the current hook buffer.
+    void runHook(HookKind kind, detail::Archetype& archetype, std::size_t column, std::uint32_t row);
+
+    // Runs onReplace, then onRemove, for every hooked component of the entity in `row`, in the
+    // order of Archetype::hookedColumns.
+    void runRemovalHooks(detail::Archetype& archetype, std::uint32_t row);
+
+    // Applies the commands that hooks recorded at the current depth, if any (Hooks.h).
+    void flushHookCommands();
 
     bool removeComponent(Entity entity, detail::ComponentIndex type);
     [[nodiscard]] void* findComponent(Entity entity, detail::ComponentIndex type) const noexcept;
     // The archetype for a spawn signature: `types` (sorted) cached under `slot`.
     detail::ArchetypeIndex spawnArchetype(std::size_t slot, std::span<const detail::ComponentIndex> types);
-    detail::QueryState& queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms);
+    // The cached state of a typed query; `refused` makes a new state match nothing.
+    detail::QueryState& queryState(std::size_t slot, std::span<const detail::ComponentIndex> terms, bool refused);
 
     // The memory where insertResource constructs the value: the old value's memory, destroyed, or
     // new uninitialized memory. Null when `type` is not a resource type.
@@ -309,7 +362,7 @@ private:
     [[nodiscard]] void* findResource(const TypeInfo& type) const noexcept;
 
     std::uint8_t m_id;
-    std::uint32_t m_iterationDepth = 0;
+    mutable std::uint32_t m_iterationDepth = 0; // also counted by the const forEachComponent
     std::size_t m_entityCount = 0;
     std::vector<EntityRecord> m_records;
     // Free slots. Only the owner thread changes the list. reserveEntity hands out its entries from
@@ -330,6 +383,9 @@ private:
     std::vector<detail::ArchetypeIndex> m_spawnArchetypes;
     // Resource values by type id; each deleter keeps the value's type record.
     std::unordered_map<std::uint64_t, std::unique_ptr<std::byte, detail::ResourceDelete>> m_resources;
+    // The buffers hooks record into, one per nesting depth, created when first needed.
+    std::vector<std::unique_ptr<Commands>> m_hookCommands;
+    std::uint32_t m_hookDepth = 0;
 };
 
 #ifdef _MSC_VER
@@ -370,6 +426,9 @@ Entity World::spawn(Components&&... components) {
             ::new (archetype.column(column).at(row)) T(std::move(component));
         };
         std::apply([&](auto&... value) { (construct(value), ...); }, values);
+        if (archetype.hasHooks()) {
+            runSpawnHooks(created.first, types);
+        }
     }
     return created.first;
 }
@@ -386,6 +445,11 @@ bool World::has(Entity entity) const {
 
 template <typename T>
 T* World::get(Entity entity) {
+    if constexpr (!std::is_const_v<T>) {
+        if (detail::isImmutableComponent<T>() && !detail::isWritableComponent(typeOf<T>())) {
+            return nullptr;
+        }
+    }
     return static_cast<T*>(findComponent(entity, detail::componentIndexOf<std::remove_const_t<T>>()));
 }
 
@@ -399,8 +463,15 @@ template <typename T>
 std::remove_cvref_t<T>* World::add(Entity entity, T&& value) {
     using Component = std::remove_cvref_t<T>;
     Component local(std::forward<T>(value)); // see spawn
-    void* memory = prepareAdd(entity, detail::componentIndexOf<Component>());
-    return memory != nullptr ? ::new (memory) Component(std::move(local)) : nullptr;
+    const detail::ComponentIndex type = detail::componentIndexOf<Component>();
+    bool added = false;
+    void* memory = prepareAdd(entity, type, added);
+    if (memory == nullptr) {
+        return nullptr;
+    }
+    auto* stored = ::new (memory) Component(std::move(local));
+    finishAdd(entity, type, added);
+    return stored; // hooks can't change structure, so the value is still where it was built
 }
 
 template <typename T>
@@ -412,7 +483,14 @@ template <typename... Terms>
 Query<Terms...> World::query() {
     const std::array<detail::ComponentIndex, sizeof...(Terms)> terms{
         detail::componentIndexOf<std::remove_const_t<Terms>>()...};
-    return Query<Terms...>(queryState(detail::typeListSlot<Terms...>(), terms), m_archetypes, m_iterationDepth);
+    // A writable term of an immutable type refuses the query. Immutability never changes, so the
+    // cached state of this query type matches nothing for good.
+    const bool writesImmutable =
+        ((!std::is_const_v<Terms> && detail::isImmutableComponent<std::remove_const_t<Terms>>() &&
+          !detail::isWritableComponent(typeOf<std::remove_const_t<Terms>>())) ||
+         ...);
+    return Query<Terms...>(queryState(detail::typeListSlot<Terms...>(), terms, writesImmutable), m_archetypes,
+                           m_iterationDepth);
 }
 
 template <typename Function>
@@ -428,7 +506,28 @@ void World::forEachComponent(Entity entity, Function&& function) {
     const detail::IterationScope scope(m_iterationDepth);
     const std::span<const detail::ComponentIndex> types = archetype.types();
     for (std::size_t column = 0; column < types.size(); ++column) {
-        function(detail::componentType(types[column]), archetype.column(column).at(row));
+        const TypeInfo& type = detail::componentType(types[column]);
+        if (detail::isWritableComponent(type)) {
+            function(type, archetype.column(column).at(row));
+        }
+    }
+}
+
+template <typename Function>
+void World::forEachComponent(Entity entity, Function&& function) const {
+    static_assert(std::is_invocable_v<Function&, const TypeInfo&, const void*>,
+                  "the function must take (const ith::TypeInfo&, const void*)");
+    const EntityRecord* record = findRecord(entity);
+    if (record == nullptr) {
+        return;
+    }
+    detail::Archetype& archetype = *m_archetypes[record->archetype];
+    const std::uint32_t row = record->row;
+    const detail::IterationScope scope(m_iterationDepth);
+    const std::span<const detail::ComponentIndex> types = archetype.types();
+    for (std::size_t column = 0; column < types.size(); ++column) {
+        const void* value = archetype.column(column).at(row);
+        function(detail::componentType(types[column]), value);
     }
 }
 

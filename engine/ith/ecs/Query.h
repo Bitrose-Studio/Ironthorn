@@ -10,7 +10,8 @@
 // A query visits every entity that has all of its component types, archetype by archetype and
 // row by row. A term written as `const T` reads T; a term written as plain `T` writes it. Inside a
 // system (Schedule.h) every term must match the system's declared access, and change detection
-// (slice 6) will mark a written value changed when a query hands it out. The function takes the
+// (slice 6) will mark a written value changed when a query hands it out. A writable term of an
+// immutable component type (ADR-0030) asserts, and the query visits nothing. The function takes the
 // components in the query's order, optionally preceded by the entity.
 //
 // Each World keeps a cache of the archetypes that match each query type and extends it with the

@@ -34,7 +34,7 @@ const ::ith::TypeInfo& game::ithEnumTypeInfo(::game::DamageKind*) noexcept {
     return kType;
 }
 
-// GlobalFlags, from fixtures/Basic.h:92
+// GlobalFlags, from fixtures/Basic.h:98
 const ::ith::TypeInfo& ithEnumTypeInfo(::GlobalFlags*) noexcept {
     using Self = ::GlobalFlags;
     static constexpr ::ith::EnumeratorInfo kEnumerators[] = {
@@ -121,7 +121,27 @@ const ::ith::TypeInfo& game::Empty::ithTypeInfo() noexcept {
     return kType;
 }
 
-// Global, from fixtures/Basic.h:80
+// game::Owner, from fixtures/Basic.h:78
+const ::ith::TypeInfo& game::Owner::ithTypeInfo() noexcept {
+    using Self = ::game::Owner;
+    static_assert(!std::is_polymorphic_v<Self>, "game::Owner: reflected types can't have virtual functions");
+    static constexpr ::ith::FieldInfo kFields[] = {
+        {
+            .id = 0x08b72e07b55c3ac0ull,
+            .name = "id",
+            .offset = offsetof(Self, id),
+            .type = &::ith::typeOf<decltype(Self::id)>,
+            .flags = ::ith::ReflectionFlags::None,
+            .attributes = {},
+        },
+    };
+    static constexpr ::ith::TypeInfo kType = ::ith::detail::makeStructType<Self>(
+        0xdcfc23b7a06a8dc2ull, "game::Owner", ::ith::TypeRole::Component, ::ith::ReflectionFlags::Immutable | ::ith::ReflectionFlags::Transient,
+        {}, kFields);
+    return kType;
+}
+
+// Global, from fixtures/Basic.h:86
 const ::ith::TypeInfo& Global::ithTypeInfo() noexcept {
     using Self = ::Global;
     static_assert(!std::is_polymorphic_v<Self>, "Global: reflected types can't have virtual functions");
@@ -155,6 +175,7 @@ void ith::generated::registerReflection_basic(::ith::TypeRegistry& registry) {
         &::ith::typeOf<::game::Health>(),
         &::ith::typeOf<::game::detail::inner::Tagged>(),
         &::ith::typeOf<::game::Empty>(),
+        &::ith::typeOf<::game::Owner>(),
         &::ith::typeOf<::Global>(),
         &::ith::typeOf<::GlobalFlags>(),
     };

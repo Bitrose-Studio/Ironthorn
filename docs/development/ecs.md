@@ -2,9 +2,11 @@
 
 The `ecs` module stores the game world as entities with components, in archetype tables. The
 design is [ADR-0014](../decisions/0014-ecs-storage-and-world.md); this page shows how to use what
-exists today, which is the ADR's first three slices: entities, archetype tables, typed queries and
-`has`; component access and queries by reflection record, and resources; then deferred commands
-and the schedule of systems. Hooks, the hierarchy and change detection follow in later slices.
+exists today, which is the ADR's first four slices: entities, archetype tables, typed queries and
+`has`; component access and queries by reflection record, and resources; deferred commands and
+the schedule of systems; then component hooks and immutable components
+([ADR-0030](../decisions/0030-ecs-hooks-registration-and-immutable-components.md)). The hierarchy
+and change detection follow in later slices.
 
 ## Components
 
@@ -134,10 +136,14 @@ const ith::TypeInfo& health = *typeRegistry.find("game::Health");
 if (world.has(ship, health)) { ... }
 void* value = world.get(ship, health);   // null when the entity has none
 void* added = world.add(ship, health);   // default-constructed; replaces an existing value
+world.add(ship, health, &loadedValue);   // moved from a value the caller built (a loader)
 world.remove(ship, health);
 
 world.forEachComponent(ship, [](const ith::TypeInfo& type, void* value) {
-    // every component of the entity, with its record
+    // every mutable component of the entity, with its record
+});
+std::as_const(world).forEachComponent(ship, [](const ith::TypeInfo& type, const void* value) {
+    // every component, immutable ones included, read-only (saving a level)
 });
 ```
 
@@ -146,8 +152,10 @@ world.forEachComponent(ship, [](const ith::TypeInfo& type, void* value) {
 - The record must be a reflected struct with the `Component` role; anything else asserts and the
   call fails as for a stale handle. A record of the same type from another binary works: the
   component id is the record's type id.
-- `add` builds the value with the record's default constructor. Write fields through the pointer
-  afterwards (the serializer reads into it).
+- `add(entity, type)` builds the value with the record's default constructor; its hooks see that
+  default value. `add(entity, type, value)` moves the value from one the caller built, which stays
+  a moved-from value the caller destroys: use it when hooks must see the real value, and for
+  immutable components, which can't be written after the add.
 - `forEachComponent` visits in an unspecified order, stable while the entity's set of types stays
   the same. Sort by `type.id` or `type.name` where a fixed order matters, such as in saved files.
 - Each call looks the type up in the process-wide component table under a mutex. Typed access
@@ -306,7 +314,7 @@ schedule.run(world); // once per frame
   | `ecs.schedule.unknown_system` | A constraint names an unknown system |
   | `ecs.schedule.other_stage` | A constraint names a system of another stage |
   | `ecs.schedule.cycle` | The constraints of a stage form a cycle |
-  | `ecs.schedule.invalid_access` | An access entry that is not a component or resource type, or a type named twice |
+  | `ecs.schedule.invalid_access` | An access entry that is not a component or resource type, a type named twice, or write access to an [immutable](#immutable-components) component |
 
   Adding a system needs `build()` again; `run` on a schedule that isn't built asserts and does
   nothing.
@@ -332,6 +340,83 @@ A system reaches the world only through its `ith::SystemContext`:
 - A system may split its work over jobs: gather what it needs with a query, then run a
   `parallelFor` whose ranges record into their own buffers, and append those in range order.
 - Run a schedule on the thread that owns the world. One schedule may run several worlds.
+
+## Hooks
+
+Hooks keep engine invariants, such as the hierarchy, as components come and go
+([ADR-0030](../decisions/0030-ecs-hooks-registration-and-immutable-components.md)). Gameplay
+doesn't use them: it reacts to changes in systems ([ADR-0016](../decisions/0016-gameplay-model-on-the-ecs.md)
+rule 4).
+
+```cpp
+#include "ith/ecs/Hooks.h"
+
+void onOwnerRemoved(ith::HookContext& context) {
+    const auto* owner = context.value<const game::Owner>();
+    if (auto* log = context.resource<game::OwnershipLog>()) {
+        log->released.push_back(owner->id);
+    }
+    context.commands().add(context.entity(), game::Unowned{}); // applied right after the change
+}
+
+// Once, at startup, before any world stores the type:
+ith::setComponentHooks<game::Owner>({.onRemove = &onOwnerRemoved});
+```
+
+- **Once per process, per component type.** Every World runs the hooks, Play In Editor copies
+  included. Setting a type's hooks twice, or after a World stored the type, asserts and changes
+  nothing. A hook is a plain function; state it needs lives in a world resource.
+- **When they run:**
+
+  | Hook | Runs | The value |
+  |---|---|---|
+  | `onAdd` | The entity gains a type it didn't have | The new value |
+  | `onInsert` | After every add or replace, after `onAdd` | The new value |
+  | `onReplace` | Before a value is overwritten or removed | The old value, still in place |
+  | `onRemove` | Before a value is removed, also by despawn and `clear()` | The value, still in place |
+
+- **Order.** A spawn runs `onAdd` for each component, then `onInsert` for each, in the order the
+  components were given (the arguments, or the values a spawn command recorded). Despawn runs
+  `onReplace` for every component, then `onRemove` for every one, while the entity is still whole,
+  sorted by stable type id. `clear()` does the same for every entity before anything is destroyed;
+  entities that its hooks' commands spawn survive it. The World's destructor runs no hooks.
+- **What a hook may do.** `ith::HookContext` gives the entity, the type record, the value
+  (`value()`, or `value<T>()`, where `T` must be the hook's type), `get`, `has`, `isAlive`,
+  `resource` and `commands()`. Direct structural changes are refused while a hook runs, as inside
+  a query.
+- **Hook commands apply right after the change** that ran the hook, before the call that made the
+  change returns. Commands that those commands' hooks record apply after them in turn,
+  depth-first; nesting deeper than `ith::kMaxHookDepth` (64) is fatal, because it means hooks that
+  keep triggering each other. In `World::apply` and at a schedule's sync point, each command's hook
+  commands apply before the next command.
+
+## Immutable components
+
+A component type marked `Immutable` changes only by being replaced, so its hooks always run:
+
+```cpp
+struct Owner {
+    ITH_TYPE(Component, Immutable)
+    ITH_FIELD()
+    std::uint64_t id = 0;
+};
+
+world.add(entity, Owner{.id = 7});                 // add or replace: allowed
+const Owner* owner = world.get<const Owner>(entity); // reading: allowed
+commands.add(entity, Owner{.id = 8});              // replacing later: allowed
+```
+
+| Path | For an immutable type |
+|---|---|
+| `get<T>` with a non-const `T`, non-const `get(entity, type)` | Asserts, gives null |
+| A query with a writable term (`query<T>`, a dynamic `Access::Write` term) | Asserts, visits nothing |
+| Non-const `forEachComponent` | Asserts and skips it; the const form visits it |
+| A system declaring write access | `build()` fails with `ecs.schedule.invalid_access` |
+| `HookContext::value<T>` with a non-const `T` | Asserts, gives null |
+| `add`, `add(entity, type, value)`, `Commands::add` | Allowed: they replace the value |
+
+`add` returns a pointer to the stored value; for an immutable type, only read through it. Saving
+and loading are unaffected: a loader adds the value it read with `add(entity, type, value)`.
 
 ## How storage works
 
@@ -373,11 +458,14 @@ the last two have no target. Record results with the machine they ran on.
 
 - the unit tests: `WorldTests.cpp`, `DynamicAccessTests.cpp` (access and queries by record),
   `ResourceTests.cpp`, `CommandTests.cpp` (deferred commands, including buffers recorded by several
-  jobs and checked to give the same world for any worker count) and `ScheduleTests.cpp` (stages,
-  order, sync points, build errors, enforced access, systems that record from jobs);
+  jobs and checked to give the same world for any worker count), `ScheduleTests.cpp` (stages,
+  order, sync points, build errors, enforced access, systems that record from jobs) and
+  `HookTests.cpp` (hook timing and order, hook commands, refused structural changes, registration
+  rules, and every refused write of an immutable component);
 - a randomized model test (`ModelTests.cpp`) that runs thousands of random operations, typed and
   by record, against a simple reference model and checks every handle, value, resource and query
-  result;
+  result, and that the hooks of an immutable component ran as often, and with the values, the
+  model expects;
 - `ConcurrencyTests.cpp`: worlds and component types created from several threads, worlds built
   by record in parallel jobs, and a world handed from job to job. CI runs it under
   ThreadSanitizer;

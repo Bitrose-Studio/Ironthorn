@@ -12,6 +12,7 @@ ith_add_module(ecs
         ComponentRegistry.cpp
         DynamicQuery.h
         Entity.h
+        Hooks.h
         Query.h
         Schedule.h
         Schedule.cpp

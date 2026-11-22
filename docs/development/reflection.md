@@ -107,6 +107,7 @@ The generator reads a restricted syntax and refuses anything else with a `file:l
 | `Replicated` | field | Sent over the network. |
 | `SaveGame` | field | Stored in save games. |
 | `Flags` | enum | The enum's values combine as bit flags. |
+| `Immutable` | type with the `Component` role | The component changes only by being replaced, never written in place ([ADR-0030](../decisions/0030-ecs-hooks-registration-and-immutable-components.md), [ECS guide](ecs.md#immutable-components)). On another role it is a generation error. Saving and loading are unaffected. |
 | `Min = <number>`, `Max = <number>` | field | Allowed range of a number. |
 | `Unit = "<text>"` | field | Unit of a number, e.g. `"cm"`. |
 | `Category = "<text>"` | type, field, enum | Group in the Details panel. |

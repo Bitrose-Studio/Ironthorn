@@ -74,6 +74,12 @@ struct Empty {
     ITH_TYPE(Event)
 };
 
+struct Owner {
+    ITH_TYPE(Component, Immutable, Transient)
+    ITH_FIELD()
+    std::uint64_t id = 0;
+};
+
 } // namespace game
 
 struct Global {
