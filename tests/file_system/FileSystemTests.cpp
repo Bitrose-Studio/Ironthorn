@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -322,6 +323,22 @@ TEST_SUITE("file_system.files") {
         REQUIRE(fs::writeFileAtomic(file, std::string(kSize, 'a')).hasValue());
         std::atomic<bool> done = false;
         std::atomic<int> badReads = 0;
+        // For the failure message: when the last write returned, and whether a temporary file is there.
+        std::atomic<std::int64_t> lastWriteNs = 0;
+        const auto nowNs = [] {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        };
+        const auto context = [&] {
+            bool temporary = false;
+            for (const std::string& name : namesIn(directory.path())) {
+                temporary = temporary || fs::isTemporaryFileName(name);
+            }
+            return " (" + std::to_string((nowNs() - lastWriteNs.load()) / 1000) +
+                   " us after the last write returned; " +
+                   (temporary ? "a temporary file exists" : "no temporary file") + ")";
+        };
         std::mutex errorsMutex;
         std::vector<std::string> errors;
         const auto note = [&](const std::string& error) {
@@ -337,7 +354,7 @@ TEST_SUITE("file_system.files") {
                     const ith::Expected<std::string> text = fs::readFile(file, kSize);
                     if (!text) {
                         ++badReads;
-                        note("read: " + text.error().code + " " + text.error().message);
+                        note("read: " + text.error().code + " " + text.error().message + context());
                     } else if (text->size() != kSize || text->find_first_not_of((*text)[0]) != std::string::npos) {
                         ++badReads;
                         note("read: a partial or mixed file");
@@ -352,6 +369,7 @@ TEST_SUITE("file_system.files") {
             if (!written && written.error().code == "fs.busy") {
                 written = fs::writeFileAtomic(file, bytes, {.durability = fs::Durability::Atomic});
             }
+            lastWriteNs.store(nowNs());
             if (!written) {
                 ++failedWrites;
                 note("write: " + written.error().code + " " + written.error().message);

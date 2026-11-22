@@ -97,10 +97,11 @@ inline constexpr std::string_view kTemporaryMarker = ".tmp-";
 // larger than `maxSize` (checked before anything is allocated), "fs.is_a_directory", or the
 // codes above. On Windows the file is opened with read, write and delete sharing, so a reader
 // never blocks an atomic replacement or a rename by another thread or process. The POSIX rename
-// of a concurrent writeFileAtomic makes the name delete-pending, then missing, for a moment: while
-// its temporary file "<name>.tmp-<uuid>" exists, an open that fails with not found, access denied
-// or a sharing violation is tried again for up to a second; otherwise the error is reported at
-// once.
+// of a concurrent writeFileAtomic can make the name delete-pending or missing for a moment, so an
+// open that fails with not found, access denied or a sharing violation is tried once more, then for
+// up to a second while the writer's temporary file "<name>.tmp-<uuid>" exists, and for up to 50 ms
+// after an access denial or a sharing violation without one. A missing file is reported after the
+// one extra try, a real permission error after 50 ms.
 [[nodiscard]] Expected<std::string> readFile(std::string_view path, std::size_t maxSize);
 
 // Replaces the file at `path` with `bytes` so that readers see the old file or the new one, never

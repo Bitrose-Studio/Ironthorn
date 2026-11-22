@@ -11,6 +11,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -24,8 +25,10 @@ namespace {
 
 using detail::pathError;
 
-// How long readFile waits for a replacement in progress (see there).
+// How long readFile waits for a replacement in progress, and for a file that is denied to it
+// without one (see there).
 constexpr auto kReplacementWait = std::chrono::seconds(1);
+constexpr auto kDeniedWait = std::chrono::milliseconds(50);
 
 // Closes a file or directory handle.
 class FileHandle {
@@ -411,14 +414,20 @@ Expected<std::string> readFile(std::string_view path, std::size_t maxSize) {
     FileHandle file(open());
     DWORD error = file.valid() ? ERROR_SUCCESS : GetLastError();
     // A writer's POSIX rename (writeFileAtomic) takes steps that a reader can see: the old file is
-    // delete-pending for a moment (access denied), then the name is gone (not found) until the new
-    // file takes it. Its temporary file "<name>.tmp-<uuid>" exists throughout, so while one does, the
-    // reader opens again, for up to a second; otherwise the error is reported at once.
+    // delete-pending for a moment (access denied), and the name can be missing (not found) until the
+    // new file takes it. The reader therefore always opens once more; it keeps trying for up to a
+    // second while the writer's temporary file "<name>.tmp-<uuid>" exists, and for up to 50 ms after
+    // an access denial or a sharing violation without one (a delete-pending file, or a scanner).
+    // Otherwise, as for a file that is really missing, the error is reported.
     const auto start = std::chrono::steady_clock::now();
-    for (DWORD delay = 0; !file.valid() && isReplacementError(error) && replacementInProgress(native->wide) &&
-                          std::chrono::steady_clock::now() - start < kReplacementWait;
-         delay = std::min<DWORD>(delay * 2 + 1, 10)) {
-        Sleep(delay);
+    for (int attempt = 0; !file.valid() && isReplacementError(error); ++attempt) {
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        const bool denied = error != ERROR_FILE_NOT_FOUND && elapsed < kDeniedWait;
+        if (elapsed >= kReplacementWait || (attempt > 0 && !denied && !replacementInProgress(native->wide))) {
+            break;
+        }
+        constexpr std::array<DWORD, 5> kDelaysMs = {0, 1, 3, 7, 10};
+        Sleep(kDelaysMs[static_cast<std::size_t>(std::min(attempt, 4))]);
         file.reset(open());
         error = file.valid() ? ERROR_SUCCESS : GetLastError();
     }

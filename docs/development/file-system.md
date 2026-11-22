@@ -92,15 +92,17 @@ is removed on every failure; `isTemporaryFileName()` lets scans report the ones 
   and they keep reading the old content, as on POSIX. Where it is refused (`ERROR_INVALID_PARAMETER`,
   `ERROR_NOT_SUPPORTED`, `ERROR_INVALID_FUNCTION` or `ERROR_CALL_NOT_IMPLEMENTED`: FAT, some
   network shares, older Windows), `MoveFileExW` is used, with the old behaviour.
-- **The POSIX rename takes steps a reader can see.** For a moment the old file is delete-pending,
-  and an open fails with access denied; then the name is gone, and an open fails with not found,
-  until the new file takes it. Under load the writer can be descheduled between the steps, so the
-  window can last milliseconds. The temporary file `<name>.tmp-<uuid>` exists throughout, so when
-  `readFile` fails with not found, access denied or a sharing violation and such a file exists next
-  to the name, it opens again, with growing sleeps of up to 10 ms, for up to a second. Without one
-  it reports the error at once, so a missing file or a real permission error costs one extra
-  directory lookup. A temporary file left by a crash makes reads of a missing target wait the full
-  second; scans report such files (`isTemporaryFileName`).
+- **The POSIX rename takes steps a reader can see.** Measured: an open of the name can fail with
+  not found (`STATUS_OBJECT_NAME_NOT_FOUND`) about 0.3 ms after the writer's rename returned, when
+  the temporary file is already gone; CI also saw access denied, which is what Windows reports for
+  a delete-pending file (`STATUS_DELETE_PENDING`). Under load the window can last milliseconds. So
+  when `readFile` fails with not found, access denied or a sharing violation, it opens once more,
+  then keeps trying with growing sleeps of up to 10 ms: for up to a second while a temporary file
+  `<name>.tmp-<uuid>` exists next to the name, and for up to 50 ms after an access denial or a
+  sharing violation without one (a delete-pending file, or a scanner opening the new file). A file
+  that is really missing is reported after the one extra open and one directory lookup, a real
+  permission error after 50 ms. A temporary file left by a crash makes reads of a missing target
+  wait the full second; scans report such files (`isTemporaryFileName`).
 - **Durability on Windows:** with `Durable` the temporary file's data is flushed before the
   rename. The rename itself is not forced to the disk: Windows documents no directory flush, and
   `MOVEFILE_WRITE_THROUGH` (on the fallback path) is documented only for moves done as copy and
