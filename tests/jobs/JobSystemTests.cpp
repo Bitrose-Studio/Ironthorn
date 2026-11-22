@@ -600,6 +600,12 @@ TEST_CASE("JobSystem: the main-thread wake hook runs after every main-thread pos
     jobs.submit(JobLane::Foreground, "Before", [] {}, &before);
     jobs.submitAfter(before, JobLane::MainThread, "After", [] {}, &after);
     jobs.wait(after);
+    // The worker that finishes "Before" queues "After" and then calls the hook, so the main thread,
+    // which may run "After" as soon as it is queued, can return from the wait before the hook ran.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (wakes.load() < 3 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
     CHECK(wakes.load() == 3);
     static_cast<void>(jobs.runMainThreadJobs()); // the waits may have run some of them already
 
