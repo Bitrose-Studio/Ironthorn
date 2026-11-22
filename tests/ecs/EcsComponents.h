@@ -246,4 +246,18 @@ struct CopyProbe {
     std::int32_t value = 0;
 };
 
+// Their hooks count into counters of EntityPatchTests.cpp, which sets them: a mutable and an
+// immutable component.
+struct PatchCounted {
+    ITH_TYPE(Component)
+    ITH_FIELD()
+    std::int32_t value = 0;
+};
+
+struct PatchFrozen {
+    ITH_TYPE(Component, Immutable)
+    ITH_FIELD()
+    std::int32_t value = 0;
+};
+
 } // namespace ith::test

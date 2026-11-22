@@ -270,6 +270,47 @@ ith::DynamicQuery moving = world.dynamicQuery(terms, filters);
   it; it's valid while the world lives.
 - Structural changes inside `forEach` are refused, as for typed queries.
 
+### Patches
+
+`World::applyPatches` changes the components of several entities as one step and returns the
+patches that undo it ([ADR-0033](../decisions/0033-reflection-property-paths-and-patches.md),
+`ith/ecs/EntityPatch.h`). The Details panel, undo, prefab overrides and Keep Simulation Changes
+use it; the property paths and patches themselves are in the
+[reflection guide](reflection.md#property-paths-and-patches).
+
+```cpp
+const ith::TypeInfo& light = ith::typeOf<game::Light>();
+ith::Patch brighter(light);
+brighter.set(*ith::PropertyPath::parse(light, "intensity"), ith::OwnedValue::of(4.0f));
+
+std::vector<ith::EntityPatch> patches(1);
+patches[0].entity = lamp;
+patches[0].changes.push_back(ith::ComponentChange::makePatch(std::move(brighter)));
+patches[0].changes.push_back(ith::ComponentChange::makeAdd(ith::OwnedValue::of(game::Flicker{})));
+patches[0].changes.push_back(ith::ComponentChange::makeRemove(ith::typeOf<game::Glow>()));
+
+ith::Expected<std::vector<ith::EntityPatch>> undo = world.applyPatches(patches);
+if (undo) {
+    static_cast<void>(world.applyPatches(*undo)); // back to what it was
+}
+```
+
+- **Everything is checked first**, as if the changes were made one after another, without
+  touching the world: live entities, component types, components present for a patch or a
+  remove, every patch prepared on a copy, and every new `ChildOf` and `StableId` as `add` would
+  check it, against the state the earlier changes leave (two reparents that would make a cycle
+  together are refused). On failure the world is unchanged.
+- **Then the changes are made in order.** A patch of a mutable component is written in place:
+  its changed tick is stamped and no hook runs, as for a write through `get`. A patch of an
+  immutable component and an `Add` go through `add`, so the hooks and their commands run; a
+  `Remove` goes through `remove`.
+- The returned patches list the entities in reverse order, each with its changes in reverse
+  order. Applying them undoes the step; applying their result redoes it.
+- `Children` and `DisabledInHierarchy` are refused (`ecs.patch.world_owned`): the World keeps
+  them. Hooks must not remove a component that a later change of the same step patches.
+- Error codes (`ecs.patch.*` and the patch errors) are listed at `World::applyPatches`; messages
+  name the entity patch and the change.
+
 ## Resources
 
 Resources are typed singletons of a world: time, input state, match rules, settings. A resource
@@ -716,7 +757,9 @@ spawn and the schedule have no target. Record results with the machine they ran 
   that writes only the changed subtrees, removals included) and `StableIdTests.cpp` (the lookup
   through every change, duplicate and nil ids refused) and `WorldCopyTests.cpp` (values, slots,
   hierarchy and order, remapped entities in components and resources, EditorOnly left out, fresh
-  ticks, no hooks, refusals);
+  ticks, no hooks, refusals) and `EntityPatchTests.cpp` (`applyPatches`: writes in place without
+  hooks, replaces with hooks, adds and removes, inverses that undo, reparenting and its undo,
+  refused values and cycles across entities, every error, and failures that change nothing);
 - a randomized model test (`ModelTests.cpp`) that runs thousands of random operations, typed and
   by record, against a simple reference model and checks every handle, value, resource and query
   result, and that the hooks of an immutable component ran as often, and with the values, the

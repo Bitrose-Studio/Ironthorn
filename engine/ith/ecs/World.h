@@ -104,10 +104,12 @@
 #include "ith/ecs/Commands.h"
 #include "ith/ecs/ComponentRegistry.h"
 #include "ith/ecs/DynamicQuery.h"
+#include "ith/ecs/EntityPatch.h"
 #include "ith/ecs/Hierarchy.h"
 #include "ith/ecs/Query.h"
 #include "ith/ecs/StableId.h"
 #include "ith/foundation/Entity.h"
+#include "ith/foundation/Expected.h"
 #include "ith/foundation/Mutex.h"
 #include "ith/foundation/Uuid.h"
 #include "ith/math/Types.h"
@@ -144,6 +146,9 @@ void propagateChangedTransforms(World& world);
 
 // The steps of propagateChangedTransforms, with access to the World (TransformPropagation.cpp).
 struct TransformPropagation;
+
+// The checks and steps of World::applyPatches, with access to the World (EntityPatch.cpp).
+struct PatchApplier;
 
 // For tests only: sets the world's tick, so that tests can cross the 32-bit wraparound.
 // Precondition: the world has no entities and no system has run on it.
@@ -287,6 +292,26 @@ public:
     // or has none, and while a query iterates (asserted).
     bool remove(Entity entity, const TypeInfo& type);
 
+    // Applies changes to the components of several entities as one step (EntityPatch.h, ADR-0033)
+    // and returns the patches that undo them: the entities in reverse order, each with its
+    // changes in reverse order.
+    // - First everything is checked, as if the changes were made one after another, without
+    //   changing the world: live entities, component types, components present for Patch and
+    //   Remove, every patch prepared on a copy of the component, and every new ChildOf and StableId
+    //   value as add would check it (a live parent of this world that isn't the entity or below it,
+    //   a unique id that isn't nil). On failure the world is unchanged.
+    // - Then the changes are made in order: a patch of a mutable component is written in place,
+    //   stamping its changed tick without hooks, as a write through get is; a patch of an immutable
+    //   component and an Add go through add, which runs the hooks and their commands; a Remove
+    //   goes through remove. Hooks must not remove a component that a later change patches.
+    // Fails with "ecs.patch.iterating" while a query iterates or a system runs (asserted),
+    // "ecs.patch.stale_entity", "ecs.patch.not_a_component" (no type, or one without the
+    // Component role), "ecs.patch.world_owned" (Children, DisabledInHierarchy: the World keeps
+    // them), "ecs.patch.missing_component", "ecs.patch.refused_value", "reflection.patch.wrong_type"
+    // (a patch of another root type, or an Add value of another type or none), and the errors of
+    // preparePatch. Messages name the entity patch, the change and the type.
+    Expected<std::vector<EntityPatch>> applyPatches(std::span<const EntityPatch> patches);
+
     // Calls `function(const TypeInfo& type, void* value)` for each component of the entity, in an
     // unspecified order that is stable while its set of component types stays the same; nothing
     // for a stale handle. Structural changes inside `function` are refused, as in a query. The
@@ -348,6 +373,7 @@ private:
     friend class Schedule;
     friend void propagateTransforms(World& world);
     friend struct detail::TransformPropagation;
+    friend struct detail::PatchApplier;
     friend void detail::setChangeTickForTesting(World& world, std::uint32_t tick);
     friend bool copyWorld(const World& source, World& target, const WorldCopyOptions& options);
 
