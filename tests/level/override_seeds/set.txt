@@ -1,0 +1,2 @@
+ith::test::level::Light.intensity 4.5
+ith::LocalTransform.value.translation.x -2

@@ -1,0 +1,3 @@
++ith::test::level::Light {"intensity": 3, "label": "added"}
+-ith::test::level::Target
++ith::test::level::Target {"entity": "00000000-0000-0000-0000-000000000003", "others": ["00000000-0000-0000-0000-000000000001"]}

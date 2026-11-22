@@ -1,0 +1,4 @@
++ith::ChildOf {"parent": "00000000-0000-0000-0000-000000000004"}
+ith::test::level::Sealed.value 9
++ith::StableId {"id": "00000000-0000-0000-0000-000000000009"}
+-ith::Disabled

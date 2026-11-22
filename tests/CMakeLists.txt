@@ -527,24 +527,33 @@ ith_add_test_suite(level
     SOURCES level/LevelTests.cpp
     LIBRARIES ith::level ith_test_level_components)
 
-# A libFuzzer target for loadLevel, in Clang sanitizer builds only, with a short smoke run like the
-# others, seeded with sample levels (level/fuzz_seeds) and the JSON dictionary.
+# libFuzzer targets for loadLevel, into fresh and filled worlds, and for override records fed into
+# World::applyPatches, in Clang sanitizer builds only, with short smoke runs like the others,
+# seeded with sample levels (level/fuzz_seeds) and records (level/override_seeds) and the level
+# dictionary. -timeout=10 turns an input that takes too long into a failure.
 if(IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
         AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-    add_executable(ith_level_fuzz level/LevelLoadFuzz.cpp)
-    target_link_libraries(ith_level_fuzz PRIVATE ith::level ith_test_level_components)
-    target_compile_options(ith_level_fuzz PRIVATE -fsanitize=fuzzer)
-    target_link_options(ith_level_fuzz PRIVATE -fsanitize=fuzzer)
-    set_target_properties(ith_level_fuzz PROPERTIES
-        FOLDER "Ironthorn/Tests"
-        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
-    set(corpus "${CMAKE_CURRENT_BINARY_DIR}/level_fuzz_corpus")
-    file(MAKE_DIRECTORY "${corpus}")
-    add_test(NAME level_fuzz
-        COMMAND ith_level_fuzz -runs=20000 -max_len=4096 -malloc_limit_mb=512
-            -dict=${CMAKE_CURRENT_SOURCE_DIR}/serialization/fuzz_seeds/json.dict
-            "${corpus}" "${CMAKE_CURRENT_SOURCE_DIR}/level/fuzz_seeds")
-    set_tests_properties(level_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
+    foreach(target level override)
+        if(target STREQUAL "level")
+            add_executable(ith_level_fuzz level/LevelLoadFuzz.cpp)
+            set(seeds "${CMAKE_CURRENT_SOURCE_DIR}/level/fuzz_seeds")
+        else()
+            add_executable(ith_override_fuzz level/OverrideFuzz.cpp)
+            set(seeds "${CMAKE_CURRENT_SOURCE_DIR}/level/override_seeds")
+        endif()
+        target_link_libraries(ith_${target}_fuzz PRIVATE ith::level ith_test_level_components)
+        target_compile_options(ith_${target}_fuzz PRIVATE -fsanitize=fuzzer)
+        target_link_options(ith_${target}_fuzz PRIVATE -fsanitize=fuzzer)
+        set_target_properties(ith_${target}_fuzz PROPERTIES
+            FOLDER "Ironthorn/Tests"
+            COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+        set(corpus "${CMAKE_CURRENT_BINARY_DIR}/${target}_fuzz_corpus")
+        file(MAKE_DIRECTORY "${corpus}")
+        add_test(NAME ${target}_fuzz
+            COMMAND ith_${target}_fuzz -runs=20000 -max_len=4096 -malloc_limit_mb=512 -timeout=10
+                -dict=${CMAKE_CURRENT_SOURCE_DIR}/level/level.dict "${corpus}" "${seeds}")
+        set_tests_properties(${target}_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
+    endforeach()
 endif()
 
 # The ECS benchmark (docs/development/ecs.md). Its test only prints numbers and never fails on

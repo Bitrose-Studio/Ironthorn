@@ -1,0 +1,3 @@
+ith::test::level::Light.flicker [0.5, 1, 2]
+ith::test::level::Target.route [{"to": "00000000-0000-0000-0000-000000000002", "wait": 1}]
++ith::StableId {"id": "00000000-0000-0000-0000-000000000002"}
