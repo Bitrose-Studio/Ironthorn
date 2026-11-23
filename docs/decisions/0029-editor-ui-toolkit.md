@@ -1,7 +1,8 @@
 # ADR-0029: Editor UI toolkit
 
 - **Status:** Accepted
-- **Amended by:** [ADR-0035](0035-file-system-configuration-and-main-thread-queue.md)
+- **Amended by:** [ADR-0035](0035-file-system-configuration-and-main-thread-queue.md),
+  [ADR-0040](0040-editor-docking-panels-and-layouts.md)
 - **Date:** 2026-11-22
 - **Related:** [ADR-0001](0001-cpp-language-and-safety-rules.md) (no exceptions or RTTI,
   `ITH_ASSERT`), [ADR-0003](0003-clean-room.md), [ADR-0004](0004-modules-and-layering.md)

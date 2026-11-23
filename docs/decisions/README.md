@@ -33,7 +33,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0026](0026-job-system-rules-corrected.md) | Job system: rules corrected after the first implementation (amends 0025) | Accepted |
 | [0027](0027-input-rules-completed.md) | Input: rules completed after the first implementation (amends 0012, 0013) | Accepted, amended by [0035](0035-file-system-configuration-and-main-thread-queue.md) |
 | [0028](0028-render-graph-v1.md) | Render graph v1 | Accepted |
-| [0029](0029-editor-ui-toolkit.md) | Editor UI toolkit | Accepted, amended by [0035](0035-file-system-configuration-and-main-thread-queue.md) |
+| [0029](0029-editor-ui-toolkit.md) | Editor UI toolkit | Accepted, amended by [0035](0035-file-system-configuration-and-main-thread-queue.md), [0040](0040-editor-docking-panels-and-layouts.md) |
 | [0030](0030-ecs-hooks-registration-and-immutable-components.md) | ECS: component hooks registration and immutable components (amends 0014, 0018) | Accepted |
 | [0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md) | ECS: hierarchy, enabled state and transform propagation completed (amends 0014) | Accepted, amended by [0034](0034-level-documents.md) |
 | [0032](0032-entity-references-stable-ids-and-world-copy.md) | Entity references, stable ids and world copy (amends 0014, 0018, 0020) | Accepted, amended by [0034](0034-level-documents.md), [0037](0037-editor-commands-transactions-selection-and-automation.md) |
@@ -44,6 +44,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0037](0037-editor-commands-transactions-selection-and-automation.md) | Editor commands, transactions, selection and automation (amends 0008, 0032, 0033) | Accepted |
 | [0038](0038-file-system-windows-read-retry-during-replace.md) | File system: Windows read retry while a replace is in flight (amends 0036) | Accepted, amended by [0039](0039-file-system-windows-read-retry-measured.md) |
 | [0039](0039-file-system-windows-read-retry-measured.md) | File system: Windows read retry after a replace, measured (amends 0038) | Accepted |
+| [0040](0040-editor-docking-panels-and-layouts.md) | Editor docking, panels and layouts (amends 0029) | Accepted |
 
 ## Planned
 
