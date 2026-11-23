@@ -3,33 +3,20 @@
   "version": 1,
   "data": {
     "root": {
-      "split": "vertical",
-      "ratio": 0.72,
+      "split": "top_bottom",
+      "ratio": 0.7,
       "first": {
-        "split": "horizontal",
-        "ratio": 0.78,
-        "first": {
-          "tabs": ["ith.viewport.1"],
-          "active": "ith.viewport.1"
-        },
-        "second": {
-          "split": "vertical",
-          "ratio": 0.45,
-          "first": {
-            "tabs": ["ith.outliner"],
-            "active": "ith.outliner"
-          },
-          "second": {
-            "tabs": ["ith.details"],
-            "active": "ith.details"
-          }
-        }
+        "tabs": [],
+        "central": true
       },
       "second": {
-        "tabs": ["ith.content_browser", "ith.output_log"],
-        "active": "ith.content_browser"
+        "tabs": [
+          "ith.output_log"
+        ],
+        "active": "ith.output_log"
       }
     },
-    "floating": []
+    "floating": [],
+    "editors": {}
   }
 }

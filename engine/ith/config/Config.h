@@ -108,6 +108,11 @@ public:
     // layer has the file. Valid until the next set or reload.
     [[nodiscard]] const serialization::Value& data(std::string_view file);
 
+    // The merged data of "<file>.json" across the layers below `belowLayer` (an index into layers(),
+    // at most its size): what those layers give before the layer `belowLayer` and the ones above it.
+    // data(file, layers().size()) equals data(file).
+    [[nodiscard]] serialization::Value data(std::string_view file, std::size_t belowLayer);
+
     // The merged section as T. Missing fields keep T's defaults. A field T doesn't have and a value
     // of the wrong type warn once ("config.unknown_field", "config.wrong_type"); the latter keeps
     // the field's default.
@@ -154,11 +159,16 @@ public:
     // and is writable.
     [[nodiscard]] Expected<void> writeFile(std::string_view layer, std::string_view relative, std::string_view bytes);
 
-    // Changes on every set, writeFile and reload.
+    // Removes the whole file `relative` from the layer called `layer`. Fails with
+    // "config.invalid_path", "fs.not_found" when the layer has no such file, or the file system's
+    // errors. Preconditions (asserted): the layer exists and is writable.
+    [[nodiscard]] Expected<void> removeFile(std::string_view layer, std::string_view relative);
+
+    // Changes on every set, writeFile, removeFile and reload.
     [[nodiscard]] std::uint64_t generation() const noexcept { return m_generation; }
 
-    // Changes on every set of the settings file `file` ("Editor"), every writeFile of the whole
-    // file `file` ("Layouts/Default.json") and every reload.
+    // Changes on every set of the settings file `file` ("Editor"), every writeFile or removeFile of
+    // the whole file `file` ("Layouts/Default.json") and every reload.
     [[nodiscard]] std::uint64_t generation(std::string_view file) const;
 
     // Reads every file that was read before again, for a Reload command until a file watcher exists.

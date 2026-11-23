@@ -1,6 +1,7 @@
-// ironthorn_editor: the Ironthorn editor (ADR-0008, ADR-0029). It opens a window with the editor
-// shell - the main menu with the File and Edit commands and their shortcuts, an empty dock space and
-// the status bar - over one editor session of a project.
+// ironthorn_editor: the Ironthorn editor (ADR-0008, ADR-0029, ADR-0040). It opens a window with the
+// editor shell - the main menu with the File, Edit and Window commands and their shortcuts, the dock
+// space with the panels (the Output Log) in the last session's layout, and the status bar - over
+// one editor session of a project.
 //
 //   ironthorn_editor --project <dir>            edits the project in <dir>
 //   ironthorn_editor ... --user-dir <dir>       the user configuration layer (default: the user's
@@ -23,13 +24,16 @@
 #include "ith/editor_core/EditorPreferences.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/Keymap.h"
+#include "ith/editor_ui/DockLayout.h"
 #include "ith/editor_ui/EditorShell.h"
 #include "ith/editor_ui/EditorUi.h"
 #include "ith/editor_ui/EditorUiShader.h"
 #include "ith/editor_ui/IdlePolicy.h"
+#include "ith/editor_ui/OutputLog.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
 #include "ith/foundation/Assert.h"
+#include "ith/foundation/LogRingBuffer.h"
 #include "ith/foundation/Version.h"
 #include "ith/input/Input.h"
 #include "ith/jobs/JobSystem.h"
@@ -68,6 +72,8 @@ namespace {
 using Clock = std::chrono::steady_clock;
 
 constexpr ith::rhi::Format kTargetFormat = ith::rhi::Format::B8G8R8A8Srgb;
+// The log records the Output Log keeps.
+constexpr std::size_t kLogHistory = 4096;
 
 #ifdef _WIN32
 constexpr std::string_view kPlatformName = "Windows";
@@ -386,12 +392,40 @@ bool runAutomation(ith::EditorSession& session, const std::string& path) {
     return true;
 }
 
+// What the idle policy watches besides events and jobs: the document, the layout and the log.
+struct StateWatch {
+    std::uint64_t document = 0;
+    std::uint64_t layout = 0;
+    std::uint64_t log = 0;
+
+    // True when any of them changed since the last call.
+    bool changed(const ith::EditorSession& session, const ith::LogRingBuffer& history) {
+        std::vector<ith::LogEntry> records;
+        const std::uint64_t nextLog = history.read(log, records);
+        const std::uint64_t nextDocument = session.document().changes().any();
+        const std::uint64_t nextLayout = session.layouts().changes();
+        const bool any = nextDocument != document || nextLayout != layout || nextLog != log;
+        document = nextDocument;
+        layout = nextLayout;
+        log = nextLog;
+        return any;
+    }
+};
+
 // The editor's frame loop and its state, once the platform, the device and the session exist.
-int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& jobs, ith::Window& window) {
+// Fails with "editor.project_not_found" unless the project directory exists.
+ith::Expected<void> checkProject(const Options& options) {
     const ith::Expected<std::optional<ith::fs::FileInfo>> projectInfo = ith::fs::fileInfo(options.project);
     if (!projectInfo || !projectInfo->has_value() || (*projectInfo)->kind != ith::fs::FileKind::Directory) {
-        return fail(ith::Error{.code = "editor.project_not_found",
-                               .message = "the project directory " + options.project + " does not exist"});
+        return ith::makeError("editor.project_not_found",
+                              "the project directory " + options.project + " does not exist");
+    }
+    return {};
+}
+
+int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& jobs, ith::Window& window) {
+    if (const ith::Expected<void> project = checkProject(options); !project) {
+        return fail(project.error());
     }
     ith::Expected<std::vector<ith::ConfigLayer>> layers = configLayers(options);
     if (!layers) {
@@ -403,7 +437,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     ith::TypeRegistry types;
     ith::generated::registerReflection_ecs(types);
     ith::generated::registerReflection_editor_core(types);
-    ith::EditorSession session(types, {.projectDirectory = options.project, .jobs = &jobs});
+    ith::EditorSession session(types, {.projectDirectory = options.project, .jobs = &jobs, .config = &config});
     std::vector<ith::Error> warnings;
     const ith::Keymap keymap = ith::Keymap::load(config, session.commands(), warnings);
     warnings.insert(warnings.end(), config.warnings().begin(), config.warnings().end());
@@ -452,10 +486,22 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     }
     ith::EditorUi& ui = **created;
 
+    // The Output Log shows the log from here on; the dock space restores the last session's layout,
+    // or the default one (ADR-0040 rule 16), once the panels are registered.
+    ith::LogRingBuffer logHistory(kLogHistory);
+    const ith::Expected<void> sinkAdded = ith::addLogSink(logHistory.sink());
+    if (!sinkAdded) {
+        warn(sinkAdded.error());
+    }
+    ith::OutputLog outputLog(logHistory, ui.theme());
+    ith::registerOutputLog(session.panels(), outputLog);
+    ith::DockLayout dock(session);
+    static_cast<void>(session.layouts().restore());
+
     ith::IdlePolicy idle(
         {.focused = preferences.idleFramesPerSecond, .unfocused = preferences.idleFramesPerSecondUnfocused});
     ith::EditorShellState shell;
-    std::uint64_t seenChanges = session.document().changes().any();
+    StateWatch watch;
     Clock::time_point last = Clock::now();
     std::uint64_t frames = 0;
     int status = 0;
@@ -478,14 +524,14 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
                 target.resize({.width = event.width, .height = event.height});
             } else if (event.window == window.id() && event.type == ith::EventType::WindowDisplayScaleChanged) {
                 ui.setDisplayScale(window.displayScale());
+                dock.displayScaleChanged();
             }
         }
         applyInput(input, window);
 
-        const std::uint64_t changes = session.document().changes().any();
-        if (!events.empty() || jobsRun > 0 || changes != seenChanges) {
+        const bool changed = watch.changed(session, logHistory);
+        if (!events.empty() || jobsRun > 0 || changed) {
             idle.requestFrame();
-            seenChanges = changes;
         }
 
         const Clock::time_point now = Clock::now();
@@ -494,7 +540,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
                      .deltaSeconds = secondsBetween(last, now),
                      .focused = input.focusedWindow() == window.id()});
         last = now;
-        ith::drawEditorShell(session, keymap, shell);
+        ith::drawEditorShell(session, keymap, shell, dock);
         ui.endFrame();
         if (!render(device, target, graph, pool, ui)) {
             status = 1;
@@ -519,6 +565,9 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     }
     // A save still writing finishes before the editor goes (ADR-0037 rule 16).
     session.waitIdle();
+    // What the user arranged since the last read-back goes into the session layout.
+    dock.readBack();
+    session.layouts().saveSession();
     for (const ith::Error& warning : session.takeWarnings()) {
         warn(warning);
     }

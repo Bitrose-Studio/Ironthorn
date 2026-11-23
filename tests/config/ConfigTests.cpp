@@ -404,6 +404,31 @@ TEST_SUITE("config.files") {
         CHECK(config.generation("Other") == 1);
     }
 
+    TEST_CASE("removeFile removes a whole file from a layer, and data below a layer merges the lower ones") {
+        const Layers layers;
+        layers.write("engine", "Layouts/Mine.json", "engine");
+        layers.write("user", "Layouts/Mine.json", "user");
+        ith::Config config = layers.config();
+        const std::uint64_t start = config.generation("Layouts/Mine.json");
+        REQUIRE(config.removeFile("user", "Layouts/Mine.json").hasValue());
+        CHECK(layers.read("user", "Layouts/Mine.json") == "<fs.not_found>");
+        CHECK(config.generation("Layouts/Mine.json") == start + 1);
+        const auto found = config.findFile("Layouts/Mine.json");
+        REQUIRE((found && found->has_value()));
+        CHECK((found && found->has_value() && (*found)->layer == 0));
+        CHECK(config.removeFile("user", "Layouts/Mine.json").error().code == "fs.not_found");
+        CHECK(config.removeFile("user", "../x.json").error().code == "config.invalid_path");
+
+        layers.writeSettings("engine", "Editor", R"({"layouts": {"defaultName": "Default", "x": 1}})");
+        layers.writeSettings("project", "Editor", R"({"layouts": {"defaultName": "Studio"}})");
+        layers.writeSettings("user", "Editor", R"({"layouts": {"defaultName": "Mine"}})");
+        ith::Config merged = layers.config();
+        CHECK(merged.data("Editor", 3) == merged.data("Editor"));
+        CHECK(merged.data("Editor", 2) == json(R"({"layouts": {"defaultName": "Studio", "x": 1}})"));
+        CHECK(merged.data("Editor", 1) == json(R"({"layouts": {"defaultName": "Default", "x": 1}})"));
+        CHECK(merged.data("Editor", 0) == Value::object());
+    }
+
     TEST_CASE("reload reads changed files again") {
         const Layers layers;
         layers.writeSettings("user", "Editor", R"({"preferences": {"theme": "light"}})");
@@ -442,14 +467,11 @@ TEST_SUITE("config.engine_files") {
                 const Value* focus = commands->find("ith.viewport.focus_selection");
                 CHECK((focus != nullptr && *focus == json(R"(["Keyboard.F"])")));
             }
-            const Value* layouts = config.data("Editor").find("layouts");
-            REQUIRE(layouts != nullptr);
-            CHECK((layouts != nullptr && layouts->find("default") != nullptr &&
-                   *layouts->find("default") == Value::string("Default")));
+            CHECK(config.data("Editor").kind() == Value::Kind::Object);
             CHECK(config.warnings().empty());
 
-            // The Default layout (ADR-0029 rule 15): viewport, Outliner, Details, Content Browser
-            // and Output Log, each once.
+            // The Default layout is an ith.editor_layout document; editor_core's layout tests check its
+            // shape (ADR-0040 rule 18).
             const auto layout = config.findFile("Layouts/Default.json");
             REQUIRE((layout && layout->has_value()));
             if (layout && layout->has_value()) {
@@ -458,16 +480,7 @@ TEST_SUITE("config.engine_files") {
                 const ith::Expected<Value, ith::serialization::Error> document =
                     ith::serialization::readDocument(fs::readFile((*layout)->path, 1 << 20).valueOr(""), kLayoutFormat);
                 REQUIRE(document.hasValue());
-                if (document) {
-                    const std::string text = ith::serialization::writeJson(*document).valueOr("");
-                    for (const char* panel :
-                         {"ith.viewport.1", "ith.outliner", "ith.details", "ith.content_browser", "ith.output_log"}) {
-                        CAPTURE(panel);
-                        const std::string quoted = "\"" + std::string(panel) + "\"";
-                        CHECK(text.find(quoted) != std::string::npos);
-                    }
-                    CHECK(document->find("root") != nullptr);
-                }
+                CHECK((document && document->find("root") != nullptr));
             }
         }
     }

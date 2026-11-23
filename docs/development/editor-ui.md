@@ -21,7 +21,7 @@ commands; `editor_core` never sees ImGui. The editor application, `ironthorn_edi
 - One `EditorUi` exists at a time: ImGui has one global context. Every ImGui call runs on the main
   thread. Render graph execute callables read the renderer's own copy of the frame, never ImGui.
 - ImGui writes no file (`imgui.ini` and its log are off). Layouts are the editor's own documents
-  (ADR-0029 rule 15), applied by `DockLayout.cpp` in the docking step.
+  (ADR-0029 rule 15, ADR-0040), applied and read back by `DockLayout.cpp`.
 - Multi-viewports are off: floating panels stay inside the main window.
 
 ## A frame
@@ -181,8 +181,12 @@ idle rate, 10 frames per second while one of its windows has focus and 2 while n
   ("Ctrl+Z"). A command that can't run now is disabled, its reason as the tooltip. Choosing one runs
   it through the registry (`runMenuCommand`); commands that need arguments, such as Open Level's
   path, report the missing argument in the status bar until their dialogs exist;
-- an empty **dock space** over the rest of the window (`DockLayout.cpp`), which the docking step
-  fills with the default layout;
+- the **Window** menu: the panels (checked when open; choosing one opens or focuses it) and Load
+  Layout, Save Layout As (a dialog for the name that asks before overwriting), Set as Default,
+  Delete Layout and Reset Layout ([ADR-0040](../decisions/0040-editor-docking-panels-and-layouts.md));
+- the **dock space** over the rest of the window, where `ith::DockLayout` (`DockLayout.cpp`) builds
+  the layout session's current layout with DockBuilder, draws every open panel and reads what the
+  user arranges back into the layout session;
 - the **status bar**: the level's file name or "Untitled", with " *" for unsaved changes, and the
   last menu command or its error.
 

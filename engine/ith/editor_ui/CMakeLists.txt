@@ -25,6 +25,8 @@ ith_add_module(editor_ui
         ImGuiPlatform.cpp
         ImGuiRenderer.h
         ImGuiRenderer.cpp
+        OutputLog.h
+        OutputLog.cpp
         Theme.h
         Theme.cpp
     DEPENDS

@@ -1,5 +1,6 @@
-// A golden screenshot of the empty editor shell (ADR-0029 rule 18): the main menu bar, the empty
-// dock space and the status bar over an untitled level, 1280 x 720 at display scale 1, a fixed time
+// A golden screenshot of the editor shell in the default layout (ADR-0029 rule 18, ADR-0040 rule 19):
+// the main menu bar, the engine's Default layout (an empty central area and the Output Log, empty,
+// below it) and the status bar over an untitled level, 1280 x 720 at display scale 1, a fixed time
 // step and no caret blink, rendered on the software GPU of each backend (WARP on Direct3D 12,
 // lavapipe on Vulkan) with the UI shader compiled from Slang at run time, read back and compared
 // with tests/editor_ui_gpu/golden/shell_<backend>.ppm. A pixel differs when a channel differs by
@@ -12,11 +13,14 @@
 #include "ith/config/Config.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/Keymap.h"
+#include "ith/editor_ui/DockLayout.h"
 #include "ith/editor_ui/EditorShell.h"
 #include "ith/editor_ui/EditorUi.h"
 #include "ith/editor_ui/EditorUiShader.h"
+#include "ith/editor_ui/OutputLog.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
+#include "ith/foundation/LogRingBuffer.h"
 #include "ith/input/Input.h"
 #include "ith/reflection/TypeRegistry.h"
 #include "ith/render_graph/RenderGraph.h"
@@ -151,7 +155,7 @@ std::vector<std::byte> compile(ShaderCompiler& compiler, rhi::ShaderFormat forma
     return std::move(*code);
 }
 
-// Renders the empty shell's fourth frame on `device` and reads it back.
+// Renders the shell's fourth frame in the default layout on `device` and reads it back.
 Image renderShell(rhi::Device& device) {
     Expected<ShaderCompiler> compiler = ShaderCompiler::create();
     REQUIRE(compiler.hasValue());
@@ -173,8 +177,8 @@ Image renderShell(rhi::Device& device) {
     Expected<rhi::BufferHandle, rhi::Error> readback = device.createBuffer(readbackDesc);
     REQUIRE(readback.hasValue());
 
-    EditorSession session(types());
-    const Config config({{.name = "engine", .directory = "engine/config"}});
+    Config config({{.name = "engine", .directory = "engine/config"}});
+    EditorSession session(types(), {.config = &config});
     std::vector<Error> warnings;
     const Keymap keymap = Keymap::load(config, session.commands(), warnings);
     EditorShellState shell;
@@ -193,6 +197,12 @@ Image renderShell(rhi::Device& device) {
                                                                    .window = 1,
                                                                    .caretBlink = false});
         REQUIRE_MESSAGE(ui.hasValue(), (ui ? std::string() : ui.error().message));
+        // The Output Log over a buffer no sink writes to: empty, so the image doesn't depend on the log.
+        const LogRingBuffer history(16);
+        OutputLog log(history, (*ui)->theme());
+        registerOutputLog(session.panels(), log);
+        DockLayout dock(session);
+        REQUIRE(session.layouts().restore().name == "Default");
         rg::RenderGraph graph({.name = "Shell golden"});
         rg::ResourcePool pool(device);
         rg::ImportedState targetState;
@@ -202,7 +212,7 @@ Image renderShell(rhi::Device& device) {
             (*ui)->newFrame({.size = {static_cast<std::int32_t>(kWidth), static_cast<std::int32_t>(kHeight)},
                              .pixelSize = {static_cast<std::int32_t>(kWidth), static_cast<std::int32_t>(kHeight)},
                              .deltaSeconds = 1.0f / 60.0f});
-            drawEditorShell(session, keymap, shell);
+            drawEditorShell(session, keymap, shell, dock);
             (*ui)->endFrame();
             Expected<std::optional<rhi::Frame>, rhi::Error> begun = device.beginFrame();
             REQUIRE(begun.hasValue());
@@ -289,7 +299,7 @@ void checkGolden(const Image& actual, std::string_view name) {
 
 TEST_SUITE("editor_ui_gpu.golden") {
 #ifdef ITH_EDITOR_UI_GPU_HAS_D3D12
-    TEST_CASE("the empty shell on WARP matches its golden image") {
+    TEST_CASE("the shell in the default layout on WARP matches its golden image") {
         std::optional<rhi::Device> device = softwareDevice(rhi::Backend::D3D12);
         if (!device) {
             return;
@@ -298,7 +308,7 @@ TEST_SUITE("editor_ui_gpu.golden") {
     }
 #endif
 
-    TEST_CASE("the empty shell on lavapipe matches its golden image") {
+    TEST_CASE("the shell in the default layout on lavapipe matches its golden image") {
         std::optional<rhi::Device> device = softwareDevice(rhi::Backend::Vulkan);
         if (!device) {
             return;

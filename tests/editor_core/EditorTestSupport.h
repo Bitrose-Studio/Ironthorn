@@ -4,7 +4,9 @@
 // commands run with JSON text arguments, and the world as level text, which is the same for the
 // same world (ADR-0034 rule 9).
 
+#include "ith/config/Config.h"
 #include "ith/editor_core/EditorSession.h"
+#include "ith/editor_core/PanelRegistry.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
 #include "ith/foundation/Uuid.h"
@@ -91,6 +93,29 @@ inline void removeTree(const std::string& path) {
         }
     }
     static_cast<void>(fs::remove(path));
+}
+
+// The configuration of a test editor (ADR-0035 rule 12): the shipped engine layer (the tests run in
+// the repository root), the project's Config folder and a user layer inside the project, so tests
+// never touch a developer's own user layer.
+inline Config projectConfig(const std::string& projectRoot) {
+    return Config({{.name = "engine", .directory = "engine/config"},
+                   {.name = "project", .directory = fs::joinPath(projectRoot, "Config")},
+                   {.name = "user", .directory = fs::joinPath(projectRoot, "User"), .writable = true}});
+}
+
+// The panels the editor registers today, as editor_ui does but without views (ADR-0040 rule 3).
+inline void addEditorPanels(PanelRegistry& panels) {
+    panels.add({.id = "ith.output_log", .displayName = "Output Log", .defaultDock = DockPlace::Bottom});
+}
+
+// Every P2 panel of ADR-0040 rule 3, without views.
+inline void addP2Panels(PanelRegistry& panels) {
+    panels.add({.id = "ith.viewport", .displayName = "Viewport", .defaultDock = DockPlace::Center, .maxInstances = 4});
+    panels.add({.id = "ith.outliner", .displayName = "Outliner", .defaultDock = DockPlace::Right});
+    panels.add({.id = "ith.details", .displayName = "Details", .defaultDock = DockPlace::Right});
+    panels.add({.id = "ith.content_browser", .displayName = "Content Browser", .defaultDock = DockPlace::Bottom});
+    panels.add({.id = "ith.output_log", .displayName = "Output Log", .defaultDock = DockPlace::Bottom});
 }
 
 // An empty project directory in the temporary folder, removed afterwards.

@@ -24,6 +24,8 @@
 
 #include "ith/editor_core/CommandRegistry.h"
 #include "ith/editor_core/EditorDocument.h"
+#include "ith/editor_core/LayoutSession.h"
+#include "ith/editor_core/PanelRegistry.h"
 #include "ith/foundation/Expected.h"
 #include "ith/jobs/JobCounter.h"
 #include "ith/serialization/Document.h"
@@ -48,7 +50,13 @@ struct EditorSessionOptions {
     JobSystem* jobs = nullptr;
     // The project's asset database, for opening a level by its asset id; null: by path only.
     const AssetDatabase* assets = nullptr;
+    // The layered configuration that holds the named layouts and the default choice (ADR-0040);
+    // null: only the built-in default layout exists. It must outlive the session.
+    Config* config = nullptr;
 };
+
+// The session layout's file, relative to the project directory (ADR-0035 rule 13, ADR-0040 rule 12).
+inline constexpr std::string_view kSessionLayoutFile = "Saved/Editor/Layout.json";
 
 // The largest level file the editor opens.
 inline constexpr std::size_t kMaxLevelFileSize = std::size_t{512} * 1024 * 1024;
@@ -71,6 +79,17 @@ public:
     [[nodiscard]] CommandRegistry& commands() noexcept { return m_commands; }
 
     [[nodiscard]] const CommandRegistry& commands() const noexcept { return m_commands; }
+
+    // The dockable panels; editor modules register theirs (ADR-0040 rule 1).
+    [[nodiscard]] PanelRegistry& panels() noexcept { return m_panels; }
+
+    [[nodiscard]] const PanelRegistry& panels() const noexcept { return m_panels; }
+
+    // The layout and the layout commands' state (ADR-0040). Its session file is
+    // <project>/Saved/Editor/Layout.json when the session has a project directory.
+    [[nodiscard]] LayoutSession& layouts() noexcept { return m_layouts; }
+
+    [[nodiscard]] const LayoutSession& layouts() const noexcept { return m_layouts; }
 
     [[nodiscard]] const TypeRegistry& types() const noexcept { return *m_types; }
 
@@ -126,6 +145,8 @@ private:
     EditorSessionOptions m_options;
     EditorDocument m_document;
     CommandRegistry m_commands;
+    PanelRegistry m_panels;
+    LayoutSession m_layouts;
     serialization::EntityMapping m_mapping;
     std::unique_ptr<FileOperation> m_operation;
     JobCounter m_pending;
@@ -135,9 +156,11 @@ private:
     std::size_t m_reportedDropped = 0;
 };
 
-// Register the built-in commands (EditCommands.cpp, FileCommands.cpp, QueryCommands.cpp).
+// Register the built-in commands (EditCommands.cpp, FileCommands.cpp, QueryCommands.cpp,
+// LayoutCommands.cpp).
 void registerEditCommands(CommandRegistry& registry);
 void registerFileCommands(CommandRegistry& registry);
 void registerQueryCommands(CommandRegistry& registry);
+void registerLayoutCommands(CommandRegistry& registry);
 
 } // namespace ith

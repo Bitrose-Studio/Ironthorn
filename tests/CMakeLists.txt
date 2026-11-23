@@ -833,6 +833,7 @@ if(TARGET ith_editor_core)
             editor_core/EditorTestSupport.h
             editor_core/FileTests.cpp
             editor_core/KeymapTests.cpp
+            editor_core/LayoutTests.cpp
             editor_core/ModelTests.cpp
             editor_core/TransactionTests.cpp
         LIBRARIES ith::editor_core ith_test_editor_core_components)
@@ -848,7 +849,9 @@ if(TARGET ith_editor_ui)
     ith_add_test_suite(editor_ui
         SOURCES
             editor_ui/EditorUiTestSupport.h
+            editor_ui/DockLayoutTests.cpp
             editor_ui/EditorUiTests.cpp
+            editor_ui/OutputLogTests.cpp
             editor_ui/RendererTests.cpp
             editor_ui/ShellTests.cpp
         LIBRARIES ith::editor_ui ith::imgui)

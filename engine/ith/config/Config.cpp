@@ -133,6 +133,11 @@ const Value& Config::data(std::string_view file) {
     return load(file).merged;
 }
 
+Value Config::data(std::string_view file, std::size_t belowLayer) {
+    ITH_ASSERT_MSG(belowLayer <= m_layers.size(), "Config::data: no such layer");
+    return mergeBelow(load(file), belowLayer < m_layers.size() ? belowLayer : m_layers.size());
+}
+
 void Config::warn(std::string code, std::string message) {
     std::string key = code + '\n' + message;
     if (!m_warned.insert(std::move(key)).second) {
@@ -395,6 +400,18 @@ Expected<void> Config::writeFile(std::string_view layer, std::string_view relati
     if (Expected<void> written = fs::writeFileAtomic(fs::joinPath(m_layers[target].directory, relative), bytes);
         !written) {
         return written;
+    }
+    bump(fs::normalizePath(relative));
+    return {};
+}
+
+Expected<void> Config::removeFile(std::string_view layer, std::string_view relative) {
+    const std::size_t target = writableLayer(layer);
+    if (!isInsideLayer(relative)) {
+        return invalidPath(relative);
+    }
+    if (Expected<void> removed = fs::remove(fs::joinPath(m_layers[target].directory, relative)); !removed) {
+        return removed;
     }
     bump(fs::normalizePath(relative));
     return {};

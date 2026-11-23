@@ -70,6 +70,9 @@ Expected<std::unique_ptr<EditorUi>> EditorUi::create(const EditorUiDesc& desc) {
     // Layouts are the editor's own documents; ImGui writes no file (ADR-0029 rules 5 and 15).
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
+    // ImGui still marks its settings dirty when panels move; DockLayout reads the layout back then,
+    // at most every 2 seconds (ADR-0040 rule 11).
+    io.IniSavingRate = 2.0f;
     // Floating panels stay inside the main window: no multi-viewports.
     // NOLINTNEXTLINE(bugprone-signed-bitwise): ImGui's flags are int enums
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;

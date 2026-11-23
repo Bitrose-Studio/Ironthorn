@@ -4,6 +4,7 @@
 #include "ith/config/Config.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/Keymap.h"
+#include "ith/editor_ui/DockLayout.h"
 #include "ith/editor_ui/EditorShell.h"
 #include "ith/editor_ui/EditorUiShader.h"
 #include "ith/editor_ui/Icons.h"
@@ -98,8 +99,9 @@ TEST_SUITE("editor_ui.shell") {
         EditorSession session(types());
         const Keymap keymap = engineKeymap(session);
         EditorShellState state;
+        DockLayout dock(session);
         for (int i = 0; i < 3; ++i) {
-            fixture.frame([&] { drawEditorShell(session, keymap, state); });
+            fixture.frame([&] { drawEditorShell(session, keymap, state, dock); });
         }
         CHECK(fixture.ui->renderStats().draws > 0);
         // The menu bar takes the top of the window, so the work area starts below it.
@@ -107,16 +109,16 @@ TEST_SUITE("editor_ui.shell") {
 
         // Open the File menu with a click on its title, then draw it open.
         fixture.events({{.type = EventType::MouseMoved, .x = 14.0f, .y = 8.0f}});
-        fixture.frame([&] { drawEditorShell(session, keymap, state); });
+        fixture.frame([&] { drawEditorShell(session, keymap, state, dock); });
         fixture.events({{.type = EventType::MouseButtonDown,
                          .mouseButton = MouseButton::Left,
                          .clicks = 1,
                          .x = 14.0f,
                          .y = 8.0f}});
-        fixture.frame([&] { drawEditorShell(session, keymap, state); });
+        fixture.frame([&] { drawEditorShell(session, keymap, state, dock); });
         fixture.events({{.type = EventType::MouseButtonUp, .mouseButton = MouseButton::Left, .x = 14.0f, .y = 8.0f}});
-        fixture.frame([&] { drawEditorShell(session, keymap, state); });
-        fixture.frame([&] { drawEditorShell(session, keymap, state); });
+        fixture.frame([&] { drawEditorShell(session, keymap, state, dock); });
+        fixture.frame([&] { drawEditorShell(session, keymap, state, dock); });
         CHECK(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
     }
 }

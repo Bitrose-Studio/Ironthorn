@@ -1,13 +1,9 @@
 // The engine layer of the editor's settings (ADR-0035 rule 21). The defaults of the settings
-// structs (the "preferences" section: idle frame rates) live in their field initializers, so
-// they are not repeated here; this file holds only engine data that no struct defines.
+// structs live in their field initializers, so they are not repeated here: the "preferences"
+// section (idle frame rates) and the "layouts" section, whose defaultName "Default" names the layout
+// Reset Layout and a first start use, Layouts/Default.json (ADR-0040 rule 15).
 {
   "format": "ith.config",
   "version": 1,
-  "data": {
-    "layouts": {
-      // The layout Reset Layout and a first start use: Layouts/Default.json.
-      "default": "Default"
-    }
-  }
+  "data": {}
 }

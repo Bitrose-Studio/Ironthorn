@@ -59,10 +59,14 @@ struct EditorSession::FileOperation {
 EditorSession::EditorSession(const TypeRegistry& types, EditorSessionOptions options)
     : m_types(&types),
       m_options(std::move(options)),
+      m_layouts(m_panels, m_options.config,
+                m_options.projectDirectory.empty() ? std::string()
+                                                   : fs::joinPath(m_options.projectDirectory, kSessionLayoutFile)),
       m_mapping{.toId = &toStableId, .toEntity = &fromStableId, .context = &m_document} {
     registerEditCommands(m_commands);
     registerFileCommands(m_commands);
     registerQueryCommands(m_commands);
+    registerLayoutCommands(m_commands);
 }
 
 EditorSession::~EditorSession() {

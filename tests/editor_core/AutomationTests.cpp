@@ -105,7 +105,9 @@ TEST_SUITE("editor_core.automation") {
             CAPTURE(path);
             TempProject project;
             ith::JobSystem jobs({.foregroundWorkers = 1, .backgroundWorkers = 1});
-            EditorSession session(types(), {.projectDirectory = project.root(), .jobs = &jobs});
+            ith::Config config = ith::test::editor::projectConfig(project.root());
+            EditorSession session(types(), {.projectDirectory = project.root(), .jobs = &jobs, .config = &config});
+            ith::test::editor::addEditorPanels(session.panels());
             Automation automation(session);
             const auto report = automation.runScriptFile(path);
             CHECK_MESSAGE(report.hasValue(), (report.hasValue() ? std::string() : report.error().message));
