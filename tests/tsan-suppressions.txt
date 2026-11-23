@@ -25,3 +25,11 @@ race:libVkLayer_khronos_validation.so
 # join orders everything after it, and the flag only ends the loop. Third-party code from the
 # pinned SDL release (ADR-0012); it can't be changed here.
 race:stop_event_thread
+
+# Mesa's lavapipe software Vulkan driver (libvulkan_lvp.so), which the Linux CI uses as its GPU.
+# Two threads creating images at the same time (vkCreateImage, which the Vulkan spec allows
+# concurrently on one VkDevice) race inside the driver: one thread's memcmp reads memory another
+# thread's calloc just returned, both within libvulkan_lvp.so. The driver is not built with TSan,
+# so the synchronisation it uses is invisible to it; both accesses are in Mesa, which can't be
+# changed here. First seen with the runner's LLVM 20 lavapipe.
+race:libvulkan_lvp.so
