@@ -217,7 +217,7 @@ InputReply KeymapConsumer::onInputEvent(const Event& event) {
     if (command == nullptr) {
         return InputReply::NotConsumed;
     }
-    Expected<serialization::Value> result = m_session->execute(*command);
+    Expected<serialization::Value> result = m_session->commands().invoke(*m_session, *command);
     m_lastResult = result ? Expected<void>() : Expected<void>(makeUnexpected(std::move(result).error()));
     return InputReply::Consumed;
 }

@@ -83,10 +83,23 @@ public:
     Expected<serialization::Value> execute(EditorSession& session, std::string_view id,
                                            const serialization::Value& args = {});
 
+    // Sets the prompt of the command `id`: what a shortcut or a menu does for a command that needs
+    // input from the user first (Rename starts editing the name in the Outliner). The prompt returns
+    // true when it started gathering the input, which later runs the command with its arguments,
+    // and false to let invoke() run the command without arguments. Set by the module that brings the
+    // UI; an empty function removes it. Precondition (asserted): `id` is registered.
+    void setPrompt(std::string_view id, std::function<bool(EditorSession&)> prompt);
+
+    // A user's gesture for the command `id` (a shortcut, a menu item): the checks of execute, then
+    // its prompt when one is set and starts, which returns null; otherwise execute(id) without
+    // arguments. Automation calls execute with arguments instead.
+    Expected<serialization::Value> invoke(EditorSession& session, std::string_view id);
+
 private:
     [[nodiscard]] Expected<void> check(EditorSession& session, const CommandDesc& command) const;
 
     std::map<std::string, CommandDesc, std::less<>> m_commands;
+    std::map<std::string, std::function<bool(EditorSession&)>, std::less<>> m_prompts;
     // How many executes are running, to tell a command's own transaction from an interaction's.
     std::size_t m_depth = 0;
 };

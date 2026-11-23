@@ -88,4 +88,31 @@ Expected<serialization::Value> CommandRegistry::execute(EditorSession& session, 
     return result;
 }
 
+void CommandRegistry::setPrompt(std::string_view id, std::function<bool(EditorSession&)> prompt) {
+    const bool known = find(id) != nullptr;
+    ITH_ASSERT_MSG(known, "editor: a prompt for a command that isn't registered");
+    if (!known) {
+        return;
+    }
+    if (prompt) {
+        m_prompts.insert_or_assign(std::string(id), std::move(prompt));
+    } else if (const auto found = m_prompts.find(id); found != m_prompts.end()) {
+        m_prompts.erase(found);
+    }
+}
+
+Expected<serialization::Value> CommandRegistry::invoke(EditorSession& session, std::string_view id) {
+    if (const auto prompt = m_prompts.find(id); prompt != m_prompts.end()) {
+        if (Expected<void> allowed = canExecute(session, id); !allowed) {
+            return makeUnexpected(std::move(allowed).error());
+        }
+        // A copy: the prompt may change the prompts.
+        const std::function<bool(EditorSession&)> start = prompt->second;
+        if (start(session)) {
+            return serialization::Value();
+        }
+    }
+    return execute(session, id);
+}
+
 } // namespace ith

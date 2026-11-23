@@ -39,8 +39,10 @@ namespace ith {
 namespace {
 
 using detail::applyAll;
+using detail::checkEditable;
 using detail::childrenOf;
 using detail::componentType;
+using detail::defaultValueAt;
 using detail::idValue;
 using detail::invalidArgs;
 using detail::liveEntity;
@@ -310,6 +312,33 @@ Expected<Value> rename(EditorSession& session, const Value& args) {
     return applyAll(session, std::span(&patch, 1));
 }
 
+// The "before" of attach and detach: nullopt when missing, the null entity (the end) when null,
+// else a live sibling under `parent` (null: a root) that isn't one of `moved`.
+Expected<std::optional<Entity>> placement(const EditorSession& session, std::string_view command, const Value& args,
+                                          Entity parent, const std::vector<Entity>& moved) {
+    const Value* given = args.kind() == Value::Kind::Object ? args.find("before") : nullptr;
+    if (given == nullptr) {
+        return std::optional<Entity>();
+    }
+    Expected<std::optional<Uuid>> id = optionalId(command, args, "before");
+    if (!id) {
+        return makeUnexpected(std::move(id).error());
+    }
+    if (!id->has_value()) {
+        return std::optional<Entity>(Entity());
+    }
+    Expected<Entity> before = liveEntity(session, command, **id);
+    if (!before) {
+        return makeUnexpected(std::move(before).error());
+    }
+    const auto* link = session.document().world().get<const ChildOf>(*before);
+    const Entity beforeParent = link != nullptr ? link->parent : Entity();
+    if (beforeParent != parent || std::ranges::any_of(moved, [&](Entity entity) { return entity == *before; })) {
+        return invalidArgs(command, "\"before\" must be a sibling at the new place that isn't moved");
+    }
+    return std::optional<Entity>(*before);
+}
+
 Expected<Value> attach(EditorSession& session, const Value& args) {
     constexpr std::string_view kCommand = "ith.entity.attach";
     Expected<std::vector<Entity>> entities = targets(session, kCommand, args);
@@ -327,10 +356,23 @@ Expected<Value> attach(EditorSession& session, const Value& args) {
     if (!parent) {
         return makeUnexpected(std::move(parent).error());
     }
+    const World& world = session.document().world();
+    Expected<std::optional<Entity>> before = placement(session, kCommand, args, *parent, *entities);
+    if (!before) {
+        return makeUnexpected(std::move(before).error());
+    }
     std::vector<EntityPatch> patches;
     for (const Entity entity : *entities) {
-        EntityPatch& patch = patches.emplace_back(EntityPatch{.entity = entity});
-        patch.changes.push_back(ComponentChange::makeAdd(OwnedValue::of(ChildOf{.parent = *parent})));
+        // A child of the parent already keeps its link, and its despawnWithParent, and only moves.
+        const auto* link = world.get<const ChildOf>(entity);
+        const bool relink = link == nullptr || link->parent != *parent;
+        if (!relink && !before->has_value()) {
+            continue;
+        }
+        EntityPatch& patch = patches.emplace_back(EntityPatch{.entity = entity, .placeBefore = *before});
+        if (relink) {
+            patch.changes.push_back(ComponentChange::makeAdd(OwnedValue::of(ChildOf{.parent = *parent})));
+        }
     }
     return applyAll(session, patches);
 }
@@ -341,10 +383,19 @@ Expected<Value> detach(EditorSession& session, const Value& args) {
     if (!entities) {
         return makeUnexpected(std::move(entities).error());
     }
+    const World& world = session.document().world();
+    Expected<std::optional<Entity>> before = placement(session, kCommand, args, Entity(), *entities);
+    if (!before) {
+        return makeUnexpected(std::move(before).error());
+    }
     std::vector<EntityPatch> patches;
     for (const Entity entity : *entities) {
-        if (session.document().world().has<ChildOf>(entity)) {
-            EntityPatch& patch = patches.emplace_back(EntityPatch{.entity = entity});
+        const bool linked = world.has<ChildOf>(entity);
+        if (!linked && !before->has_value()) {
+            continue;
+        }
+        EntityPatch& patch = patches.emplace_back(EntityPatch{.entity = entity, .placeBefore = *before});
+        if (linked) {
             patch.changes.push_back(ComponentChange::makeRemove(typeOf<ChildOf>()));
         }
     }
@@ -428,13 +479,10 @@ Expected<Value> removeComponent(EditorSession& session, const Value& args) {
     return applyAll(session, patches);
 }
 
-Expected<Value> setProperty(EditorSession& session, const Value& args) {
-    constexpr std::string_view kCommand = "ith.entity.set_property";
-    Expected<std::vector<Entity>> entities = targets(session, kCommand, args);
-    if (!entities) {
-        return makeUnexpected(std::move(entities).error());
-    }
-    Expected<std::string_view> text = requiredString(kCommand, args, "path");
+// The "path" of a property command: a component path of a component type commands may edit,
+// refused when a field along it is ReadOnly.
+Expected<PropertyPath> editablePath(const EditorSession& session, std::string_view command, const Value& args) {
+    Expected<std::string_view> text = requiredString(command, args, "path");
     if (!text) {
         return makeUnexpected(std::move(text).error());
     }
@@ -442,13 +490,34 @@ Expected<Value> setProperty(EditorSession& session, const Value& args) {
     if (!path) {
         return makeUnexpected(std::move(path).error());
     }
-    if (Expected<const TypeInfo*> type = componentType(session, kCommand, path->rootType().name); !type) {
-        return makeUnexpected(std::move(type).error());
+    if (Expected<void> editable = checkEditable(session, command, *path); !editable) {
+        return makeUnexpected(std::move(editable).error());
     }
-    // ADR-0033 rule 10: patches don't check ReadOnly; the command layer does.
-    if (hasFlags(path->chainFlags(), ReflectionFlags::ReadOnly)) {
-        return makeError("editor.command.read_only",
-                         std::string(kCommand) + ": " + std::string(*text) + " is read-only");
+    return path;
+}
+
+// One Patch change per entity, its entries added by `build`.
+template <typename Build>
+std::vector<EntityPatch> patchEach(const std::vector<Entity>& entities, const PropertyPath& path, const Build& build) {
+    std::vector<EntityPatch> patches;
+    for (const Entity entity : entities) {
+        Patch patch(path.rootType());
+        build(patch);
+        EntityPatch& entityPatch = patches.emplace_back(EntityPatch{.entity = entity});
+        entityPatch.changes.push_back(ComponentChange::makePatch(std::move(patch)));
+    }
+    return patches;
+}
+
+Expected<Value> setProperty(EditorSession& session, const Value& args) {
+    constexpr std::string_view kCommand = "ith.entity.set_property";
+    Expected<std::vector<Entity>> entities = targets(session, kCommand, args);
+    if (!entities) {
+        return makeUnexpected(std::move(entities).error());
+    }
+    Expected<PropertyPath> path = editablePath(session, kCommand, args);
+    if (!path) {
+        return makeUnexpected(std::move(path).error());
     }
     const Value* json = args.find("value");
     if (json == nullptr) {
@@ -458,12 +527,142 @@ Expected<Value> setProperty(EditorSession& session, const Value& args) {
     if (!value) {
         return makeUnexpected(std::move(value).error());
     }
+    return applyAll(session, patchEach(*entities, *path, [&](Patch& patch) { patch.set(*path, *value); }));
+}
+
+// Reset to Default: the value a default-constructed component has at the path; an element or an
+// optional's value that the default doesn't have resets to its type's default.
+Expected<Value> resetProperty(EditorSession& session, const Value& args) {
+    constexpr std::string_view kCommand = "ith.entity.reset_property";
+    Expected<std::vector<Entity>> entities = targets(session, kCommand, args);
+    if (!entities) {
+        return makeUnexpected(std::move(entities).error());
+    }
+    Expected<PropertyPath> path = editablePath(session, kCommand, args);
+    if (!path) {
+        return makeUnexpected(std::move(path).error());
+    }
+    const OwnedValue value = defaultValueAt(*path);
+    return applyAll(session, patchEach(*entities, *path, [&](Patch& patch) { patch.set(*path, value); }));
+}
+
+// The "index" member: nullopt when missing, an error when not a non-negative integer.
+Expected<std::optional<std::size_t>> optionalIndex(std::string_view command, const Value& args) {
+    const Value* index = args.kind() == Value::Kind::Object ? args.find("index") : nullptr;
+    if (index == nullptr || index->kind() == Value::Kind::Null) {
+        return std::optional<std::size_t>();
+    }
+    const std::optional<std::uint64_t> number =
+        index->kind() == Value::Kind::Number ? index->toNumber<std::uint64_t>() : std::nullopt;
+    if (!number.has_value()) {
+        return invalidArgs(command, "\"index\" must be a non-negative integer");
+    }
+    return std::optional<std::size_t>(static_cast<std::size_t>(*number));
+}
+
+// The path of element `index` of the vector at `vector`.
+Expected<PropertyPath> elementPath(const EditorSession& session, const PropertyPath& vector, std::size_t index) {
+    return PropertyPath::parseQualified(session.types(),
+                                        vector.toQualifiedString() + "[" + std::to_string(index) + "]");
+}
+
+// The size of the vector at `path` in the entity's component; 0 when the entity has no such
+// component (the patch then fails) or the path doesn't resolve.
+std::size_t vectorSize(const World& world, Entity entity, const PropertyPath& path) {
+    const void* component = world.get(entity, path.rootType());
+    if (component == nullptr) {
+        return 0;
+    }
+    const Expected<const void*> vector = resolve(path, component);
+    return vector ? path.leafType().container->size(*vector) : 0;
+}
+
+// Insert Element and Erase Element: "path" names a std::vector.
+Expected<PropertyPath> vectorPath(const EditorSession& session, std::string_view command, const Value& args) {
+    Expected<PropertyPath> path = editablePath(session, command, args);
+    if (path && path->leafType().kind != TypeKind::DynamicArray) {
+        return invalidArgs(command, "\"path\" must name a std::vector");
+    }
+    return path;
+}
+
+Expected<Value> insertElement(EditorSession& session, const Value& args) {
+    constexpr std::string_view kCommand = "ith.entity.insert_element";
+    Expected<std::vector<Entity>> entities = targets(session, kCommand, args);
+    if (!entities) {
+        return makeUnexpected(std::move(entities).error());
+    }
+    Expected<PropertyPath> path = vectorPath(session, kCommand, args);
+    if (!path) {
+        return makeUnexpected(std::move(path).error());
+    }
+    Expected<std::optional<std::size_t>> index = optionalIndex(kCommand, args);
+    if (!index) {
+        return makeUnexpected(std::move(index).error());
+    }
+    Expected<OwnedValue> value = readValue(session, path->leafType().element(), args.find("value"));
+    if (!value) {
+        return makeUnexpected(std::move(value).error());
+    }
     std::vector<EntityPatch> patches;
     for (const Entity entity : *entities) {
+        Expected<PropertyPath> element =
+            elementPath(session, *path, index->value_or(vectorSize(session.document().world(), entity, *path)));
+        if (!element) {
+            return makeUnexpected(std::move(element).error());
+        }
         Patch patch(path->rootType());
-        patch.set(*path, *value);
+        patch.insert(std::move(*element), *value);
         EntityPatch& entityPatch = patches.emplace_back(EntityPatch{.entity = entity});
         entityPatch.changes.push_back(ComponentChange::makePatch(std::move(patch)));
+    }
+    return applyAll(session, patches);
+}
+
+Expected<Value> eraseElement(EditorSession& session, const Value& args) {
+    constexpr std::string_view kCommand = "ith.entity.erase_element";
+    Expected<std::vector<Entity>> entities = targets(session, kCommand, args);
+    if (!entities) {
+        return makeUnexpected(std::move(entities).error());
+    }
+    Expected<PropertyPath> path = vectorPath(session, kCommand, args);
+    if (!path) {
+        return makeUnexpected(std::move(path).error());
+    }
+    Expected<std::optional<std::size_t>> index = optionalIndex(kCommand, args);
+    if (!index) {
+        return makeUnexpected(std::move(index).error());
+    }
+    if (!index->has_value()) {
+        return invalidArgs(kCommand, "\"index\" is required");
+    }
+    Expected<PropertyPath> element = elementPath(session, *path, **index);
+    if (!element) {
+        return makeUnexpected(std::move(element).error());
+    }
+    return applyAll(session, patchEach(*entities, *path, [&](Patch& patch) { patch.erase(*element); }));
+}
+
+// Enabled: removes or adds the Disabled tag (ADR-0031 rule 9); entities already so are left alone.
+Expected<Value> setEnabled(EditorSession& session, const Value& args) {
+    constexpr std::string_view kCommand = "ith.entity.set_enabled";
+    Expected<std::vector<Entity>> entities = targets(session, kCommand, args);
+    if (!entities) {
+        return makeUnexpected(std::move(entities).error());
+    }
+    const Value* enabled = args.kind() == Value::Kind::Object ? args.find("enabled") : nullptr;
+    if (enabled == nullptr || enabled->kind() != Value::Kind::Bool) {
+        return invalidArgs(kCommand, "\"enabled\" must be true or false");
+    }
+    const World& world = session.document().world();
+    std::vector<EntityPatch> patches;
+    for (const Entity entity : *entities) {
+        if (world.has<Disabled>(entity) != enabled->asBool()) {
+            continue;
+        }
+        EntityPatch& patch = patches.emplace_back(EntityPatch{.entity = entity});
+        patch.changes.push_back(enabled->asBool() ? ComponentChange::makeRemove(typeOf<Disabled>())
+                                                  : ComponentChange::makeAdd(OwnedValue::of(Disabled{})));
     }
     return applyAll(session, patches);
 }
@@ -594,14 +793,16 @@ void addEntityCommands(CommandRegistry& registry) {
                   .tooltip = "Change the name the Outliner shows",
                   .category = "Edit",
                   .execute = &rename});
-    registry.add({.id = "ith.entity.attach",
-                  .displayName = "Attach To",
-                  .tooltip = "Make the entities children of a parent, keeping where they are in the world",
-                  .category = "Entity",
-                  .execute = &attach});
+    registry.add(
+        {.id = "ith.entity.attach",
+         .displayName = "Attach To",
+         .tooltip =
+             "Make the entities children of a parent, keeping where they are in the world; optionally before a sibling",
+         .category = "Entity",
+         .execute = &attach});
     registry.add({.id = "ith.entity.detach",
                   .displayName = "Detach",
-                  .tooltip = "Make the entities roots, keeping where they are in the world",
+                  .tooltip = "Make the entities roots, keeping where they are in the world; optionally before a root",
                   .category = "Entity",
                   .execute = &detach});
     registry.add({.id = "ith.entity.move_before",
@@ -624,6 +825,26 @@ void addEntityCommands(CommandRegistry& registry) {
                   .tooltip = "Set a value of a component of the entities",
                   .category = "Entity",
                   .execute = &setProperty});
+    registry.add({.id = "ith.entity.reset_property",
+                  .displayName = "Reset to Default",
+                  .tooltip = "Set a value of a component of the entities back to its default",
+                  .category = "Entity",
+                  .execute = &resetProperty});
+    registry.add({.id = "ith.entity.insert_element",
+                  .displayName = "Add Element",
+                  .tooltip = "Insert an element into a list of a component of the entities",
+                  .category = "Entity",
+                  .execute = &insertElement});
+    registry.add({.id = "ith.entity.erase_element",
+                  .displayName = "Remove Element",
+                  .tooltip = "Remove an element from a list of a component of the entities",
+                  .category = "Entity",
+                  .execute = &eraseElement});
+    registry.add({.id = "ith.entity.set_enabled",
+                  .displayName = "Set Enabled",
+                  .tooltip = "Enable or disable the entities and everything below them",
+                  .category = "Entity",
+                  .execute = &setEnabled});
     registry.add({.id = "ith.edit.delete",
                   .displayName = "Delete",
                   .tooltip = "Delete the entities; their other children stay where they are",

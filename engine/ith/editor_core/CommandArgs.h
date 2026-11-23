@@ -23,6 +23,7 @@ namespace ith {
 
 class EditorSession;
 class World;
+class PropertyPath;
 struct TypeInfo;
 
 namespace detail {
@@ -76,6 +77,16 @@ optionalString(std::string_view command, const serialization::Value& args, std::
 // Applies `patches` in the transaction the registry opened for the command; returns `result`.
 [[nodiscard]] Expected<serialization::Value> applyAll(EditorSession& session, std::span<const EntityPatch> patches,
                                                       serialization::Value result = {});
+
+// Refuses edits at `path`: a component type commands may not edit, or a ReadOnly field along it
+// ("editor.command.read_only"; ADR-0033 rule 10: patches do not check ReadOnly, the command layer
+// does).
+[[nodiscard]] Expected<void> checkEditable(const EditorSession& session, std::string_view command,
+                                           const PropertyPath& path);
+
+// The value a default-constructed component of path.rootType() has at `path`; an element or an
+// optional's value the default does not have is its type's default (Reset to Default).
+[[nodiscard]] OwnedValue defaultValueAt(const PropertyPath& path);
 
 // The Spawn placeholder `index` (EntityPatch.h).
 [[nodiscard]] Entity placeholder(std::uint32_t index);

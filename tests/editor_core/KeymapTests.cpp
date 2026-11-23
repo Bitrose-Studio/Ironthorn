@@ -226,3 +226,47 @@ TEST_SUITE("editor_core.keymap") {
         CHECK(transactions.begin("Next").active());
     }
 }
+
+TEST_SUITE("editor_core.keymap") {
+    TEST_CASE("a shortcut invokes a command's prompt, which gathers the input; without one it executes") {
+        EditorSession session(types());
+        std::vector<ith::Error> warnings;
+        const Keymap keymap = keymapOf(session, {R"({"ith.edit.rename": ["Keyboard.F2"]})"}, warnings);
+        ith::KeymapConsumer consumer(session, keymap);
+        run(session, "ith.entity.create", R"({"label": "One"})");
+
+        // Without a prompt, F2 runs Rename without a label, which it refuses.
+        CHECK(consumer.onInputEvent(keyDown(Key::F2, 0)) == ith::InputReply::Consumed);
+        REQUIRE_FALSE(consumer.lastResult().hasValue());
+        CHECK(consumer.lastResult().error().code == "editor.command.invalid_args");
+
+        // A prompt that starts runs instead; one that declines lets the command run.
+        int prompted = 0;
+        bool starts = true;
+        session.commands().setPrompt("ith.edit.rename", [&](EditorSession&) {
+            ++prompted;
+            return starts;
+        });
+        CHECK(consumer.onInputEvent(keyDown(Key::F2, 0)) == ith::InputReply::Consumed);
+        CHECK(consumer.lastResult().hasValue());
+        CHECK(prompted == 1);
+        starts = false;
+        CHECK(consumer.onInputEvent(keyDown(Key::F2, 0)) == ith::InputReply::Consumed);
+        CHECK(prompted == 2);
+        CHECK(consumer.lastResult().error().code == "editor.command.invalid_args");
+
+        // The checks come first: while playing the prompt doesn't start.
+        session.document().setPlaying(true);
+        starts = true;
+        CHECK_FALSE(session.commands().invoke(session, "ith.edit.rename").hasValue());
+        CHECK(prompted == 2);
+        session.document().setPlaying(false);
+
+        // An empty prompt removes it; automation's execute never prompts.
+        session.commands().setPrompt("ith.edit.rename", {});
+        CHECK(session.commands().invoke(session, "ith.edit.rename").error().code == "editor.command.invalid_args");
+        CHECK(session.commands().invoke(session, "ith.no_such").error().code == "editor.command.unknown");
+        run(session, "ith.edit.rename", R"({"label": "Two"})");
+        CHECK(prompted == 2);
+    }
+}

@@ -197,14 +197,14 @@ TEST_SUITE("editor_core.transactions") {
         ith::EditorSession session(types());
         const Entity lamp = lampOf(session, 1);
         ith::EditorChanges& changes = session.document().changes();
-        static_cast<void>(changes.takeTouched());
         const std::uint64_t structure = changes.structure();
         const std::uint64_t values = changes.values();
         run(session, "ith.entity.set_property",
             R"({"ids": [")" + idText(1) + R"("], "path": "ith::test::editor::Lamp.intensity", "value": 2})");
         CHECK(changes.structure() == structure);
         CHECK(changes.values() > values);
-        CHECK(changes.takeTouched() == std::vector<Uuid>{idOf(1)});
+        CHECK(changes.touchedSince(values) == std::vector<Uuid>{idOf(1)});
+        CHECK(changes.touchedSince(changes.values()) == std::vector<Uuid>{});
         run(session, "ith.edit.rename", R"({"label": "Desk lamp"})");
         CHECK(changes.structure() > structure);
         const std::uint64_t selection = changes.selection();

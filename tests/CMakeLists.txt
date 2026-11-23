@@ -814,7 +814,7 @@ if(TARGET ith_editor_core)
     add_library(ith_test_editor_core_components STATIC)
     target_include_directories(ith_test_editor_core_components PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/editor_core")
     target_link_libraries(ith_test_editor_core_components
-        PUBLIC ith::build_options ith::reflection
+        PUBLIC ith::build_options ith::reflection ith::math ith::assets
         PRIVATE ith::runtime_options)
     set_target_properties(ith_test_editor_core_components PROPERTIES
         FOLDER "Ironthorn/Tests"
@@ -836,6 +836,7 @@ if(TARGET ith_editor_core)
             editor_core/LayoutTests.cpp
             editor_core/ModelTests.cpp
             editor_core/TransactionTests.cpp
+            editor_core/ViewModelTests.cpp
         LIBRARIES ith::editor_core ith_test_editor_core_components)
 endif()
 

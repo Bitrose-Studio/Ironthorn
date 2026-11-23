@@ -108,7 +108,8 @@ private:
 };
 
 // The keymap consumer of editor_core (ADR-0029 rule 7): turns a key press with its modifiers into
-// the bound command. Letter keys follow the user's layout (Event::layoutKey), so Ctrl + Z is the
+// the bound command, invoked as a user gesture (CommandRegistry::invoke, so a prompt can ask for its
+// input). Letter keys follow the user's layout (Event::layoutKey), so Ctrl + Z is the
 // key that prints Z; other keys are physical keys. A press that matches a binding is consumed, also
 // when the command refuses to run (its error is kept in lastResult()). While an interaction holds a
 // transaction open, Escape cancels it (Transactions::cancelOpen) and other chords are left to the

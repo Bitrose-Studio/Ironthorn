@@ -5,6 +5,7 @@
 #include "ith/ecs/World.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/Transactions.h"
+#include "ith/reflection/Patch.h"
 #include "ith/reflection/PropertyPath.h"
 #include "ith/reflection/TypeOf.h"
 #include "ith/reflection/TypeRegistry.h"
@@ -208,6 +209,23 @@ Expected<Value> applyAll(EditorSession& session, std::span<const EntityPatch> pa
         return makeUnexpected(std::move(applied).error());
     }
     return result;
+}
+
+Expected<void> checkEditable(const EditorSession& session, std::string_view command, const PropertyPath& path) {
+    if (Expected<const TypeInfo*> type = componentType(session, command, path.rootType().name); !type) {
+        return makeUnexpected(std::move(type).error());
+    }
+    if (hasFlags(path.chainFlags(), ReflectionFlags::ReadOnly)) {
+        return makeError("editor.command.read_only",
+                         std::string(command) + ": " + path.toQualifiedString() + " is read-only");
+    }
+    return {};
+}
+
+OwnedValue defaultValueAt(const PropertyPath& path) {
+    const OwnedValue component(path.rootType());
+    Expected<OwnedValue> value = ith::readValue(path, component.get());
+    return value ? std::move(*value) : OwnedValue(path.leafType());
 }
 
 Entity placeholder(std::uint32_t index) {
