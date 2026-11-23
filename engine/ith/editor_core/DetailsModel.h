@@ -280,6 +280,10 @@ private:
 // other values and fields without a range are left alone.
 void clampToField(const TypeInfo& type, void* value, const FieldInfo* field) noexcept;
 
+// The name Details and Add Component show for a component type: its DisplayName attribute, else
+// its unqualified name spelled as words ("ith::LocalTransform" is "Local Transform").
+[[nodiscard]] std::string componentDisplayName(const TypeInfo& type);
+
 // The field or type name spelled as words: "despawnWithParent" is "Despawn With Parent",
 // "LocalTransform" is "Local Transform".
 [[nodiscard]] std::string displayNameOf(std::string_view name);

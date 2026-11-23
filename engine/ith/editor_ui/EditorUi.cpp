@@ -8,6 +8,7 @@
 
 #include <imgui.h>
 
+#include <array>
 #include <atomic>
 #include <cstdlib>
 #include <string>
@@ -98,7 +99,11 @@ Expected<std::unique_ptr<EditorUi>> EditorUi::create(const EditorUiDesc& desc) {
         if (Expected<void> read = readFont(kEditorFontFiles[i], fonts.files[i]); !read) {
             return makeUnexpected(read.error());
         }
+        // The text fonts leave the Private Use Area to the icon font merged below: Inter has glyphs of
+        // its own there, which would hide icons such as save and plus.
+        static constexpr std::array<ImWchar, 3> kPrivateUse = {0xE000, 0xF8FF, 0};
         ImFontConfig config;
+        config.GlyphExcludeRanges = kPrivateUse.data();
         config.FontDataOwnedByAtlas = false;
         std::string& bytes = fonts.files[i];
         fonts.fonts[i] =

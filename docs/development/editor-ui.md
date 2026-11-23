@@ -142,7 +142,9 @@ textures held, the upload buffer's size and the bounds of the scissors.
   one. ImGui's bundled stb_truetype rasterizes only these pinned fonts; fonts a user picks would
   need FreeType first.
 - **Icons** (`Icons.h`): Lucide's icon font, merged into the text fonts, so an icon is text
-  (`iconText(icons::kSave)`). Panels name icons only through `Icons.h`, never by codepoint, because
+  (`iconText(icons::kSave)`). Inter has glyphs of its own in the Unicode Private Use Area, where
+  Lucide's icons are, so the text fonts leave that area out (`GlyphExcludeRanges`) and the icons
+  show. Panels name icons only through `Icons.h`, never by codepoint, because
   Lucide moves codepoints between releases; a test checks every entry against the pinned
   `codepoints.json`. `commandIcon(id)` gives the icon a menu shows for a command.
 
@@ -179,8 +181,9 @@ idle rate, 10 frames per second while one of its windows has focus and 2 while n
   categories, the built-in ones in Unreal's order (New Level, Open Level, Save, Save As; Undo,
   Redo, Duplicate, Delete, ...), each with its icon and the first chord the keymap binds to it
   ("Ctrl+Z"). A command that can't run now is disabled, its reason as the tooltip. Choosing one runs
-  it through the registry (`runMenuCommand`); commands that need arguments, such as Open Level's
-  path, report the missing argument in the status bar until their dialogs exist;
+  it through the registry as a user's gesture (`CommandRegistry::invoke`, so Rename starts renaming
+  in the Outliner); commands that need arguments, such as Open Level's path, report the missing
+  argument in the status bar until their dialogs exist;
 - the **Window** menu: the panels (checked when open; choosing one opens or focuses it) and Load
   Layout, Save Layout As (a dialog for the name that asks before overwriting), Set as Default,
   Delete Layout and Reset Layout ([ADR-0040](../decisions/0040-editor-docking-panels-and-layouts.md));
@@ -189,6 +192,97 @@ idle rate, 10 frames per second while one of its windows has focus and 2 while n
   user arranges back into the layout session;
 - the **status bar**: the level's file name or "Untitled", with " *" for unsaved changes, and the
   last menu command or its error.
+
+## Panels
+
+Each panel draws a view model of `editor_core` ([editor core](editor-core.md#view-models)) and
+changes the world only through its commands. A panel is registered by the code that owns its view
+(ADR-0040 rule 3):
+
+```cpp
+ith::OutlinerPanel outliner(session);
+ith::registerOutliner(session, outliner);        // "ith.outliner", and the F2 rename prompt
+ith::DetailsPanel details(session);
+ith::registerDetails(session.panels(), details); // "ith.details"
+ith::OutputLog log(history, ui.theme());
+ith::registerOutputLog(session.panels(), log);   // "ith.output_log"
+```
+
+A change a panel can't make (a refused command) goes to the log, in the category `Outliner` or
+`Details`.
+
+### Outliner
+
+`OutlinerPanel` draws `OutlinerModel`:
+
+- a search box;
+- the entities as a tree with a list clipper, so only the visible rows are drawn;
+- an Enabled check box per row.
+
+Disabled entities, those below a disabled one, and the ancestors a search shows only for their
+matches are dimmed.
+
+| Gesture | What it does |
+|---|---|
+| Click, Ctrl + click, Shift + click | Select, toggle, select the range. A selected row selects on release, so dragging it keeps the selection |
+| Double click, or F2 | Rename in place: Enter or leaving the field keeps the name, Esc drops it |
+| Drag a row | Drop before or after another row (its top or bottom quarter), inside it (the middle), or on the empty space below the rows (the end of the roots); a line or frame shows where |
+| Click the empty space | Select None |
+
+F2 reaches the Outliner through the rename command's prompt: the keymap and the Edit menu
+*invoke* `ith.edit.rename`, and `registerOutliner` makes the prompt start renaming the primary
+selection.
+
+### Details
+
+`DetailsPanel` draws `DetailsModel`.
+
+- **Header.** The name field (disabled when more than one entity is selected, as in Unreal), the
+  Enabled check box, and **Add**, a searchable list of the component types the selection can
+  take, grouped by category.
+- **Rows.** Each component is a framed group with a Remove button. Below it come its properties:
+  a name, with the field's tooltip, and a value editor. A row that isn't at its default value has
+  a Reset to Default button.
+
+Editors are found by the value's type id, then by its kind:
+
+| Type | Editor |
+|---|---|
+| `bool` | check box |
+| integers, `float`, `double` | drag field, limited to the field's `Min` and `Max` |
+| `std::string` | text field, set on Enter or when it loses focus |
+| enums | combo box of the enumerators, spelled as words |
+| `Vec2`/`Vec3`/`Vec4`, `IVec`, `UVec`, `DVec3` | one drag field per component, limited to `Min` and `Max` |
+| `Quat` | X, Y and Z in degrees; the degrees are kept while dragging, so the drag doesn't drift |
+| `Entity` | combo box with a search field over the entities by name, and None |
+| `AssetRef`, `SoftAssetRef`, `Uuid` | the id, read-only (an asset picker comes with the Content Browser) |
+| `std::optional` | a check box for present, and the value's editor |
+| `std::vector`, `std::array`, structs | a row that expands into its elements or fields; a vector has Add Element and Remove All, each element Remove |
+
+**How editors change values.** Drag fields are interactions (ADR-0037 rule 6):
+
+1. Pressing the field begins an edit.
+2. Every frame of the drag previews the value in the world.
+3. Releasing the field commits it as one Set Property undo entry.
+
+Esc during a drag reaches the keymap, because the UI takes keys only while a text field is active.
+It cancels the edit and the value goes back; the rest of the drag does nothing. Check boxes, combo
+boxes, pickers and text fields set their value with one command each.
+
+**Multi-select.** Values that differ between the selected entities show "Multiple Values"; an edit
+writes the same value to all of them.
+
+## Tests of the panels
+
+`tests/editor_ui/PanelTests.cpp` draws the Outliner and Details in fixed windows on the null
+device. It drives them with mouse and key events through the platform backend and the engine
+keymap's consumer:
+
+- a click selects, and a click on the empty space clears the selection;
+- F2 renames in place, Enter keeps the name, and Esc drops it without reaching Select None;
+- dragging a row onto another reparents it in one undo entry;
+- a translation drag previews live and becomes one undo entry, and Esc cancels a drag;
+- one drag edits two selected entities whose values differed.
 
 ## The editor application
 
@@ -201,9 +295,9 @@ It creates the platform window, the job system (whose main-thread wake ends the 
 RHI device and the window's swapchain, the configuration layers (engine `<exe>/Config` and its
 platform folder, project `<project>/Config` and its platform folder, and the user layer:
 `--user-dir`, else `Ironthorn/Editor` in the user's configuration folder), an `EditorSession`
-of the project, the keymap and the UI, then runs the loop of ADR-0035 rule 22: events (waiting
-while idle), main-thread jobs, input routing, the UI frame, rendering. Where the window has no
-native handle (SDL's `offscreen` driver) it draws into an offscreen texture; where no GPU device
+of the project, the keymap, the UI and the Outliner, Details and Output Log panels, then runs the
+loop of ADR-0035 rule 22: events (waiting while idle), main-thread jobs, input routing, the UI
+frame, rendering. Where the window has no native handle (SDL's `offscreen` driver) it draws into an offscreen texture; where no GPU device
 can be created it renders on the null device. Closing the window quits after a running save has
 finished. With unsaved changes the first close is refused with a message in the status bar, and a
 second close discards them, until the Save / Don't Save / Cancel dialog exists.
@@ -226,8 +320,9 @@ passed and 1 when it failed.
   fresh project - create, rename, attach, undo, redo, save, new level, open, query - on the null
   device and on the software GPU (WARP; lavapipe on Linux, else the null device), and exits 0.
   Never on a desktop. Not in Release, where the editor isn't built.
-- `editor_ui_gpu` (label `gpu`, built with the shader compiler): a golden screenshot of the empty
-  shell (menu bar, dock space, status bar over an untitled level), 1280 x 720 at display scale 1,
+- `editor_ui_gpu` (label `gpu`, built with the shader compiler): a golden screenshot of the
+  shell in the Default layout (menu bar; the Outliner above Details on the right and the Output Log
+  under the empty central area, all of an untitled level; status bar), 1280 x 720 at display scale 1,
   with a fixed time step and no caret blink, on WARP (`golden/shell_d3d12.ppm`) and on lavapipe
   (`golden/shell_vulkan.ppm`), the UI shader compiled at run time. A pixel differs when a channel
   differs by more than 8 of 255, and the shot fails when more than 0.5% of the pixels differ; the
@@ -240,8 +335,7 @@ passed and 1 when it failed.
 
 ## Not here yet
 
-- Docking layouts and their commands, the Outliner, Details, Content Browser, Output Log, toolbar
-  and viewport (later P2 steps).
+- The Content Browser, toolbar and viewport (later P2 steps); asset pickers in Details.
 - A shader cache for the UI shader (with the shader cache of ADR-0011 rule 8).
 - File dialogs, and a Quit command with the Save / Don't Save / Cancel dialog.
 - Right-to-left and complex scripts, which ImGui can't shape (P4 brings shaped text).

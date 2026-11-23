@@ -130,6 +130,18 @@ struct EditorUiDesc {
     bool caretBlink = true;
 };
 
+// A rectangle in window coordinates, as a panel drew an item: for tests that click on it.
+struct UiRect {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+
+    [[nodiscard]] float centerX() const noexcept { return x + width * 0.5f; }
+
+    [[nodiscard]] float centerY() const noexcept { return y + height * 0.5f; }
+};
+
 // One frame's view of the window.
 struct UiFrameInput {
     // The window's size in window coordinates and in pixels (Window::size(), Window::pixelSize()).

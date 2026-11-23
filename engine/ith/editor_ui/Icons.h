@@ -32,10 +32,14 @@ inline constexpr Icon kCopy{"copy", 0xE09E};
 inline constexpr Icon kPencil{"pencil", 0xE1F9};
 inline constexpr Icon kSelectAll{"square-dashed-mouse-pointer", 0xE509};
 inline constexpr Icon kCircleX{"circle-x", 0xE084};
+inline constexpr Icon kPlus{"plus", 0xE13D};
+inline constexpr Icon kReset{"rotate-ccw", 0xE148};
+inline constexpr Icon kSearch{"search", 0xE151};
+inline constexpr Icon kClose{"x", 0xE1B2};
 
 // Every icon above, for the codepoint check.
-inline constexpr std::array kAll{kFilePlus, kFolderOpen, kSave,   kSaveAll,   kUndo,   kRedo,
-                                 kTrash,    kCopy,       kPencil, kSelectAll, kCircleX};
+inline constexpr std::array kAll{kFilePlus, kFolderOpen, kSave,    kSaveAll, kUndo,  kRedo,   kTrash, kCopy,
+                                 kPencil,   kSelectAll,  kCircleX, kPlus,    kReset, kSearch, kClose};
 
 } // namespace icons
 

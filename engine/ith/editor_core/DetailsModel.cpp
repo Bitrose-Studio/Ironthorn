@@ -192,6 +192,10 @@ Quat quatFromEulerDegrees(const Vec3& degrees) noexcept {
            glm::angleAxis(radians.z, Vec3(0.0f, 0.0f, 1.0f));
 }
 
+std::string componentDisplayName(const TypeInfo& type) {
+    return componentLabel(type);
+}
+
 void clampToField(const TypeInfo& type, void* value, const FieldInfo* field) noexcept {
     if (field == nullptr || (!field->attributes.min.has_value() && !field->attributes.max.has_value())) {
         return;

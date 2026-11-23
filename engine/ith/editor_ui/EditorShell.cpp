@@ -224,7 +224,10 @@ std::string documentTitle(const EditorSession& session) {
 void runMenuCommand(EditorSession& session, std::string_view id, EditorShellState& state,
                     const serialization::Value& args) {
     const CommandDesc* command = session.commands().find(id);
-    const Expected<serialization::Value> result = session.execute(id, args);
+    // A menu item without arguments is a user's gesture: a prompt may ask for the input (Rename).
+    const Expected<serialization::Value> result = args.kind() == serialization::Value::Kind::Null
+                                                      ? session.commands().invoke(session, id)
+                                                      : session.execute(id, args);
     state.lastCommand = std::string(id);
     if (result) {
         state.lastResult = {};

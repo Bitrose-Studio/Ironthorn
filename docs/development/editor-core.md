@@ -3,9 +3,9 @@
 `engine/ith/editor_core` is the editor without its UI
 ([ADR-0029](../decisions/0029-editor-ui-toolkit.md) rule 1,
 [ADR-0037](../decisions/0037-editor-commands-transactions-selection-and-automation.md)): the
-document and its world, commands, transactions and undo, selection, change counters, level files,
-the keymap and automation. It includes no ImGui and opens no window, so everything here is
-tested headless, under sanitizers too. `editor_ui` draws its state and calls its commands.
+document and its world, commands, transactions and undo, selection, change counters, the panels'
+view models, panels and layouts, level files, the keymap and automation. It includes no ImGui and
+opens no window, so everything here is tested headless, under sanitizers too. `editor_ui` draws its state and calls its commands.
 
 ## The session
 
@@ -220,6 +220,93 @@ Shortcuts and menus call `registry.invoke(session, id)`, a user's gesture. It ru
 checks, then its prompt, which starts gathering the input (inline rename) and later runs the
 command with its arguments. A prompt that returns false, or no prompt at all, runs the command
 without arguments. Automation calls `execute` with arguments and never prompts.
+
+## Panels and layouts
+
+The panel list, the layout model and the layout commands live here, headless
+([ADR-0040](../decisions/0040-editor-docking-panels-and-layouts.md)). Only applying a layout to
+ImGui's dock space and reading it back are in `editor_ui` (`DockLayout.cpp`).
+
+### Panels
+
+`session.panels()` is the `PanelRegistry`. Each module that brings a panel's view registers it:
+an id `ith.<name>`, a display name, a default dock place (`Center`, `Left`, `Right`, `Bottom` or
+`Floating`), a number of instances and a `draw` function, which `editor_core` never calls.
+
+| Id | Name | Default dock | Instances | Registered by |
+|---|---|---|---|---|
+| `ith.outliner` | Outliner | Right | 1 | `editor_ui` (`registerOutliner`) |
+| `ith.details` | Details | Right | 1 | `editor_ui` (`registerDetails`) |
+| `ith.output_log` | Output Log | Bottom | 1 | `editor_ui` (`registerOutputLog`) |
+| `ith.viewport` | Viewport | Center | 4 | the viewport step |
+| `ith.content_browser` | Content Browser | Bottom | 1 | the Content Browser step |
+
+A single panel's instance id is its id. A multi-instance panel's instances are `<id>.<n>`
+(`ith.viewport.2`), shown as "Viewport 2". ImGui window names end in `###<instance id>`, so a
+renamed or translated title keeps its place.
+
+### Layouts
+
+An `EditorLayout` holds three parts:
+
+- the main dock tree, as split nodes (`left_right` or `top_bottom`, a ratio, two children) and tab
+  stacks (instance ids, the active one, and one `central` stack);
+- floating groups, each a tree in a rectangle given as fractions of the dock space;
+- the sub-layouts of P3's asset editors, kept unchanged until then.
+
+It is stored as an `ith.editor_layout` document:
+
+```json
+{"format": "ith.editor_layout", "version": 1, "data": {
+  "root": {"split": "left_right", "ratio": 0.78,
+           "first": {"tabs": [], "central": true},
+           "second": {"tabs": ["ith.outliner"], "active": "ith.outliner"}},
+  "floating": [], "editors": {}}}
+```
+
+Loading validates the document and loads it with warnings:
+
+- an unknown panel, or a repeated one, is dropped;
+- an emptied stack gives its place to its sibling, except the central stack, which stays;
+- ratios and rectangles are clamped;
+- a registered panel the document doesn't name starts closed.
+
+A document that can't be read fails, and the next default applies.
+
+The engine's `Layouts/Default.json` is ADR-0008's layout, limited to the panels registered so far:
+
+- the Outliner above Details in a full-height right column;
+- the Output Log under the central area, where the Content Browser joins it later and the
+  viewport fills the centre.
+
+`builtInDefaultLayout()` is the whole layout as a constant; a test compares the two.
+
+### The layout session and commands
+
+`session.layouts()` keeps the current layout and its generation. The generation changes when a
+command replaces the layout, so the UI rebuilds its dock space. `DockLayout` hands back what the
+user arranges with `observe()`, which doesn't change the generation. The session writes
+`<project>/Saved/Editor/Layout.json` whenever the layout differs from it, and `restore()` loads that
+file at start-up.
+
+The Window commands are Actions: no undo entry, allowed while playing.
+
+- `ith.window.open_panel` and `ith.window.close_panel`;
+- `ith.window.load_layout`, `ith.window.save_layout_as` (user layer only),
+  `ith.window.set_default_layout`, `ith.window.delete_layout` (user layouts only) and
+  `ith.window.reset_layout`;
+- the queries `ith.query.layout` and `ith.query.layouts`.
+
+Layouts are whole files in the configuration layers (`Layouts/<name>.json`), and a name resolves
+to the highest layer that has it. Reset Layout tries these in order, taking the first that loads:
+
+1. the user's default;
+2. the default of the layers below the user's;
+3. `Default`;
+4. the built-in layout.
+
+Open Panel docks a closed panel next to a panel of the same default place, else in a new split on
+that side.
 
 ## Level files
 

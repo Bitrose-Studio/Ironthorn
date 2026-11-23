@@ -87,8 +87,9 @@ public:
 };
 
 // An EditorUi on a null device, rendering into an offscreen sRGB target of kWidth x kHeight.
+// `belowUi`, when given, is added to the input stack under the UI's consumer (the keymap consumer).
 struct UiFixture {
-    explicit UiFixture(EditorUiDesc overrides = {}) {
+    explicit UiFixture(EditorUiDesc overrides = {}, InputConsumer* belowUi = nullptr) {
         Expected<rhi::Device, rhi::Error> created = rhi::createNullDevice({.gpu = &gpu});
         REQUIRE(created.hasValue());
         device.emplace(std::move(*created));
@@ -97,6 +98,9 @@ struct UiFixture {
         REQUIRE(texture.hasValue());
         target = *texture;
         below = input.addConsumer({.window = kWindow, .layer = ConsumerLayer::Editor, .consumer = &lower});
+        if (belowUi != nullptr) {
+            input.addConsumer({.window = kWindow, .layer = ConsumerLayer::Editor, .consumer = belowUi});
+        }
         overrides.device = &*device;
         overrides.targetFormat = targetDesc.format;
         overrides.vertexShader = kShaderCode;

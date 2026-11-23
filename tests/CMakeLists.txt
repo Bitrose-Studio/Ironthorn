@@ -842,10 +842,11 @@ endif()
 
 # The editor UI (ADR-0029 rule 18), headless: ImGui on our platform backend with injected events
 # (routing, text, IME, clipboard, cursor, focus), on our renderer backend on the RHI's null device
-# (texture create, update and destroy, upload growth, scissors, recorded commands), the theme, the
-# fonts, the icons against the pinned codepoints.json, the shell and the idle policy. The fonts come
-# from the fonts/ folder the build fills next to the executable. Built wherever the editor modules
-# are, sanitizer builds included (ADR-0029 rule 19).
+# (texture create, update and destroy, upload growth, scissors, recorded commands), the Outliner and
+# Details panels driven by mouse and keys, the theme, the fonts, the icons against the pinned
+# codepoints.json, the shell and the idle policy. The fonts come from the fonts/ folder the build
+# fills next to the executable. Built wherever the editor modules are, sanitizer builds included
+# (ADR-0029 rule 19).
 if(TARGET ith_editor_ui)
     ith_add_test_suite(editor_ui
         SOURCES
@@ -853,6 +854,7 @@ if(TARGET ith_editor_ui)
             editor_ui/DockLayoutTests.cpp
             editor_ui/EditorUiTests.cpp
             editor_ui/OutputLogTests.cpp
+            editor_ui/PanelTests.cpp
             editor_ui/RendererTests.cpp
             editor_ui/ShellTests.cpp
         LIBRARIES ith::editor_ui ith::imgui)

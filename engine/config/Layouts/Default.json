@@ -3,17 +3,37 @@
   "version": 1,
   "data": {
     "root": {
-      "split": "top_bottom",
-      "ratio": 0.7,
+      "split": "left_right",
+      "ratio": 0.78,
       "first": {
-        "tabs": [],
-        "central": true
+        "split": "top_bottom",
+        "ratio": 0.7,
+        "first": {
+          "tabs": [],
+          "central": true
+        },
+        "second": {
+          "tabs": [
+            "ith.output_log"
+          ],
+          "active": "ith.output_log"
+        }
       },
       "second": {
-        "tabs": [
-          "ith.output_log"
-        ],
-        "active": "ith.output_log"
+        "split": "top_bottom",
+        "ratio": 0.4,
+        "first": {
+          "tabs": [
+            "ith.outliner"
+          ],
+          "active": "ith.outliner"
+        },
+        "second": {
+          "tabs": [
+            "ith.details"
+          ],
+          "active": "ith.details"
+        }
       }
     },
     "floating": [],

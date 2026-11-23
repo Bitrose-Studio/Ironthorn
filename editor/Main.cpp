@@ -1,7 +1,7 @@
 // ironthorn_editor: the Ironthorn editor (ADR-0008, ADR-0029, ADR-0040). It opens a window with the
 // editor shell - the main menu with the File, Edit and Window commands and their shortcuts, the dock
-// space with the panels (the Output Log) in the last session's layout, and the status bar - over
-// one editor session of a project.
+// space with the panels (Outliner, Details, Output Log) in the last session's layout, and the
+// status bar - over one editor session of a project.
 //
 //   ironthorn_editor --project <dir>            edits the project in <dir>
 //   ironthorn_editor ... --user-dir <dir>       the user configuration layer (default: the user's
@@ -24,11 +24,13 @@
 #include "ith/editor_core/EditorPreferences.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/Keymap.h"
+#include "ith/editor_ui/DetailsPanel.h"
 #include "ith/editor_ui/DockLayout.h"
 #include "ith/editor_ui/EditorShell.h"
 #include "ith/editor_ui/EditorUi.h"
 #include "ith/editor_ui/EditorUiShader.h"
 #include "ith/editor_ui/IdlePolicy.h"
+#include "ith/editor_ui/OutlinerPanel.h"
 #include "ith/editor_ui/OutputLog.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
@@ -493,6 +495,11 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     if (!sinkAdded) {
         warn(sinkAdded.error());
     }
+    // Registered in the Window menu's order (ADR-0040 rule 3); the Outliner is also the Rename prompt.
+    ith::OutlinerPanel outliner(session);
+    ith::registerOutliner(session, outliner);
+    ith::DetailsPanel details(session);
+    ith::registerDetails(session.panels(), details);
     ith::OutputLog outputLog(logHistory, ui.theme());
     ith::registerOutputLog(session.panels(), outputLog);
     ith::DockLayout dock(session);

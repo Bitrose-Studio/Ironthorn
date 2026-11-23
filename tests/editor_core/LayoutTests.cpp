@@ -433,7 +433,8 @@ TEST_SUITE("editor_core.layout_session") {
         CHECK(noConfig.saveAs("Mine", false).error().code == "editor.layout.no_config");
         CHECK(noConfig.load("Default").error().code == "editor.layout.no_config");
         CHECK(noConfig.reset().name.empty());
-        CHECK(ith::openPanels(noConfig.current()) == std::vector<std::string>{"ith.output_log"});
+        CHECK(ith::openPanels(noConfig.current()) ==
+              std::vector<std::string>{"ith.output_log", "ith.outliner", "ith.details"});
         CHECK(noConfig.list().valueOr(std::vector<ith::LayoutListing>{{}}).empty());
     }
 

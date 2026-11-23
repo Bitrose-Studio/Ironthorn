@@ -1,10 +1,11 @@
 // A golden screenshot of the editor shell in the default layout (ADR-0029 rule 18, ADR-0040 rule 19):
 // the main menu bar, the engine's Default layout (an empty central area and the Output Log, empty,
-// below it) and the status bar over an untitled level, 1280 x 720 at display scale 1, a fixed time
-// step and no caret blink, rendered on the software GPU of each backend (WARP on Direct3D 12,
-// lavapipe on Vulkan) with the UI shader compiled from Slang at run time, read back and compared
-// with tests/editor_ui_gpu/golden/shell_<backend>.ppm. A pixel differs when a channel differs by
-// more than 8 of 255; the shot fails when more than 0.5% of the pixels differ.
+// below it; the Outliner above Details on the right, both of the empty level) and the status bar over
+// an untitled level, 1280 x 720 at display scale 1, a fixed time step and no caret blink, rendered on
+// the software GPU of each backend (WARP on Direct3D 12, lavapipe on Vulkan) with the UI shader
+// compiled from Slang at run time, read back and compared with
+// tests/editor_ui_gpu/golden/shell_<backend>.ppm. A pixel differs when a channel differs by more than
+// 8 of 255; the shot fails when more than 0.5% of the pixels differ.
 //
 // ITH_UPDATE_GOLDEN=1 writes the images instead of comparing them. A backend without a software
 // device here reports itself skipped. On a failure the rendered image is written next to the test
@@ -13,10 +14,12 @@
 #include "ith/config/Config.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/Keymap.h"
+#include "ith/editor_ui/DetailsPanel.h"
 #include "ith/editor_ui/DockLayout.h"
 #include "ith/editor_ui/EditorShell.h"
 #include "ith/editor_ui/EditorUi.h"
 #include "ith/editor_ui/EditorUiShader.h"
+#include "ith/editor_ui/OutlinerPanel.h"
 #include "ith/editor_ui/OutputLog.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
@@ -197,7 +200,12 @@ Image renderShell(rhi::Device& device) {
                                                                    .window = 1,
                                                                    .caretBlink = false});
         REQUIRE_MESSAGE(ui.hasValue(), (ui ? std::string() : ui.error().message));
-        // The Output Log over a buffer no sink writes to: empty, so the image doesn't depend on the log.
+        // The P2 panels so far: the Outliner and Details of the empty level, and the Output Log over a
+        // buffer no sink writes to, so the image doesn't depend on the log.
+        OutlinerPanel outliner(session);
+        registerOutliner(session, outliner);
+        DetailsPanel details(session);
+        registerDetails(session.panels(), details);
         const LogRingBuffer history(16);
         OutputLog log(history, (*ui)->theme());
         registerOutputLog(session.panels(), log);
