@@ -17,6 +17,12 @@ Ironthorn is a modular, 3D-first game engine that also does 2D, written in C++20
 > reflection, serialization, ECS, asset database and input. There is no editor, renderer or
 > gameplay yet. APIs will change without notice until 1.0.
 
+## How it is built
+
+Ironthorn is developed with the help of AI coding assistants. Every change, whoever wrote it,
+follows the same rules: design choices are recorded as [decisions](docs/decisions/README.md),
+and the code is checked by the same tests and CI on Windows and Linux, with sanitizers.
+
 ## Documentation
 
 | Document | Purpose |
