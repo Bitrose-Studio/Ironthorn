@@ -829,6 +829,7 @@ if(TARGET ith_editor_core)
         SOURCES
             editor_core/AutomationTests.cpp
             editor_core/EditCommandTests.cpp
+            editor_core/EditorCameraTests.cpp
             editor_core/EditorCoreComponents.h
             editor_core/EditorTestSupport.h
             editor_core/FileTests.cpp

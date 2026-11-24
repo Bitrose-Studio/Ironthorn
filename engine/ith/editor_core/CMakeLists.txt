@@ -17,6 +17,8 @@ ith_add_module(editor_core
         DetailsModel.h
         DetailsModel.cpp
         EditCommands.cpp
+        EditorCamera.h
+        EditorCamera.cpp
         EditorChanges.h
         EditorDocument.h
         EditorDocument.cpp

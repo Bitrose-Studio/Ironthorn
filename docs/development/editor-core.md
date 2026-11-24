@@ -115,6 +115,63 @@ Each view model keeps the `values` generation it last saw and asks
 changes. The log behind it keeps the last 4,096 bumps; a panel that fell further behind gets
 `nullopt` and refreshes everything.
 
+## Editor camera
+
+`EditorCamera` is the camera state of one viewport ([ADR-0042](../decisions/0042-editor-viewport.md)
+rules 2 and 5). It is plain view state, not an entity, and changing it does not dirty the document or
+make an undo entry. Its default is six metres back-right and above the origin, looking at the origin
+with yaw 45 degrees and pitch −30 degrees, a 90-degree vertical field of view and the origin as its
+orbit pivot. All angles in the API are radians.
+
+```cpp
+#include "ith/editor_core/EditorCamera.h"
+
+ith::EditorCamera camera;
+ith::CameraInput input;
+input.rmb = true;
+input.forward = true;
+ith::updateCamera(camera, input, deltaSeconds);
+
+const ith::Mat4 view = ith::viewMatrix(camera);
+const ith::Mat4 projection = ith::projectionMatrix(camera, width / height, 0.1f);
+ith::focus(camera, worldBounds, width / height); // an ith::Aabb in world space
+```
+
+`CameraInput` is one frame of held input, with mouse motion in pixels and wheel input in notches.
+The viewport routes input to it and accumulates fractional wheel input for speed stepping; the camera
+controller has no UI or platform dependency.
+
+| Input | Action |
+|---|---|
+| RMB + mouse | Look; 0.005 radians per pixel |
+| RMB + W/A/S/D | Fly along the camera's forward and right axes |
+| RMB + Q/E | Fly down/up along world Y |
+| RMB + wheel | Change speed by one step per whole notch, clamped to 1–8 |
+| Alt + LMB | Orbit the pivot, preserving its distance; the scene follows the drag (right decreases yaw, down decreases pitch) |
+| Alt + RMB | Dolly toward or away from the pivot; 100 vertical pixels are one step |
+| Wheel without RMB | Dolly by steps |
+| MMB | Pan position and pivot together |
+
+The eight speed steps are **0.5, 1, 2, 4, 8, 16, 32 and 64 m/s**, each twice the previous one; the
+default step is 4. `updateCamera` clamps `speedStep` to 1–8, wraps yaw into [−π, π), and normalizes
+diagonal fly input. Pitch stays strictly between −π/2 and π/2. RMB look and fly finish by setting the
+pivot to `position + forward * max(previous pivot distance, 1 m)`, so a later orbit or wheel dolly
+uses the point in view. Each dolly step multiplies the pivot distance by 0.9, with upward wheel or
+drag motion moving closer. Panning moves opposite the horizontal drag and along the vertical drag,
+scaled by 0.001 times the pivot distance per pixel (using one metre when the distance is smaller); it
+does not track the cursor exactly.
+
+`viewMatrix` follows the right-handed, +Y-up, −Z-forward convention. `projectionMatrix` delegates to
+`perspectiveReversedInfinite`, so near depth is 1, distant depth approaches 0 and there is no far
+plane. Use the viewport's 0.1 m near plane.
+
+`focus` keeps yaw and pitch, moves the pivot to the world bounds' centre and backs away until the
+bounds fit at the supplied width/height aspect. For `radius = length(bounds.halfExtents())` and
+`limitingHalfFov = min(fovY / 2, atan(tan(fovY / 2) * aspect))`, the pivot distance is
+`max(1 m, 1.1 * radius / sin(limitingHalfFov))`. This enclosing-sphere fit has a 10% margin and
+conservatively includes every corner; point bounds are viewed from one metre. Empty bounds are a
+programmer error and leave the camera unchanged.
+
 ## View models
 
 The panels' state lives here, as plain data and commands; `editor_ui` only draws it
@@ -363,6 +420,10 @@ runner serves the headless tests and the editor's `--automation` run.
 
 `tests/editor_core` holds:
 
+- the camera tests: the speed table and all fly axes, speed-step clamping, pitch limits and yaw
+  wrapping, pivot tracking, orbit direction and precedence, dolly and pan, transformed world-bounds
+  focus and its computed distance at several aspect ratios, and the view and reversed-Z projection
+  conventions;
 - the transaction and history tests, and the command tests (every command with undo and redo,
   refusals, argument errors);
 - the file tests (save and reopen with and without a job system, failed writes and opens, unsaved
