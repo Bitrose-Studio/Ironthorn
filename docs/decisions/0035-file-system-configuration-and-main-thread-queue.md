@@ -1,7 +1,8 @@
 # ADR-0035: File system, layered configuration and the main-thread queue
 
 - **Status:** Accepted
-- **Amended by:** [ADR-0036](0036-file-system-windows-atomic-replace-corrected.md)
+- **Amended by:** [ADR-0036](0036-file-system-windows-atomic-replace-corrected.md),
+  [ADR-0041](0041-editor-amendments-after-outliner-and-details.md)
 - **Date:** 2026-11-22
 - **Related:** amends [ADR-0025](0025-job-system.md) rule 7 (who drains the main-thread queue,
   and the wake-up), [ADR-0029](0029-editor-ui-toolkit.md) rules 12 (idle wake-up) and 15 (where

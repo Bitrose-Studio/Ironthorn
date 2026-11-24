@@ -45,6 +45,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0038](0038-file-system-windows-read-retry-during-replace.md) | File system: Windows read retry while a replace is in flight (amends 0036) | Accepted, amended by [0039](0039-file-system-windows-read-retry-measured.md) |
 | [0039](0039-file-system-windows-read-retry-measured.md) | File system: Windows read retry after a replace, measured (amends 0038) | Accepted |
 | [0040](0040-editor-docking-panels-and-layouts.md) | Editor docking, panels and layouts (amends 0029) | Accepted |
+| [0041](0041-editor-amendments-after-outliner-and-details.md) | Editor amendments after the Outliner and Details (amends 0035, 0037) | Accepted |
 
 ## Planned
 
