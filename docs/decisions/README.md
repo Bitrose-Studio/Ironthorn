@@ -56,6 +56,9 @@ These decisions are still open. Each is needed by the [roadmap](../architecture.
 
 | Topic | Needed by |
 |---|---|
-| Asset streaming (async, budgeted loading of textures, geometry and audio on the jobs background lane, per-tier budgets) | P3, before texture work |
+| Asset streaming (async, budgeted loading of textures, geometry and audio on the jobs background lane, per-tier budgets, requests ordered by distance, screen size and visibility) | P3, before texture work |
+| Runtime settings and scalability tiers (named settings with their registered cost, read when they change and never per frame; tier presets as config layers; console access in development builds) | P3, before the first renderer feature |
+| Pipeline state caching (prebuilt pipeline caches, warm-up before gameplay, no shader or pipeline compile hitches in shipped games) | P3 |
+| Performance regression captures (scripted camera paths recording frame time, CPU and GPU zones and memory per tier, compared against budgets in CI) | P3, with the first renderer |
 | Material model (OpenPBR-based real-time subset, per-tier approximations) | P3 |
 | Animation retargeting (rigs, chain mapping, runtime and editor batch retarget) | P5 |
