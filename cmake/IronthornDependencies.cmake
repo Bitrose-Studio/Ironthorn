@@ -103,6 +103,50 @@ if(IRONTHORN_BUILD_TOOLS)
     target_include_directories(ith_xxhash SYSTEM INTERFACE "${xxhash_SOURCE_DIR}")
 endif()
 
+# --- Tracy: the profiler client (BSD-3-Clause) --------------------------------------------
+# Only with IRONTHORN_PROFILING (ADR-0007 rules 11 and 13), and only foundation links it (the
+# tracy_confined test). Tracy's own CMake project is not used: it looks for the AMD ROCm profiler
+# and would build its integration, the one part of the client that throws. public/ has no
+# CMakeLists.txt, so as SOURCE_SUBDIR it makes FetchContent only unpack the archive, and the client
+# is built here from its one source file, without exceptions or RTTI and without our warning level.
+# The configuration defines are public, because every translation unit that includes Tracy must
+# see the same ones: collect only while a viewer is connected, listen on localhost only, don't
+# announce the process on the network, install no crash handler (aborts and failed asserts behave
+# as in every other build), and fall back to a portable timer on CPUs and virtual machines without
+# an invariant TSC instead of ending the process at start-up. TRACY_FIBERS, TRACY_MANUAL_LIFETIME
+# and TRACY_ROCPROF stay off: the job system has no fibers, and the profiler starts and stops with
+# the process. System tracing and sampling stay on (docs/development/logging.md, "Profiling").
+if(IRONTHORN_PROFILING)
+    ith_declare_dependency(tracy
+        URL https://github.com/wolfpld/tracy/archive/refs/tags/v0.15.0.tar.gz
+        SHA256 3d57da54aa67d7875da1e8fecd0bd5957675cef73c27dd52bffb6ab8d290a5e6
+        SOURCE_SUBDIR public)
+    FetchContent_MakeAvailable(tracy)
+    find_package(Threads REQUIRED)
+    add_library(ith_tracy STATIC "${tracy_SOURCE_DIR}/public/TracyClient.cpp")
+    add_library(ith::tracy ALIAS ith_tracy)
+    # A system include: Tracy's headers don't build cleanly at our warning level (-Wextra-semi).
+    target_include_directories(ith_tracy SYSTEM PUBLIC "${tracy_SOURCE_DIR}/public")
+    target_compile_definitions(ith_tracy PUBLIC
+        TRACY_ENABLE
+        TRACY_ON_DEMAND
+        TRACY_ONLY_LOCALHOST
+        TRACY_NO_BROADCAST
+        TRACY_NO_CRASH_HANDLER
+        TRACY_TIMER_FALLBACK)
+    if(MSVC)
+        target_compile_definitions(ith_tracy PRIVATE _HAS_EXCEPTIONS=0)
+        target_compile_options(ith_tracy PRIVATE /EHs-c-)
+    else()
+        target_compile_options(ith_tracy PRIVATE -fno-exceptions)
+    endif()
+    target_link_libraries(ith_tracy PRIVATE ith::runtime_options Threads::Threads ${CMAKE_DL_LIBS})
+    if(WIN32)
+        target_link_libraries(ith_tracy PRIVATE ws2_32 dbghelp advapi32 user32)
+    endif()
+    set_target_properties(ith_tracy PROPERTIES FOLDER "ThirdParty")
+endif()
+
 # --- Slang and DXC: the shader compiler (tools only, never linked into games) ----------
 # Both are their publishers' prebuilt releases: building either from source takes LLVM and far
 # longer than the engine. Slang is linked as a shared library and loads DXC's dxcompiler and

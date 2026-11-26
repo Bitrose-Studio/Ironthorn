@@ -15,6 +15,7 @@
 // Where the window has no native handle (SDL's headless "offscreen" driver) or no device can be
 // created, it runs the event loop without rendering, about 60 times a second.
 
+#include "ith/foundation/Profile.h"
 #include "ith/foundation/Version.h"
 #include "ith/jobs/JobSystem.h"
 #include "ith/platform/Platform.h"
@@ -382,6 +383,7 @@ int main(int argc, char** argv) { // NOLINT(misc-const-correctness): the signatu
             ++frames;
             if (!renderer) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(16));
+                ITH_PROFILE_FRAME();
                 continue;
             }
             const std::chrono::duration<double> elapsed = Clock::now() - start;
@@ -396,6 +398,7 @@ int main(int argc, char** argv) { // NOLINT(misc-const-correctness): the signatu
                 timings.add(now - frameStart, record);
             }
             frameStart = now;
+            ITH_PROFILE_FRAME();
         }
         if (renderer) {
             // The swapchain goes before the window (Device.h); a lost device only needs destroying.

@@ -62,7 +62,8 @@ struct JobSystemConfig {
 // The thread that constructs the JobSystem is its main thread. All members are thread-safe
 // unless they say otherwise; jobs may submit and wait from inside other jobs. A job is a
 // callable taking no arguments and returning nothing, with captures of at most kJobCaptureSize
-// bytes (larger ones don't compile). Its name must be a string literal or outlive the job.
+// bytes (larger ones don't compile). Its name, for debuggers and the profiler, must be a non-empty
+// string literal or another string that outlives the job (ADR-0025 rule 8).
 //
 // Destruction (main thread, outside any job) asks for shutdown (shutdownRequested() turns true,
 // so long background jobs can stop early), then runs or waits for every queued, running and
@@ -187,7 +188,7 @@ private:
         static_assert(sizeof(Function) <= kJobCaptureSize,
                       "Job captures are limited to kJobCaptureSize (48) bytes: capture a pointer to your own data");
         static_assert(alignof(Function) <= alignof(std::max_align_t), "Job callables must not be over-aligned");
-        ITH_ASSERT(name != nullptr);
+        ITH_ASSERT_MSG(name != nullptr && name[0] != '\0', "A job needs a non-empty name");
         detail::Job* job = acquireJob(lane, name, counter);
         ::new (static_cast<void*>(job->storage.data())) Function(std::forward<F>(function));
         job->relocate = [](void* from, void* to) {

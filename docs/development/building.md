@@ -127,6 +127,12 @@ The `linux-tsan` test preset sets `TSAN_OPTIONS` with `tests/tsan-suppressions.t
 the reports TSan makes about system libraries the engine can't change, each with its reason.
 Run `ctest --preset linux-tsan`, or pass the same `TSAN_OPTIONS` when starting a test by hand.
 
+Profiling builds (`IRONTHORN_PROFILING`, the `linux-clang-profile`, `windows-profile` and
+`windows-clang-profile` presets) build the Tracy profiler client in; how to build them and connect
+the viewer is in the [profiling guide](logging.md#profiling). CMake refuses them together with a
+sanitizer option. CI tests `linux-clang-profile` and builds `windows-profile` (MSVC) without running
+its tests; `verify` builds neither.
+
 Shipping link test ([ADR-0017](../decisions/0017-runtime-and-editor-separation.md)): the sample
 players and server built in Shipping without the modules they must not link, as CI does. The
 player preset needs the display packages above; the server preset doesn't:

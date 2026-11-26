@@ -33,7 +33,8 @@ param(
     [ValidateSet('Debug', 'RelWithDebInfo', 'Release')]
     [string]$Config = 'RelWithDebInfo',
 
-    [ValidateSet('windows', 'windows-clang')]
+    # windows-profile and windows-clang-profile build with the Tracy profiler (ADR-0007).
+    [ValidateSet('windows', 'windows-clang', 'windows-profile', 'windows-clang-profile')]
     [string]$Preset = 'windows',
 
     # build: target name. Empty builds everything.

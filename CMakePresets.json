@@ -55,6 +55,24 @@
             "cacheVariables": { "IRONTHORN_ENABLE_TSAN": "ON" }
         },
         {
+            "name": "windows-profile",
+            "displayName": "Windows (MSVC) with the Tracy profiler (ADR-0007)",
+            "inherits": "windows",
+            "cacheVariables": { "IRONTHORN_PROFILING": "ON" }
+        },
+        {
+            "name": "windows-clang-profile",
+            "displayName": "Windows (clang-cl) with the Tracy profiler (ADR-0007)",
+            "inherits": "windows-clang",
+            "cacheVariables": { "IRONTHORN_PROFILING": "ON" }
+        },
+        {
+            "name": "linux-clang-profile",
+            "displayName": "Linux (Clang) with the Tracy profiler (ADR-0007)",
+            "inherits": "linux-clang",
+            "cacheVariables": { "IRONTHORN_PROFILING": "ON" }
+        },
+        {
             "name": "linux-shipping-player",
             "displayName": "Linux shipping link test: player, without editor and tools modules",
             "inherits": "linux-clang",
@@ -82,6 +100,9 @@
         { "name": "linux-gcc-dev", "configurePreset": "linux-gcc", "configuration": "RelWithDebInfo" },
         { "name": "linux-asan", "configurePreset": "linux-asan", "configuration": "Debug" },
         { "name": "linux-tsan", "configurePreset": "linux-tsan", "configuration": "Debug" },
+        { "name": "windows-profile", "configurePreset": "windows-profile", "configuration": "RelWithDebInfo" },
+        { "name": "windows-clang-profile", "configurePreset": "windows-clang-profile", "configuration": "RelWithDebInfo" },
+        { "name": "linux-clang-profile", "configurePreset": "linux-clang-profile", "configuration": "RelWithDebInfo" },
         { "name": "linux-shipping-player", "configurePreset": "linux-shipping-player", "configuration": "Release", "targets": ["minimal_player", "window_player"] },
         { "name": "linux-shipping-server", "configurePreset": "linux-shipping-server", "configuration": "Release", "targets": ["minimal_server"] }
     ],
@@ -101,6 +122,9 @@
         { "name": "linux-clang-dev", "inherits": "test-base", "configurePreset": "linux-clang", "configuration": "RelWithDebInfo" },
         { "name": "linux-clang-release", "inherits": "test-base", "configurePreset": "linux-clang", "configuration": "Release" },
         { "name": "linux-gcc-dev", "inherits": "test-base", "configurePreset": "linux-gcc", "configuration": "RelWithDebInfo" },
+        { "name": "windows-profile", "inherits": "test-base", "configurePreset": "windows-profile", "configuration": "RelWithDebInfo" },
+        { "name": "windows-clang-profile", "inherits": "test-base", "configurePreset": "windows-clang-profile", "configuration": "RelWithDebInfo" },
+        { "name": "linux-clang-profile", "inherits": "test-base", "configurePreset": "linux-clang-profile", "configuration": "RelWithDebInfo" },
         { "name": "linux-asan", "inherits": "test-base", "configurePreset": "linux-asan", "configuration": "Debug" },
         {
             "name": "linux-tsan",

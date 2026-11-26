@@ -15,6 +15,7 @@
 // rendering, about 60 times a second. On Wayland such a
 // window stays invisible: a Wayland window appears only once something is presented to it.
 
+#include "ith/foundation/Profile.h"
 #include "ith/foundation/Version.h"
 #include "ith/jobs/JobSystem.h"
 #include "ith/platform/Platform.h"
@@ -281,6 +282,7 @@ int main(int argc, char** argv) { // NOLINT(misc-const-correctness): the signatu
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(16));
             }
+            ITH_PROFILE_FRAME();
         }
         if (renderer) {
             // The swapchain goes before the window (Device.h); a lost device only needs destroying.

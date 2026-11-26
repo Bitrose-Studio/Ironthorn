@@ -47,6 +47,11 @@ jobs:
       - name: Verify (format, MSVC Debug/dev/Release, clang-cl, clang-tidy, GPU tests on WARP)
         shell: pwsh
         run: ./scripts/dev.ps1 verify
+      # ADR-0007: MSVC compiles the enabled ITH_PROFILE_* macros too. Build only; the Linux
+      # linux-clang-profile job runs the tests with profiling on.
+      - name: Build with the Tracy profiler (windows-profile, MSVC)
+        shell: pwsh
+        run: ./scripts/dev.ps1 build -Preset windows-profile
 
   linux:
     name: linux (${{ matrix.preset }})
@@ -65,6 +70,12 @@ jobs:
             configure: linux-asan
           - preset: linux-tsan
             configure: linux-tsan
+          # ADR-0007 rule 15: one configuration with the Tracy profiler built in, so the enabled
+          # ITH_PROFILE_* macros keep compiling and the tests pass with them. Never combined with a
+          # sanitizer (CMake refuses it): Tracy replaces dlclose for the whole process on Linux and
+          # adds threads and a network listener of its own.
+          - preset: linux-clang-profile
+            configure: linux-clang-profile
     steps:
       - uses: actions/checkout@v4
         # The golden images of the GPU tests are stored with Git LFS.
@@ -138,7 +149,7 @@ jobs:
       # The Vulkan swapchain on a real X11 window (Xvfb) on lavapipe. window_player falls back to
       # running without rendering, so the step checks that it rendered with Vulkan.
       - name: Window player on Vulkan (X11)
-        if: matrix.preset == 'linux-clang-dev' || matrix.preset == 'linux-gcc-dev'
+        if: matrix.preset == 'linux-clang-dev' || matrix.preset == 'linux-gcc-dev' || matrix.preset == 'linux-clang-profile'
         env:
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
           SDL_VIDEO_DRIVER: x11
@@ -151,7 +162,7 @@ jobs:
       # The 10,000 instanced cubes on the same window, through the bindless model; the step checks
       # that it rendered with Vulkan and printed its frame timings.
       - name: Scene player on Vulkan (X11)
-        if: matrix.preset == 'linux-clang-dev' || matrix.preset == 'linux-gcc-dev'
+        if: matrix.preset == 'linux-clang-dev' || matrix.preset == 'linux-gcc-dev' || matrix.preset == 'linux-clang-profile'
         env:
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
           SDL_VIDEO_DRIVER: x11

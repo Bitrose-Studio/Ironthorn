@@ -22,6 +22,9 @@ option(IRONTHORN_BUILD_EDITOR "Build the editor modules and applications (needs 
 option(IRONTHORN_WARNINGS_AS_ERRORS "Treat warnings in Ironthorn targets as errors" OFF)
 option(IRONTHORN_ENABLE_SANITIZERS "Build with AddressSanitizer and UndefinedBehaviorSanitizer (Clang/GCC)" OFF)
 option(IRONTHORN_ENABLE_TSAN "Build with ThreadSanitizer (Clang/GCC, not with IRONTHORN_ENABLE_SANITIZERS)" OFF)
+# ADR-0007 rule 13: builds the Tracy profiler client in and turns the ITH_PROFILE_* macros on (it
+# defines ITH_ENABLE_PROFILING). The profile presets set it. Never on in a build that is distributed.
+option(IRONTHORN_PROFILING "Build with the Tracy profiler client (on demand, localhost only)" OFF)
 
 # The shader compiler (Slang and DXC) is the one part of the tools that sanitizer builds leave
 # out: its prebuilt libraries are not instrumented, so only the thin wrapper around them would be
@@ -94,6 +97,13 @@ if(IRONTHORN_BUILD_TESTS)
         COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}"
             -P "${PROJECT_SOURCE_DIR}/cmake/CheckImGuiConfined.cmake")
     set_tests_properties(imgui_confined PROPERTIES LABELS "lint")
+
+    # Tracy stays behind ith/foundation/Profile.h: only it includes Tracy, and only foundation
+    # links it (ADR-0007 rules 10 to 12). tests/layering holds lint fixtures that exist to be refused.
+    add_test(NAME tracy_confined
+        COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}" "-DSKIP=tests/layering"
+            -P "${PROJECT_SOURCE_DIR}/cmake/CheckTracyConfined.cmake")
+    set_tests_properties(tracy_confined PROPERTIES LABELS "lint")
 
     # File I/O under engine/ith goes through the file_system module (ADR-0035 rule 10).
     add_test(NAME file_io_confined

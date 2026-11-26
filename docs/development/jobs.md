@@ -25,7 +25,11 @@ ith::JobSystem testJobs({.foregroundWorkers = 0,        // tests: no workers, ev
 | `backgroundWorkers` | hardware threads / 4, 1 to 4 | Workers for long jobs, below-normal OS priority. |
 | `foregroundJobCapacity` | 4,096 | Records for queued and parked foreground jobs. Fixed: frame work never allocates. |
 
-Workers are named `Foreground N` and `Background N` for debuggers and profilers.
+Workers are named `Foreground N` and `Background N` for debuggers and profilers. In profiling
+builds (`IRONTHORN_PROFILING`, [logging guide](logging.md#profiling)) they carry the same names
+in the profiler, and every job runs in a profiling zone named after the job (ADR-0025 rule 18).
+A job run inside a wait opens its zone inside the waiting job's zone, so the timeline shows
+helped jobs nested under the job that waited. Without profiling, neither costs anything.
 Background workers run below normal priority, so on a machine saturated by other
 normal-priority work they can be starved until the load drops; tests and tools that wait on
 background work slow down accordingly.
@@ -40,7 +44,8 @@ background work slow down accordingly.
 
 ### Jobs and counters
 
-A job is a name (a string literal) and a callable that takes no arguments and returns nothing.
+A job is a name (a non-empty string literal, or another string that outlives the job) and a
+callable that takes no arguments and returns nothing.
 Its captures are stored inline, at most 48 bytes (`kJobCaptureSize`); a larger capture doesn't
 compile, so capture a pointer to your own data instead.
 
@@ -237,8 +242,7 @@ build/windows/bin/Release/ith_jobs_benchmark.exe
 
 - Thread stack size and core masks in the thread layer (ADR-0025 rule 6); names and priority
   exist.
-- Worker names through `ITH_PROFILE_THREAD_NAME` and a profiling zone per job (rule 18), once
-  ADR-0007's profiling macros exist.
+- Plots of queue depths (rule 18 allows them); worker names and job zones exist.
 - Command-line overrides of the worker counts (rule 5): the application's job.
 - A `JobSystemConfig` setting to run background workers at normal priority in tools, the cooker
   and tests (decided: revisit when the cooker exists).

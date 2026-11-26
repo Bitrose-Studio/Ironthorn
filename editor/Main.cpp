@@ -36,6 +36,7 @@
 #include "ith/file_system/Path.h"
 #include "ith/foundation/Assert.h"
 #include "ith/foundation/LogRingBuffer.h"
+#include "ith/foundation/Profile.h"
 #include "ith/foundation/Version.h"
 #include "ith/input/Input.h"
 #include "ith/jobs/JobSystem.h"
@@ -569,6 +570,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         if (options.frameLimit != 0 && frames >= options.frameLimit) {
             running = false;
         }
+        ITH_PROFILE_FRAME();
     }
     // A save still writing finishes before the editor goes (ADR-0037 rule 16).
     session.waitIdle();

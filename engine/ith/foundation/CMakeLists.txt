@@ -19,6 +19,7 @@ ith_add_module(foundation
         LogRingBuffer.cpp
         Mutex.h
         ObjectPool.h
+        Profile.h
         Stopwatch.h
         StringUtils.h
         StringUtils.cpp
@@ -26,3 +27,10 @@ ith_add_module(foundation
         Uuid.cpp
         Version.h
         BuildInfo.h.in)
+
+# Profiling builds (ADR-0007 rule 13): Profile.h's macros use the Tracy client. Both are public, so
+# every target that can include Profile.h sees the same configuration.
+if(IRONTHORN_PROFILING)
+    target_link_libraries(ith_foundation PUBLIC ith::tracy)
+    target_compile_definitions(ith_foundation PUBLIC ITH_ENABLE_PROFILING=1)
+endif()

@@ -3,6 +3,7 @@
 #include "ith/foundation/Assert.h"
 #include "ith/foundation/Compiler.h"
 #include "ith/foundation/Mutex.h"
+#include "ith/foundation/Profile.h"
 #include "ith/jobs/Progress.h"
 #include "ith/jobs/Thread.h"
 #include "ith/jobs/Watchdog.h"
@@ -370,12 +371,22 @@ struct JobSystem::State {
         const JobLane jobLane = job->lane;
         JobCounter* counter = job->counter;
         void (*const invoke)(void*) = job->run;
+        // A non-empty string literal or another string that outlives the job (JobSystem.h), so it
+        // stays valid after the record goes back to its pool. Reading it here lets AddressSanitizer
+        // builds catch a name that died before the job ran.
+        [[maybe_unused]] const char* const name = job->name;
+        ITH_ASSERT_MSG(name[0] != '\0', "A job needs a non-empty name");
         job->relocate(job->storage.data(), callable.data());
         pool(jobLane).release(job);
 
         const std::optional<JobLane> outer = g_thread.currentJob;
         g_thread.currentJob = jobLane;
-        invoke(callable.data());
+        {
+            // One zone per job, named after it (ADR-0025 rule 18). A job that runs inside a
+            // wait opens its zone inside the waiting job's, so the zones nest.
+            ITH_PROFILE_SCOPE_DYNAMIC(name);
+            invoke(callable.data());
+        }
         g_thread.currentJob = outer;
         if (counter != nullptr) {
             finishOne(*counter);
@@ -612,6 +623,7 @@ struct JobSystem::State {
         const bool foreground = laneId == JobLane::Foreground;
         const std::string name = std::string(foreground ? "Foreground " : "Background ") + std::to_string(index);
         detail::setCurrentThreadName(name.c_str());
+        ITH_PROFILE_THREAD_NAME(name.c_str());
         detail::setCurrentThreadPriority(foreground ? detail::ThreadPriority::Normal
                                                     : detail::ThreadPriority::BelowNormal);
 
@@ -770,7 +782,9 @@ void detail::wakeMainThread(const JobSystem& jobs) {
 
 detail::Job* JobSystem::acquireJob(JobLane lane, const char* name, JobCounter* counter) {
     Job* job = m_state->acquire(lane);
-    job->name = name;
+    // A null name is refused by makeJob's assert; should the assert continue (a capturing handler,
+    // or asserts off), the job still gets a name the profiler and debuggers can read.
+    job->name = name != nullptr ? name : "Unnamed job";
     job->lane = lane;
     job->counter = counter;
     if (counter != nullptr) {

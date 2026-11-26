@@ -88,6 +88,11 @@ endif()
 if(IRONTHORN_ENABLE_SANITIZERS AND IRONTHORN_ENABLE_TSAN)
     message(FATAL_ERROR "AddressSanitizer and ThreadSanitizer cannot be combined. Pick one.")
 endif()
+# The Tracy client adds threads and a network listener of its own and, on Linux, replaces dlclose
+# for the whole process: a sanitizer would check a process that differs from the one it ships.
+if(IRONTHORN_PROFILING AND (IRONTHORN_ENABLE_SANITIZERS OR IRONTHORN_ENABLE_TSAN))
+    message(FATAL_ERROR "IRONTHORN_PROFILING cannot be combined with IRONTHORN_ENABLE_SANITIZERS or IRONTHORN_ENABLE_TSAN.")
+endif()
 if(IRONTHORN_ENABLE_SANITIZERS OR IRONTHORN_ENABLE_TSAN)
     if(MSVC)
         message(FATAL_ERROR "Sanitizer builds are only supported with Clang and GCC.")

@@ -1,6 +1,7 @@
-# Logging
+# Logging and profiling
 
-The logger lives in the `foundation` module (`engine/ith/foundation/Log.h` and `LogRingBuffer.h`).
+The logger lives in the `foundation` module (`engine/ith/foundation/Log.h` and `LogRingBuffer.h`),
+and so do the profiling macros ([Profiling](#profiling)).
 The design is [ADR-0007](../decisions/0007-logging-and-profiling.md). It uses only the C++
 standard library, formats with `std::format`, and needs no initialization: it works before
 `main`, during static destruction and while an assert fails.
@@ -122,3 +123,116 @@ The log file and debugger output belong in `platform`, the editor's output log i
 The default assert handler sends a Fatal record in the `Assert` category to every sink, and to
 stderr when no sink writes there, then aborts. Custom assert handlers, such as the tests'
 `AssertCapture`, are called instead and don't log.
+
+## Profiling
+
+The profiling macros are in `engine/ith/foundation/Profile.h` (ADR-0007 rules 10 to 13). Engine
+and game code profile only through them; the backend is the
+[Tracy](https://github.com/wolfpld/tracy) 0.15.0 client.
+
+| Macro | What it records |
+|---|---|
+| `ITH_PROFILE_SCOPE("name")` | A zone named by a string literal, to the end of the block |
+| `ITH_PROFILE_SCOPE_DYNAMIC(name)` | A zone whose name is a run-time string (job names; ADR-0025 rule 18). Costs a `strlen` per call, and a copy of the name while a viewer is connected |
+| `ITH_PROFILE_FUNCTION()` | A zone named after the enclosing function |
+| `ITH_PROFILE_FRAME()` | The end of a frame; the main loops of the samples and the editor call it once per frame |
+| `ITH_PROFILE_PLOT("name", value)` | A point on a plot; integers are plotted as `std::int64_t`, floating-point values as `double` |
+| `ITH_PROFILE_THREAD_NAME(name)` | The calling thread's name; the job system names its workers `Foreground N` and `Background N` |
+
+```cpp
+#include "ith/foundation/Profile.h"
+
+void Culling::run() {
+    ITH_PROFILE_FUNCTION();
+    {
+        ITH_PROFILE_SCOPE("Frustum test");
+        ...
+    }
+    ITH_PROFILE_PLOT("Visible objects", visibleCount);
+}
+```
+
+Rules:
+
+- Write every call as a statement ending in `;`, so call sites compile the same with and without
+  profiling.
+- At most one zone macro per block; open an inner block for a second zone. Zones nest.
+- Not in `constexpr` functions: an enabled zone declares static data.
+- Without profiling the macros expand to `static_cast<void>(0)` and don't evaluate their
+  arguments. A variable used only as a macro argument is unused then: mark it `[[maybe_unused]]`.
+- Include `Profile.h` in the `.cpp` files that profile, not in widely included headers: with
+  profiling on it includes Tracy's header, which adds about 0.7 to 2 seconds to each translation
+  unit. Only `Profile.h` may include Tracy, and only `foundation` links it (the `tracy_confined`
+  test).
+
+GPU zones, inside the Vulkan and Direct3D 12 backends (rule 12), come with a later change.
+
+### Building with the profiler
+
+The CMake option `IRONTHORN_PROFILING` (off by default) fetches Tracy, builds its client as a
+static library and defines `ITH_ENABLE_PROFILING`, which turns the macros on. The profile presets
+set it and build the development configuration (RelWithDebInfo):
+
+```powershell
+./scripts/dev.ps1 build -Preset windows-profile          # MSVC
+./scripts/dev.ps1 build -Preset windows-clang-profile    # clang-cl
+./scripts/dev.ps1 test -Preset windows-profile
+```
+
+```sh
+cmake --preset linux-clang-profile
+cmake --build --preset linux-clang-profile
+ctest --preset linux-clang-profile
+```
+
+Any configuration may be built with the option on, Shipping included, to measure it. A build with
+it on is for measuring only and is never distributed: the engine has no packaging step yet, and
+the packaging step (roadmap P9) will refuse such builds (ADR-0007 rule 13). CMake refuses the
+option together with `IRONTHORN_ENABLE_SANITIZERS` or `IRONTHORN_ENABLE_TSAN`: the client adds
+threads and a network listener of its own and, on Linux, replaces `dlclose` for the whole
+process, so a sanitizer would check a process that differs from the one that ships.
+
+CI builds and tests `linux-clang-profile` (rule 15), including runs of `window_player` and
+`scene_player`, and the Windows job builds `windows-profile` without running its tests, so MSVC
+compiles the enabled macros too. Every other job tests the macros switched off. `clang-tidy` runs
+on the `windows-clang` preset, with profiling off, so the enabled branch of `Profile.h` is not
+tidied.
+
+### Connecting the viewer
+
+Use the **Tracy 0.15.0 viewer** (network protocol 83). A viewer of another version can't connect
+to the client; upgrade both together (`docs/development/third-party.md`). Prebuilt Windows viewers
+are on the [release page](https://github.com/wolfpld/tracy/releases/tag/v0.15.0); on Linux, build
+the viewer from the same tag.
+
+Start the profiling build, then connect the viewer to `127.0.0.1`. The client is built with six
+definitions, the same in every translation unit:
+
+- `TRACY_ENABLE`: the client is built in.
+- `TRACY_ON_DEMAND`: it collects data only while a viewer is connected, so a zone costs one
+  check otherwise. The timeline starts when the viewer connects.
+- `TRACY_ONLY_LOCALHOST`: every executable that links it (players, the editor, tools and test
+  executables) listens on `localhost:8086` while it runs, or on the next free port up to 8105 when
+  several run at once. When all 20 ports are taken, the process runs without a listener and can't
+  be profiled. Nothing listens on another interface.
+- `TRACY_NO_BROADCAST`: it doesn't announce itself on the network, so the viewer's list of
+  discovered clients stays empty; enter the address instead.
+- `TRACY_NO_CRASH_HANDLER`: Tracy installs no signal handlers or exception filter, so aborts,
+  failed asserts and crashes behave as in every other build. Crashes don't appear in the trace.
+- `TRACY_TIMER_FALLBACK`: on CPUs and virtual machines without an invariant TSC, Tracy uses a
+  portable, lower-resolution timer instead of ending the process at start-up (on Windows with a
+  blocking message box).
+
+System tracing and sampling (context switches, CPU usage, call-stack samples) stay compiled in.
+They start when the process starts, whether or not a viewer ever connects, but only where the
+process is permitted: on Windows an ETW kernel session when it runs elevated, on Linux perf events
+when the kernel's `perf_event_paranoid` setting or the process's capabilities allow them.
+Otherwise they stay off and the process runs normally. `TRACY_NO_SYS_TRACE=1` in the environment
+turns them off.
+
+A trace records the machine's host name and the user name. Share traces with that in mind.
+
+On Linux, Tracy's client replaces `dlclose` with a function that does nothing
+(`TracyOverride.cpp`). In a profiling build no shared library in the process is ever unloaded,
+whoever loaded it, so a test that unloads and reloads a library passes there without the library
+being unloaded.
