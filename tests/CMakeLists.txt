@@ -533,6 +533,12 @@ ith_add_test_suite(level
     SOURCES level/LevelTests.cpp
     LIBRARIES ith::level ith_test_level_components)
 
+# Primitive shapes (ADR-0042 rule 19): bounds, mesh indices, outward normals and winding, the
+# ShapeRenderer record and a level round trip.
+ith_add_test_suite(shapes
+    SOURCES shapes/ShapeTests.cpp
+    LIBRARIES ith::shapes ith::level)
+
 # libFuzzer targets for loadLevel, into fresh and filled worlds, and for override records fed into
 # World::applyPatches, in Clang sanitizer builds only, with short smoke runs like the others,
 # seeded with sample levels (level/fuzz_seeds) and records (level/override_seeds) and the level
