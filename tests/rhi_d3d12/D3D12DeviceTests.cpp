@@ -422,16 +422,16 @@ namespace {
 
 // Whether GPU zones are compiled in.
 #ifdef ITH_ENABLE_PROFILING
-constexpr bool kProfiling = true;
+[[maybe_unused]] constexpr bool kProfiling = true;
 #else
-constexpr bool kProfiling = false;
+[[maybe_unused]] constexpr bool kProfiling = false;
 #endif
 
 // Whether GPU zones are active without a viewer (IRONTHORN_PROFILING_ON_DEMAND off).
 #if defined(ITH_ENABLE_PROFILING) && !defined(TRACY_ON_DEMAND)
-constexpr bool kZonesActive = true;
+[[maybe_unused]] constexpr bool kZonesActive = true;
 #else
-constexpr bool kZonesActive = false;
+[[maybe_unused]] constexpr bool kZonesActive = false;
 #endif
 
 } // namespace

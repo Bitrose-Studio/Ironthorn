@@ -30,9 +30,9 @@ namespace {
 
 // Whether GPU zones are compiled in (CommandList::beginGpuZone()).
 #ifdef ITH_ENABLE_PROFILING
-constexpr bool kProfiling = true;
+[[maybe_unused]] constexpr bool kProfiling = true;
 #else
-constexpr bool kProfiling = false;
+[[maybe_unused]] constexpr bool kProfiling = false;
 #endif
 
 struct DrawConstants {

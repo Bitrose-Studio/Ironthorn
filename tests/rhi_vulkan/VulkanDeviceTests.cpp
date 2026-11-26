@@ -424,17 +424,17 @@ TEST_SUITE("rhi_vulkan.frames") {
 namespace {
 
 #ifdef ITH_ENABLE_PROFILING
-constexpr bool kProfiling = true;
+[[maybe_unused]] constexpr bool kProfiling = true;
 #else
-constexpr bool kProfiling = false;
+[[maybe_unused]] constexpr bool kProfiling = false;
 #endif
 
 // Whether GPU zones are active without a viewer (IRONTHORN_PROFILING_ON_DEMAND off), so that they
 // write timestamps in these tests.
 #if defined(ITH_ENABLE_PROFILING) && !defined(TRACY_ON_DEMAND)
-constexpr bool kZonesActive = true;
+[[maybe_unused]] constexpr bool kZonesActive = true;
 #else
-constexpr bool kZonesActive = false;
+[[maybe_unused]] constexpr bool kZonesActive = false;
 #endif
 
 // Frames with GPU zones: nested, around and inside rendering, and one in a list that is discarded
