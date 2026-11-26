@@ -509,6 +509,8 @@ TEST_CASE("Windows switch text input and relative mouse mode") {
         CHECK(relative.error().code == "platform.relative_mouse_failed");
     }
     CHECK_FALSE(window.relativeMouseMode());
+    // Warping is best effort: it must not fail or crash, whatever the driver does with it.
+    window.warpMouse(10.0f, 20.0f);
 }
 
 namespace {

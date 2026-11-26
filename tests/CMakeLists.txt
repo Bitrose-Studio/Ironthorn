@@ -825,8 +825,9 @@ set_target_properties(ith_jobs_benchmark PROPERTIES
 add_test(NAME jobs_benchmark COMMAND ith_jobs_benchmark)
 set_tests_properties(jobs_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
 
-# The editor's core (ADR-0037): commands, transactions and undo, selection, files, the keymap,
-# automation with the scripts in editor_core/scripts, and the model test, headless. Built wherever
+# The editor's core (ADR-0037): commands, transactions and undo, selection, files, the keymap, the
+# viewports and their input routing through a real Input (ADR-0042), automation with the scripts in
+# editor_core/scripts, and the model test, headless. Built wherever
 # the editor modules are, sanitizer builds included (ADR-0029 rule 19).
 if(TARGET ith_editor_core)
     add_library(ith_test_editor_core_components STATIC)
@@ -855,6 +856,7 @@ if(TARGET ith_editor_core)
             editor_core/LayoutTests.cpp
             editor_core/ModelTests.cpp
             editor_core/TransactionTests.cpp
+            editor_core/ViewportInputTests.cpp
             editor_core/ViewportTests.cpp
             editor_core/ViewModelTests.cpp
         LIBRARIES ith::editor_core ith_test_editor_core_components)

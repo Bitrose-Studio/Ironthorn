@@ -115,7 +115,9 @@ documented in `ith/platform_events/Event.h`.
   window pixels, motion, and fractional wheel steps. A flipped wheel ("natural scrolling") is
   reported like a normal one, positive up and right, with `wheelFlipped` set so a UI can follow
   the user's setting. `Window::setRelativeMouseMode(true)` hides and locks the cursor; motion is
-  then the mouse's own, unaccelerated. Whether relative mode applies is read when the event is
+  then the mouse's own, unaccelerated. `Window::warpMouse(x, y)` moves the cursor to a point in
+  window pixels, e.g. back where a drag started before relative mode ends; it is best effort
+  (Wayland compositors may ignore it). Whether relative mode applies is read when the event is
   pumped (SDL doesn't record it per event). Mouse button and wheel events carry the modifiers of
   the key events before them in the queue, so a click keeps the modifiers held when it happened.
 - **Gamepads:** `Platform::create` starts SDL's gamepad subsystem; if it can't, the platform still

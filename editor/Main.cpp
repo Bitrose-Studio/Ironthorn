@@ -24,6 +24,7 @@
 #include "ith/editor_core/EditorPreferences.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/Keymap.h"
+#include "ith/editor_core/ViewportInput.h"
 #include "ith/editor_ui/DetailsPanel.h"
 #include "ith/editor_ui/DockLayout.h"
 #include "ith/editor_ui/EditorShell.h"
@@ -352,6 +353,14 @@ bool render(ith::rhi::Device& device, RenderTarget& target, ith::rg::RenderGraph
     return true;
 }
 
+// The window's pixels per window coordinate; 1 while it has no size (minimized).
+float pixelDensity(const ith::Window& window) {
+    const ith::WindowSize size = window.size();
+    const ith::WindowSize pixels = window.pixelSize();
+    return size.width > 0 && pixels.width > 0 ? static_cast<float>(pixels.width) / static_cast<float>(size.width)
+                                              : 1.0f;
+}
+
 // Seconds between two times, for the UI's time step.
 float secondsBetween(Clock::time_point earlier, Clock::time_point later) {
     return std::chrono::duration<float>(later - earlier).count();
@@ -370,8 +379,8 @@ bool mayClose(const ith::EditorSession& session, ith::EditorShellState& shell, b
     return false;
 }
 
-// Applies what input decided to the window: text input for a focused text field, and relative mode
-// while the mouse is captured.
+// Applies what input decided to the window: text input for a focused text field. The UI applies
+// relative mode, while the mouse is captured or a viewport flies, through its host.
 void applyInput(const ith::Input& input, ith::Window& window) {
     if (input.textInputWanted(window.id()) != window.textInputActive()) {
         if (window.textInputActive()) {
@@ -380,7 +389,6 @@ void applyInput(const ith::Input& input, ith::Window& window) {
             static_cast<void>(window.startTextInput());
         }
     }
-    static_cast<void>(window.setRelativeMouseMode(input.mouseCaptured(window.id())));
 }
 
 // Runs the automation script at `path` and waits for its file operations; false when it failed.
@@ -469,9 +477,13 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     ith::rg::ResourcePool pool(device);
     ith::Input input;
     ith::KeymapConsumer shortcuts(session, keymap);
-    // The keymap consumer first: the UI's consumer, added after it, sits above it (ADR-0029 rule 7).
+    ith::ViewportConsumer viewportInput(session.viewports());
+    // The keymap consumer first, then the viewports': the UI's consumer, added last, sits above both,
+    // and the viewports above the keymap (ADR-0029 rule 7, ADR-0042 rule 8).
     const ith::ConsumerId shortcutConsumer =
         input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &shortcuts});
+    const ith::ConsumerId viewportConsumer =
+        input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &viewportInput});
     const ith::Expected<std::string> executable = ith::fs::executableDirectory();
     const std::string fonts = executable ? ith::fs::joinPath(*executable, "fonts") : std::string("fonts");
     ith::WindowUiHost host(platform, window);
@@ -484,8 +496,10 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
                                .input = &input,
                                .window = window.id(),
                                .host = &host,
+                               .viewports = &viewportInput,
                                .displayScale = window.displayScale()});
     if (!created) {
+        input.removeConsumer(viewportConsumer);
         input.removeConsumer(shortcutConsumer);
         return fail(created.error());
     }
@@ -525,6 +539,8 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         const std::span<const ith::Event> events =
             timeout.count() == 0 ? platform.pumpEvents() : platform.waitEvents(timeout);
         const std::uint32_t jobsRun = jobs.runMainThreadJobs();
+        // Viewport drags move cameras in window coordinates, the same on every display scale.
+        viewportInput.setPixelDensity(pixelDensity(window));
         input.processEvents(events, platform.pumpTimeNs());
         for (const ith::Event& event : events) {
             if (event.type == ith::EventType::QuitRequested ||
@@ -538,18 +554,21 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
             }
         }
         applyInput(input, window);
+        const Clock::time_point now = Clock::now();
+        const float deltaSeconds = secondsBetween(last, now);
+        last = now;
+        // A moving viewport camera keeps frames coming, also while no event arrives (a held W).
+        const bool cameraMoved = viewportInput.update(deltaSeconds);
 
         const bool changed = watch.changed(session, logHistory);
-        if (!events.empty() || jobsRun > 0 || changed) {
+        if (!events.empty() || jobsRun > 0 || changed || cameraMoved) {
             idle.requestFrame();
         }
 
-        const Clock::time_point now = Clock::now();
         ui.newFrame({.size = window.size(),
                      .pixelSize = window.pixelSize(),
-                     .deltaSeconds = secondsBetween(last, now),
+                     .deltaSeconds = deltaSeconds,
                      .focused = input.focusedWindow() == window.id()});
-        last = now;
         ith::drawEditorShell(session, keymap, shell, dock);
         ui.endFrame();
         if (!render(device, target, graph, pool, ui)) {
@@ -585,6 +604,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         warn(warning);
     }
     created->reset();
+    input.removeConsumer(viewportConsumer);
     input.removeConsumer(shortcutConsumer);
     std::printf("ironthorn_editor: %llu frames\n", static_cast<unsigned long long>(frames));
     return status;

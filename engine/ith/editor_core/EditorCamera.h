@@ -13,7 +13,8 @@
 //   ith::focus(camera, worldBounds, aspect);
 //
 // The camera is view state, not an entity: changing it never touches the level, its dirty state or
-// the undo history. Mouse motion is in pixels and wheel input is in notches. Angles are radians.
+// the undo history. Mouse motion is in window coordinates (see CameraInput::mouseDelta) and
+// wheel input is in notches. Angles are radians.
 // There is no hidden state or allocation; distinct cameras may be used concurrently. The camera is
 // reflected, so the Viewports store saves it per level (Viewports.h).
 
@@ -52,6 +53,10 @@ struct EditorCamera {
 
 // One frame of held viewport input. The viewport's input routing decides when these are set.
 struct CameraInput {
+    // The frame's mouse motion, right and down positive, in window coordinates (pixels divided by
+    // the display's pixel density), so orbit, pan and dolly feel the same at every display scale;
+    // the per-pixel rates below are per window coordinate. In relative mode (fly) it is the mouse's
+    // raw motion, which no density scales.
     Vec2 mouseDelta{0.0f};
     // Accumulated notches; the caller retains fractional wheel input for speed stepping.
     float wheel = 0.0f;

@@ -59,11 +59,28 @@ public:
         ++cursorChanges;
     }
 
+    void setRelativeMouseMode(bool enabled) override {
+        relativeMouseMode = enabled;
+        ++relativeMouseModeChanges;
+        mouseCalls.push_back(enabled ? "relative on" : "relative off");
+    }
+
+    void warpMouse(float x, float y) override {
+        warpedTo = {x, y};
+        mouseCalls.push_back("warp");
+    }
+
     std::string clipboard;
     int clipboardReads = 0;
     std::optional<TextInputArea> textInputArea;
     std::optional<CursorShape> cursor;
     int cursorChanges = 0;
+    bool relativeMouseMode = false;
+    int relativeMouseModeChanges = 0;
+    // Where the last warp put the cursor, in window pixels.
+    std::optional<std::pair<float, float>> warpedTo;
+    // The relative-mode switches and warps, in order.
+    std::vector<std::string> mouseCalls;
 };
 
 // A consumer below the UI that records what reaches it.

@@ -8,14 +8,18 @@
 //
 //   ith::Input input;
 //   ith::KeymapConsumer shortcuts(session, keymap);
+//   ith::ViewportConsumer viewportInput(session.viewports());
 //   input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &shortcuts});
+//   input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &viewportInput});
 //   ith::WindowUiHost host(platform, window);
 //   auto ui = ith::EditorUi::create({.device = &device, .targetFormat = format, .vertexShader = vs,
 //                                    .pixelShader = ps, .fontDirectory = fonts, .input = &input,
-//                                    .window = window.id(), .host = &host});
-//   // added after the keymap consumer, so ImGui's consumer sits above it (ADR-0029 rule 7)
+//                                    .window = window.id(), .host = &host, .viewports = &viewportInput});
+//   // added last, so ImGui's consumer sits above the viewport and keymap consumers (ADR-0029 rule 7,
+//   // ADR-0042 rule 8)
 //   while (running) {
 //       input.processEvents(events, platform.pumpTimeNs());
+//       if (viewportInput.update(deltaSeconds)) idle.requestFrame();
 //       (*ui)->newFrame({.size = window.size(), .pixelSize = window.pixelSize(), .deltaSeconds = dt,
 //                        .focused = input.focusedWindow() == window.id()});
 //       ith::drawEditorShell(session, keymap, shell);     // panels
@@ -54,6 +58,7 @@ namespace ith {
 
 class UiPlatformBackend;
 class UiRenderer;
+class ViewportConsumer;
 
 // What the platform backend needs from the window it runs in: the clipboard, the IME's place and
 // the cursor (ADR-0029 rule 6). WindowUiHost implements it over ith::Platform and ith::Window; tests
@@ -75,10 +80,19 @@ public:
     virtual void setTextInputArea(const TextInputArea& area) = 0;
     // The cursor's shape, or std::nullopt to hide it.
     virtual void setCursor(std::optional<CursorShape> shape) = 0;
+    // Relative mouse mode for the window (ADR-0013 rule 5): the cursor hidden and locked, and
+    // unaccelerated motion. The UI turns it on while a viewport flies (ADR-0042 rule 11) or the mouse
+    // is captured, and off after; it calls this only when the mode changes.
+    virtual void setRelativeMouseMode(bool enabled) = 0;
+    // Moves the cursor to `x`, `y` in window pixels: where a fly started, just before relative mode
+    // turns off.
+    virtual void warpMouse(float x, float y) = 0;
 };
 
 // A UiHost over the application's Platform and one of its windows. Failures are dropped: the
-// offscreen driver has no system cursors, and an unreadable clipboard pastes nothing.
+// offscreen driver has no system cursors, and an unreadable clipboard pastes nothing. The first
+// failed relative-mode switch is logged as a warning (category "EditorUi") with the platform's
+// message; later ones are not, as the UI asks again only when the mode changes.
 class WindowUiHost final : public UiHost {
 public:
     WindowUiHost(Platform& platform, Window& window) noexcept : m_platform(&platform), m_window(&window) {}
@@ -87,10 +101,15 @@ public:
     void setClipboardText(std::string_view text) override;
     void setTextInputArea(const TextInputArea& area) override;
     void setCursor(std::optional<CursorShape> shape) override;
+    // Window::setRelativeMouseMode; logs its first failure.
+    void setRelativeMouseMode(bool enabled) override;
+    // Window::warpMouse.
+    void warpMouse(float x, float y) override;
 
 private:
     Platform* m_platform;
     Window* m_window;
+    bool m_relativeModeFailed = false;
 };
 
 // The fonts of the editor (ADR-0029 rule 14). Text and Bold carry the icon font merged in.
@@ -123,8 +142,15 @@ struct EditorUiDesc {
     // Input must outlive the EditorUi. Required.
     Input* input = nullptr;
     WindowId window = kNoWindow;
-    // Clipboard, IME and cursor; null drops them (headless tests). Must outlive the EditorUi.
+    // Clipboard, IME, cursor and relative mouse mode; null drops them (headless tests). Must outlive
+    // the EditorUi.
     UiHost* host = nullptr;
+    // The window's viewport consumer (ADR-0042 rules 9 and 11), added to the window's stack before
+    // the UI, so it sits below the UI's consumer and above the keymap's. The UI's consumer then
+    // leaves to it the mouse events over a viewport image with no ImGui popup open, and every mouse
+    // event while it holds a drag; and the UI puts the window in relative mouse mode while it flies.
+    // Null: no viewports. Must outlive the EditorUi.
+    const ViewportConsumer* viewports = nullptr;
     ThemeTokens theme = defaultDarkTheme();
     float displayScale = 1.0f;
     // Off draws the text cursor without blinking, for reproducible images.

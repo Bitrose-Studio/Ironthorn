@@ -118,6 +118,18 @@ bool Window::relativeMouseMode() const {
     return window != nullptr && SDL_GetWindowRelativeMouseMode(window);
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const): changes the cursor's state
+void Window::warpMouse(float x, float y) {
+    SDL_Window* window = sdlWindow(m_id);
+    if (window == nullptr) {
+        return;
+    }
+    // The engine works in pixels; the library wants window coordinates.
+    const float density = SDL_GetWindowPixelDensity(window);
+    const float scale = density > 0.0f ? 1.0f / density : 1.0f;
+    SDL_WarpMouseInWindow(window, x * scale, y * scale);
+}
+
 // NOLINTNEXTLINE(readability-make-member-function-const): changes the window's state
 Expected<void> Window::startTextInput() {
     SDL_Window* window = sdlWindow(m_id);

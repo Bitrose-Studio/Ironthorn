@@ -32,17 +32,21 @@ commands; `editor_core` never sees ImGui. The editor application, `ironthorn_edi
 
 ith::Input input;
 ith::KeymapConsumer shortcuts(session, keymap);
+ith::ViewportConsumer viewportInput(session.viewports());
 input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &shortcuts});
+input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &viewportInput});
 ith::WindowUiHost host(platform, window);
 auto ui = ith::EditorUi::create({.device = &device, .targetFormat = format,
                                  .vertexShader = vertex, .pixelShader = pixel,
                                  .fontDirectory = fonts, .input = &input,
                                  .window = window.id(), .host = &host,
+                                 .viewports = &viewportInput,
                                  .displayScale = window.displayScale()});
 ith::EditorShellState shell;
 
 // every frame, after the events and main-thread jobs (ADR-0035 rule 22):
 input.processEvents(events, platform.pumpTimeNs());
+if (viewportInput.update(dt)) idle.requestFrame();
 (*ui)->newFrame({.size = window.size(), .pixelSize = window.pixelSize(), .deltaSeconds = dt,
                  .focused = input.focusedWindow() == window.id()});
 ith::drawEditorShell(session, keymap, shell);
@@ -69,17 +73,27 @@ graph.execute(pool);
 - Keys, mouse buttons, the wheel and text become ImGui input events. Letters and digits follow the
   user's layout (`Event::layoutKey`), as editor shortcuts do, so Ctrl + Z in a text field is the
   key that prints Z; other keys are physical.
-- The clipboard, the IME's place and the cursor shape go through a `UiHost`. `WindowUiHost`
-  implements it over `ith::Platform` (`clipboardText`, `setClipboardText`, `setCursor`,
-  `setCursorVisible`) and `ith::Window::setTextInputArea`; failures are dropped, as on the
-  offscreen driver, which has no system cursors. Tests implement `UiHost` to record the calls.
+- The clipboard, the IME's place, the cursor shape and relative mouse mode go through a `UiHost`.
+  `WindowUiHost` implements it over `ith::Platform` (`clipboardText`, `setClipboardText`,
+  `setCursor`, `setCursorVisible`) and `ith::Window` (`setTextInputArea`, `setRelativeMouseMode`);
+  failures are dropped, as on the offscreen driver, which has no system cursors. Tests implement
+  `UiHost` to record the calls.
+- Relative mouse mode is on while the mouse is captured (Play In Editor) or a viewport flies
+  ([ADR-0042](../decisions/0042-editor-viewport.md) rule 11); the backend asks the host only when
+  the mode changes, and leaves the cursor alone while it is on. When fly ends it first warps the
+  cursor back to where the fly's press was (`UiHost::warpMouse`, `Window::warpMouse`; Wayland
+  compositors may ignore the warp), then turns relative mode off. The editor application therefore
+  doesn't set relative mode itself. `WindowUiHost` logs the first failed switch as a warning with
+  the platform's message.
 
 ### Input routing
 
 The UI is an input consumer in the `Editor` layer of its window's stack. `EditorUi::create` adds
-it, so it sits above the consumers added before it: the application adds the keymap consumer first
-([ADR-0029](../decisions/0029-editor-ui-toolkit.md) rule 7). It hands every event that reaches it
-to ImGui, and consumes:
+it, so it sits above the consumers added before it: the application adds the keymap consumer, then
+the viewport consumer ([editor core](editor-core.md#viewport-input)), so the stack is, top first,
+the UI, the viewports, the keymap ([ADR-0029](../decisions/0029-editor-ui-toolkit.md) rule 7 as
+amended by [ADR-0042](../decisions/0042-editor-viewport.md) rule 8). It hands every event that
+reaches it to ImGui, and consumes:
 
 - **key presses only while a text field is active**, so W in a text field types W instead of
   reaching the keymap. The UI's consumer is then also the window's focused consumer with
@@ -88,7 +102,14 @@ to ImGui, and consumes:
   end of the frame that activates it, so the focus follows at once;
 - **mouse presses, motion and the wheel while ImGui wants the mouse** (the pointer is over an ImGui
   window, or a drag started in one). Over the empty dock space the events go on to the consumers
-  below. The viewport panel's content rectangle will pass the mouse on too (viewport step).
+  below. So do the mouse events over a viewport image, by the rectangles the panels reported last
+  frame, while no ImGui popup is open: ImGui sees them but leaves them to the viewport consumer
+  (`EditorUiDesc::viewports`, ADR-0042 rule 9).
+
+While the viewport consumer holds a drag, its presses, motion and wheel are the viewport's alone:
+ImGui neither sees nor takes them and is told the mouse is gone, so a camera drag that leaves the
+image keeps going and never clicks, hovers or scrolls another panel. Releases still reach ImGui
+(without a position), since it saw the drag's own press before the drag began.
 
 The want-capture flags come from the previous ImGui frame, because routing runs before
 `NewFrame`. While the mouse is captured (Play In Editor), ImGui is told the mouse is gone. Editor
@@ -358,12 +379,15 @@ passed and 1 when it failed.
 
 - `editor_ui` (headless, also under ASan, UBSan and TSan): the platform backend with injected
   events (routing over a window and over empty space, keys and text into a text field, layout
-  letters, focus loss, mouse capture), the clipboard, the IME area and the cursor through a
-  recording host; the renderer on the null device (atlas creation and partial updates, a growing
-  atlas destroying its old texture, upload buffer growth, scissor clamping, recorded commands, user
-  textures and their shared scene/UI graph imports, stale-id handling, released GPU objects); the
-  theme and fonts; the shell's menus, chords and status; the icons
-  against `codepoints.json`; the shader source; the idle policy.
+  letters, focus loss, mouse capture; the mouse left to the viewport consumer over its image but not
+  under a popup, kept from ImGui during its drag so no button clicks and nothing scrolls, and fly
+  ending on focus loss), the clipboard, the IME area, the cursor, relative mouse mode (captured,
+  flying) and the warp back before it ends, in order, through a recording host; the renderer on the
+  null device (atlas creation and partial updates, a growing atlas destroying its old texture,
+  upload buffer growth, scissor clamping, recorded commands, user textures and their shared
+  scene/UI graph imports, stale-id handling, released GPU objects); the theme and fonts; the
+  shell's menus, chords and status; the icons against `codepoints.json`; the shader source; the
+  idle policy.
 - `editor_automation_null` and `editor_automation_gpu` (label `sample`, the second also `gpu`):
   `ironthorn_editor` on SDL's offscreen driver runs `tests/editor/open_edit_save_reopen.json` in a
   fresh project - create, rename, attach, undo, redo, save, new level, open, query - on the null

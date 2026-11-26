@@ -1,9 +1,13 @@
 // The editor UI's platform backend and theme, headless: engine events injected through Input,
 // routed by ImGui's want-capture flags (ADR-0029 rule 7), and the clipboard, IME and cursor
-// requests the UI makes of its host.
+// requests the UI makes of its host, and the mouse left to the viewport consumer (ADR-0042 rules 9
+// and 11): over a viewport image without a popup, during its drag, and relative mode while it flies.
 
 #include "ith/editor_ui/EditorUi.h"
 
+#include "ith/editor_core/EditorCamera.h"
+#include "ith/editor_core/ViewportInput.h"
+#include "ith/editor_core/Viewports.h"
 #include "ith/editor_ui/Theme.h"
 
 #include "AssertCapture.h"
@@ -15,6 +19,7 @@
 #include <array>
 #include <cmath>
 #include <string>
+#include <vector>
 
 using namespace ith;
 using namespace ith::test::ui;
@@ -40,6 +45,29 @@ void drawWindow() {
     ImGui::Begin("Test window");
     ImGui::TextUnformatted("Hello");
     ImGui::End();
+}
+
+// The same window with a popup open in it, at the mouse.
+void drawWindowWithPopup() {
+    ImGui::SetNextWindowPos({100.0f, 100.0f});
+    ImGui::SetNextWindowSize({400.0f, 300.0f});
+    ImGui::Begin("Test window");
+    if (!ImGui::IsPopupOpen("Menu")) {
+        ImGui::OpenPopup("Menu");
+    }
+    if (ImGui::BeginPopup("Menu")) {
+        ImGui::TextUnformatted("Item");
+        ImGui::EndPopup();
+    }
+    ImGui::End();
+}
+
+Event press(MouseButton button, float x, float y) {
+    return {.type = EventType::MouseButtonDown, .mouseButton = button, .clicks = 1, .x = x, .y = y};
+}
+
+Event release(MouseButton button, float x, float y) {
+    return {.type = EventType::MouseButtonUp, .mouseButton = button, .x = x, .y = y};
 }
 
 // A window with a text field that has keyboard focus.
@@ -238,15 +266,155 @@ TEST_SUITE("editor_ui.platform") {
         CHECK_FALSE(fixture.host.cursor.has_value());
     }
 
-    TEST_CASE("while the mouse is captured, ImGui is told the mouse is gone") {
+    TEST_CASE("while the mouse is captured, ImGui is told the mouse is gone and the window is relative") {
         UiFixture fixture;
         fixture.events({mouseMoved(200.0f, 200.0f)});
         fixture.frame(drawWindow);
         CHECK(ImGui::IsMousePosValid());
+        CHECK(fixture.host.relativeMouseModeChanges == 0);
         REQUIRE(fixture.input.captureMouse(kWindow));
         fixture.frame(drawWindow);
         CHECK_FALSE(ImGui::IsMousePosValid());
+        CHECK(fixture.host.relativeMouseMode);
         fixture.input.releaseMouse();
+        fixture.frame(drawWindow);
+        CHECK_FALSE(fixture.host.relativeMouseMode);
+        CHECK(fixture.host.relativeMouseModeChanges == 2);
+    }
+
+    TEST_CASE("over a viewport image the mouse goes on to the viewport consumer, and a held drag keeps it") {
+        Viewports viewports;
+        // Inside the ImGui window, which wants the mouse over all of it.
+        viewports.at(0).imagePosition = {150.0f, 150.0f};
+        viewports.at(0).imageSize = {200.0f, 200.0f};
+        ViewportConsumer viewportInput(viewports);
+        UiFixture fixture({.viewports = &viewportInput}, &viewportInput);
+        fixture.events({mouseMoved(200.0f, 200.0f)});
+        fixture.frame(drawWindow);
+        fixture.frame(drawWindow);
+        REQUIRE(fixture.ui->wantsMouse());
+
+        // RMB on the image flies: the viewport consumer takes the press, and the window turns relative.
+        fixture.events({press(MouseButton::Right, 200.0f, 200.0f)});
+        CHECK(viewportInput.flying());
+        fixture.frame(drawWindow);
+        CHECK(fixture.host.relativeMouseMode);
+        CHECK(fixture.host.relativeMouseModeChanges == 1);
+
+        // The drag leaves the image for the rest of the ImGui window: the viewport still gets the motion.
+        const EditorCamera before = viewports.at(0).camera;
+        fixture.events(
+            {Event{.type = EventType::MouseMoved, .x = 450.0f, .y = 350.0f, .deltaX = 250.0f, .deltaY = 0.0f}});
+        CHECK(viewports.at(0).camera != before);
+        fixture.events({release(MouseButton::Right, 450.0f, 350.0f)});
+        CHECK_FALSE(viewportInput.holdsDrag());
+        fixture.frame(drawWindow);
+        CHECK_FALSE(fixture.host.relativeMouseMode);
+        CHECK(fixture.host.relativeMouseModeChanges == 2);
+        // The cursor went back to the press, before relative mode let it show again.
+        CHECK(fixture.host.mouseCalls == std::vector<std::string>{"relative on", "warp", "relative off"});
+        REQUIRE(fixture.host.warpedTo.has_value());
+        CHECK(fixture.host.warpedTo->first == 200.0f);
+        CHECK(fixture.host.warpedTo->second == 200.0f);
+
+        // Off the image, ImGui keeps its window's presses.
+        fixture.frame(drawWindow);
+        fixture.events({press(MouseButton::Middle, 450.0f, 350.0f)});
+        CHECK_FALSE(viewportInput.holdsDrag());
+        fixture.events({release(MouseButton::Middle, 450.0f, 350.0f)});
+        fixture.frame(drawWindow);
+
+        // While a popup is open ImGui keeps the presses on the image too.
+        fixture.events({mouseMoved(200.0f, 200.0f)});
+        fixture.frame(drawWindowWithPopup);
+        fixture.frame(drawWindowWithPopup);
+        REQUIRE(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel));
+        fixture.events({press(MouseButton::Right, 300.0f, 300.0f)});
+        CHECK_FALSE(viewportInput.holdsDrag());
+        fixture.events({release(MouseButton::Right, 300.0f, 300.0f)});
+    }
+
+    TEST_CASE("during a held viewport drag ImGui sees no presses, motion or wheel") {
+        Viewports viewports;
+        viewports.at(0).imagePosition = {150.0f, 150.0f};
+        viewports.at(0).imageSize = {200.0f, 200.0f};
+        ViewportConsumer viewportInput(viewports);
+        UiFixture fixture({.viewports = &viewportInput}, &viewportInput);
+        // A second window with a button and more lines than fit, so the wheel scrolls it.
+        int clicks = 0;
+        float scrollY = 0.0f;
+        UiRect button;
+        const auto draw = [&] {
+            drawWindow();
+            ImGui::SetNextWindowPos({600.0f, 100.0f});
+            ImGui::SetNextWindowSize({300.0f, 200.0f});
+            ImGui::Begin("Buttons");
+            if (ImGui::Button("Press")) {
+                ++clicks;
+            }
+            const ImVec2 min = ImGui::GetItemRectMin();
+            const ImVec2 max = ImGui::GetItemRectMax();
+            button = {.x = min.x, .y = min.y, .width = max.x - min.x, .height = max.y - min.y};
+            for (int line = 0; line < 50; ++line) {
+                ImGui::Text("Line %d", line);
+            }
+            scrollY = ImGui::GetScrollY();
+            ImGui::End();
+        };
+        fixture.frame(draw);
+        const float x = button.centerX();
+        const float y = button.centerY();
+        const auto clickAndScroll = [&] {
+            fixture.events({mouseMoved(x, y)});
+            fixture.frame(draw);
+            fixture.events({press(MouseButton::Left, x, y)});
+            fixture.frame(draw);
+            fixture.events({release(MouseButton::Left, x, y)});
+            fixture.frame(draw);
+            fixture.events({Event{.type = EventType::MouseWheel, .x = x, .y = y, .deltaY = -3.0f}});
+            fixture.frame(draw);
+            fixture.frame(draw);
+        };
+
+        // Without a drag the button clicks and the wheel scrolls.
+        clickAndScroll();
+        CHECK(clicks == 1);
+        CHECK(scrollY > 0.0f);
+        fixture.events({Event{.type = EventType::MouseWheel, .x = x, .y = y, .deltaY = 30.0f}});
+        fixture.frame(draw);
+        fixture.frame(draw);
+        REQUIRE(scrollY == 0.0f);
+
+        // During a fly started on the image, neither reaches ImGui; the release still does.
+        fixture.events({mouseMoved(200.0f, 200.0f)});
+        fixture.frame(draw);
+        fixture.frame(draw);
+        fixture.events({press(MouseButton::Right, 200.0f, 200.0f)});
+        REQUIRE(viewportInput.flying());
+        clickAndScroll();
+        CHECK(clicks == 1);
+        CHECK(scrollY == 0.0f);
+        CHECK_FALSE(ImGui::IsMousePosValid()); // ImGui was told the mouse is gone
+        fixture.events({release(MouseButton::Right, x, y)});
+        CHECK_FALSE(viewportInput.holdsDrag());
+        fixture.frame(draw);
+        CHECK_FALSE(ImGui::IsMouseDown(ImGuiMouseButton_Right));
+    }
+
+    TEST_CASE("losing focus during fly ends relative mode on the next frame") {
+        Viewports viewports;
+        viewports.at(0).imagePosition = {150.0f, 150.0f};
+        viewports.at(0).imageSize = {200.0f, 200.0f};
+        ViewportConsumer viewportInput(viewports);
+        UiFixture fixture({.viewports = &viewportInput}, &viewportInput);
+        fixture.events({press(MouseButton::Right, 200.0f, 200.0f)});
+        REQUIRE(viewportInput.flying());
+        fixture.frame();
+        REQUIRE(fixture.host.relativeMouseMode);
+        fixture.events({Event{.type = EventType::WindowFocusLost}});
+        CHECK_FALSE(viewportInput.holdsDrag());
+        fixture.frame([] {}, false);
+        CHECK_FALSE(fixture.host.relativeMouseMode);
     }
 }
 
@@ -286,7 +454,7 @@ TEST_SUITE("editor_ui.theme") {
             for (const UiFont font : {UiFont::Text, UiFont::Bold, UiFont::Mono}) {
                 fixture.ui->pushFont(font);
                 CHECK(ImGui::GetFont() != nullptr);
-                ImGui::TextUnformatted("Ironthorn \xC5\x91"); // with Hungarian ő
+                ImGui::TextUnformatted("Ironthorn \xC5\x91"); // with Hungarian Å‘
                 fixture.ui->popFont();
             }
             // U+E14D, Lucide's "save", is in the merged text font.

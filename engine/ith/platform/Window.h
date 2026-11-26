@@ -84,6 +84,12 @@ public:
     Expected<void> setRelativeMouseMode(bool enabled);
     bool relativeMouseMode() const;
 
+    // Moves the cursor to `x`, `y` in the window's pixels, e.g. back where a drag in relative
+    // mode started, just before relative mode ends. Generates a MouseMoved event. Best effort: some
+    // platforms don't move it (Wayland compositors may ignore it; so does Remote Desktop), and a
+    // window that no longer exists is ignored.
+    void warpMouse(float x, float y);
+
     // Text input (ADR-0013 rule 4): while on, the window receives TextInput and TextEditing
     // events and the IME may open; on touch platforms the on-screen keyboard shows. Turn it on
     // only while a text field has focus, because it lets the IME take key presses. Starting it

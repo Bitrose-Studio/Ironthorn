@@ -92,8 +92,9 @@ struct ViewportState {
     EditorCamera camera;
     // Draws what a game would see: no grid, gizmo or selection tint (ADR-0042 rule 20).
     bool gameView = false;
-    // The panel's image rectangle in window pixels, as the panel last reported it (ADR-0042 rule 8);
-    // zero size until the panel has drawn.
+    // The panel's image rectangle in window pixels (the units of mouse events), as the panel last
+    // reported it (ADR-0042 rule 8). Panels set a zero size in frames they don't draw the image, so a
+    // hidden or closed viewport takes no input; zero size until the panel has drawn.
     Vec2 imagePosition{0.0f};
     Vec2 imageSize{0.0f};
 
@@ -119,6 +120,11 @@ public:
     // for any other id.
     [[nodiscard]] ViewportState* find(std::string_view instance) noexcept;
     [[nodiscard]] const ViewportState* find(std::string_view instance) const noexcept;
+
+    // The state of viewport `index`, 0 to kMaxViewports - 1 (instance "ith.viewport.<index + 1>").
+    // Precondition (asserted): index < kMaxViewports; otherwise the last one's.
+    [[nodiscard]] ViewportState& at(std::size_t index) noexcept;
+    [[nodiscard]] const ViewportState& at(std::size_t index) const noexcept;
 
     // The instance id of viewport `index`, 0 to kMaxViewports - 1: "ith.viewport.<index + 1>".
     // Precondition (asserted): index < kMaxViewports; otherwise the last one's.

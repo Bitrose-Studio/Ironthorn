@@ -110,6 +110,16 @@ const ViewportState* Viewports::find(std::string_view instance) const noexcept {
     return index.has_value() ? &m_states[*index] : nullptr;
 }
 
+ViewportState& Viewports::at(std::size_t index) noexcept {
+    ITH_ASSERT_MSG(index < kMaxViewports, "there are only four viewports");
+    return m_states[index < kMaxViewports ? index : kMaxViewports - 1];
+}
+
+const ViewportState& Viewports::at(std::size_t index) const noexcept {
+    ITH_ASSERT_MSG(index < kMaxViewports, "there are only four viewports");
+    return m_states[index < kMaxViewports ? index : kMaxViewports - 1];
+}
+
 std::string Viewports::instanceId(std::size_t index) {
     ITH_ASSERT_MSG(index < kMaxViewports, "there are only four viewports");
     const std::size_t number = (index < kMaxViewports ? index : kMaxViewports - 1) + 1;

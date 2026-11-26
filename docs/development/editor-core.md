@@ -240,6 +240,69 @@ the level stays clean.
 Placing a shape needs no command of its own: `ith.entity.create` with an `ith::ShapeRenderer` in
 `components` does it. The editor registers the `shapes` module's reflection for that.
 
+### Viewport input
+
+`ith::ViewportConsumer` (`ViewportInput.h`, [ADR-0042](../decisions/0042-editor-viewport.md) rules
+6 to 12) is the viewport consumer of an editor window's input stack. The application adds it after
+the keymap consumer and before creating the UI, so the stack is, top first: the UI's consumer, the
+viewports', the keymap's (ADR-0042 rule 8 amends ADR-0029 rule 7). Each frame, after
+`processEvents`, it calls `update` with the frame's time:
+
+```cpp
+ith::KeymapConsumer shortcuts(session, keymap);
+ith::ViewportConsumer viewportInput(session.viewports());
+input.addConsumer({.window = id, .layer = ith::ConsumerLayer::Editor, .consumer = &shortcuts});
+input.addConsumer({.window = id, .layer = ith::ConsumerLayer::Editor, .consumer = &viewportInput});
+// ... EditorUi::create({..., .viewports = &viewportInput}) ...
+viewportInput.setPixelDensity(pixelDensity); // window pixels per window coordinate
+input.processEvents(events, platform.pumpTimeNs());
+if (viewportInput.update(deltaSeconds)) {
+    idle.requestFrame(); // a camera moved: keep drawing, also while a held W sends no events
+}
+```
+
+It routes by the image rectangles the panels reported to the `Viewports` store in the last frame.
+Mouse presses, motion and the wheel are consumed only over a viewport image, or while the consumer
+holds a drag that started on one; the drag stays held outside the image until its button's release.
+One drag is held at a time, and presses of other buttons during it are swallowed. The button and
+Alt at the press decide the gesture:
+
+| Press on an image | Gesture |
+|---|---|
+| RMB | Fly: mouse look, W/A/S/D/Q/E move at the speed step, the wheel steps the speed |
+| Alt + RMB | Dolly toward the pivot |
+| Alt + LMB | Orbit around the pivot |
+| MMB | Pan |
+| LMB | A click candidate: it does nothing yet; picking and the gizmo start here later |
+| The wheel, without a drag | Dolly by steps |
+
+**The letter-key rule.** While fly is active, the consumer takes every key press without Ctrl or
+Alt: the physical keys W/A/S/D move along the camera's axes and Q/E down and up in world space, and
+other keys are swallowed, so W doesn't switch the tool mid-flight. Chords with Ctrl or Alt go on to
+the keymap, so Ctrl + Z still undoes. Without fly it takes no key: **W is the translate tool without
+RMB and forward with it.** Releases reach only the consumers that saw the press, so a W pressed
+during fly never releases into the keymap, and a W held from before fly doesn't fly.
+
+Mouse motion and the wheel change the camera of the dragged or hovered viewport through
+`updateCamera` as their events arrive. Drag motion reaches the camera in window coordinates: the
+application calls `setPixelDensity` each frame with the window's pixels per window coordinate, and
+the consumer divides event pixels by it, so orbit, pan and dolly feel the same at 100% and 200%
+display scale. Fly's look motion is relative mode's raw mouse motion, which no density scales.
+
+Held fly keys move the camera in `update`. The first update of a movement (keys held after an
+update without them) moves for at most `kMaxFlyStepSeconds` (1/30 s), so the frame after an idle
+wait doesn't jump; later updates use their whole frame time, so the fly speed is the same at any
+frame rate, the lowest scalability tier's included. `update` also reports whether any camera
+changed since the last call. The wheel's fractions during fly are kept until they make a whole
+notch. The UI asks `flying()` for relative mouse mode, `dragStart()` for where to put the cursor
+back when fly ends, and `holdsDrag()` and `viewportAt()` to leave the viewport's mouse events alone
+([editor UI](editor-ui.md#input-routing)).
+
+The Alt gestures can collide with the window manager: some Linux desktops (Xfce, Cinnamon, MATE,
+Plasma 5) move or resize windows on Alt + drag by default, and the editor never sees those drags.
+The user changes the window manager's modifier (often to Super); a configurable orbit modifier is
+follow-up work.
+
 ## View models
 
 The panels' state lives here, as plain data and commands; `editor_ui` only draws it
@@ -506,6 +569,14 @@ runner serves the headless tests and the editor's `--automation` run.
   End), and the WorldTransforms an opened level gets without an undo entry;
 - the keymap tests: chords, layers and conflicts, the engine's `Keymap.json` (every id registered
   or listed as coming with a later step; the viewport keys resolve), and the consumer;
+- the viewport input tests, through a real `Input` with the keymap and viewport consumers: RMB + W
+  flies at the step's speed without running `translate_tool`, all fly keys by physical key, W alone
+  runs it, Ctrl + Z still undoes during fly and other keys are swallowed, releases go to the
+  consumers that saw the press, the mouse outside every image isn't consumed, a drag that leaves the
+  image stays held until its release and swallows other presses, the wheel with and without RMB
+  (fractions kept, the step clamped), pan, orbit, dolly and look, the click candidate, and losing
+  focus ending fly; the first fly frame clamped to `kMaxFlyStepSeconds` and later ones not; an
+  orbit at pixel density 2 matching density 1;
 - the automation tests: the matcher, script errors, every script in `tests/editor_core/scripts`
   run in a fresh project, and the **coverage test**, which fails when a registered command is run
   by no script. A new command therefore comes with a script step;
