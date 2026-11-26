@@ -1,6 +1,7 @@
 # ADR-0043: Editor UI user textures: the renderer owns the import state (amends 0042)
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0045](0045-editor-viewport-amendments-after-the-viewport-panel.md)
 - **Date:** 2026-11-26
 - **Related:** amends [ADR-0042](0042-editor-viewport.md) rule 14 (user textures in the ImGui
   renderer); [ADR-0028](0028-render-graph-v1.md) (imported resources and their `ImportedState`),
