@@ -18,7 +18,7 @@
 // replaced or removed. The first propagation on a world writes everything. The matrices are the
 // same as a full propagation would give. Each WorldTransform written is marked changed. The
 // system and direct calls each keep their own last run, per world. Tools that need a world matrix
-// before the next propagation compute it from the local transforms.
+// before the next propagation call World::worldMatrixOf.
 
 #include "ith/ecs/Schedule.h"
 #include "ith/ecs/World.h"

@@ -1,0 +1,40 @@
+{
+  "format": "ith.automation_script",
+  "version": 1,
+  "data": {
+    "steps": [
+      {"command": "ith.entity.create", "args": {"id": "00000000-0000-00ed-0000-000000000001", "label": "Crate",
+       "components": {"ith::LocalTransform": {"value": {"translation": {"x": 0, "y": 3, "z": 0}}},
+                      "ith::ShapeRenderer": {"shape": "Cube", "color": {"x": 0.9, "y": 0.2, "z": 0.1}}}}},
+      {"command": "ith.query.entity", "args": {"id": "00000000-0000-00ed-0000-000000000001"},
+       "expect": {"components": {"ith::ShapeRenderer": {"shape": "Cube"}}}},
+      {"command": "ith.viewport.rotate_tool", "expect": {"tool": "rotate"}},
+      {"command": "ith.viewport.scale_tool", "expect": {"tool": "scale"}},
+      {"command": "ith.viewport.cycle_tool", "expect": {"tool": "translate"}},
+      {"command": "ith.viewport.cycle_tool", "expect": {"tool": "rotate"}},
+      {"command": "ith.viewport.translate_tool", "expect": {"tool": "translate"}},
+      {"command": "ith.viewport.toggle_gizmo_space", "expect": {"space": "local"}},
+      {"command": "ith.viewport.toggle_gizmo_space", "expect": {"space": "world"}},
+      {"command": "ith.viewport.set_snap", "expect": {"enabled": true, "step": 0.1}},
+      {"command": "ith.viewport.set_snap", "args": {"enabled": false, "step": 0.25}, "expect": {"enabled": false, "step": 0.25}},
+      {"command": "ith.viewport.set_snap", "args": {"step": 0}, "expectError": "editor.command.invalid_args"},
+      {"command": "ith.viewport.game_view", "expect": {"viewport": "ith.viewport.1", "gameView": true}},
+      {"command": "ith.viewport.game_view", "args": {"viewport": "ith.viewport.2"}, "expect": {"viewport": "ith.viewport.2", "gameView": true}},
+      {"command": "ith.viewport.game_view", "expect": {"gameView": false}},
+      {"command": "ith.viewport.focus_selection"},
+      {"command": "ith.viewport.focus_selection", "args": {"viewport": "ith.viewport.4"}},
+      {"command": "ith.viewport.focus_selection", "args": {"viewport": "ith.viewport.5"}, "expectError": "editor.command.invalid_args"},
+      {"command": "ith.query.document", "expect": {"dirty": true}},
+      {"command": "ith.viewport.snap_to_floor"},
+      {"command": "ith.query.entity", "args": {"id": "00000000-0000-00ed-0000-000000000001"},
+       "expect": {"components": {"ith::LocalTransform": {"value": {"translation": {"x": 0, "y": 0.5, "z": 0}}}}}},
+      {"command": "ith.edit.undo"},
+      {"command": "ith.query.entity", "args": {"id": "00000000-0000-00ed-0000-000000000001"},
+       "expect": {"components": {"ith::LocalTransform": {"value": {"translation": {"y": 3}}}}}},
+      {"command": "ith.edit.select_none"},
+      {"command": "ith.viewport.focus_selection", "expectError": "editor.command.disabled"},
+      {"command": "ith.viewport.snap_to_floor", "expectError": "editor.command.invalid_args"},
+      {"command": "ith.viewport.immersive", "expectError": "editor.command.disabled"}
+    ]
+  }
+}

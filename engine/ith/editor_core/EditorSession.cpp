@@ -62,11 +62,20 @@ EditorSession::EditorSession(const TypeRegistry& types, EditorSessionOptions opt
       m_layouts(m_panels, m_options.config,
                 m_options.projectDirectory.empty() ? std::string()
                                                    : fs::joinPath(m_options.projectDirectory, kSessionLayoutFile)),
+      m_viewports(m_options.projectDirectory.empty() ? std::string()
+                                                     : fs::joinPath(m_options.projectDirectory, kViewportsFile)),
       m_mapping{.toId = &toStableId, .toEntity = &fromStableId, .context = &m_document} {
     registerEditCommands(m_commands);
     registerFileCommands(m_commands);
     registerQueryCommands(m_commands);
     registerLayoutCommands(m_commands);
+    registerViewportCommands(m_commands);
+}
+
+void EditorSession::saveViewports() {
+    if (!m_document.path().empty()) {
+        m_viewports.saveLevel(m_document.levelId());
+    }
 }
 
 EditorSession::~EditorSession() {
@@ -140,7 +149,9 @@ Expected<void> EditorSession::newLevel() {
     if (Expected<void> idle = checkIdle(); !idle) {
         return idle;
     }
+    saveViewports();
     m_document.reset();
+    m_viewports.restoreLevel(m_document.levelId());
     m_lastFileError.reset();
     return {};
 }
@@ -207,7 +218,10 @@ void EditorSession::finish() {
     for (const serialization::Error& warning : warnings) {
         m_warnings.push_back(fromSerialization(warning));
     }
+    // The level that was open closes only now; its cameras are kept before the new level's come.
+    saveViewports();
     m_document.adopt(loaded->id, operation->path);
+    m_viewports.restoreLevel(loaded->id);
 }
 
 void EditorSession::waitIdle() {

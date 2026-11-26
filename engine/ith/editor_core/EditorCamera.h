@@ -14,26 +14,40 @@
 //
 // The camera is view state, not an entity: changing it never touches the level, its dirty state or
 // the undo history. Mouse motion is in pixels and wheel input is in notches. Angles are radians.
-// There is no hidden state or allocation; distinct cameras may be used concurrently.
+// There is no hidden state or allocation; distinct cameras may be used concurrently. The camera is
+// reflected, so the Viewports store saves it per level (Viewports.h).
 
 #include "ith/math/Types.h"
+#include "ith/reflection/Annotations.h"
 
 namespace ith {
 
 struct Aabb;
 
+// A default-constructed camera is the default camera of a level without a saved one (ADR-0042
+// rule 5).
 struct EditorCamera {
+    ITH_TYPE(Struct)
     // Six metres from the origin, to its back-right and above, looking at the origin.
+    ITH_FIELD()
     Vec3 position{3.6742346f, 3.0f, 3.6742346f};
+    // Around world +Y; 0 looks along -Z.
+    ITH_FIELD()
     float yaw = 0.25f * kPi;
     // Kept in (-pi/2, pi/2) by updateCamera, so looking up or down never flips the camera.
+    ITH_FIELD()
     float pitch = -kPi / 6.0f;
     // The full vertical field of view; 90 degrees by default.
+    ITH_FIELD()
     float fovY = kHalfPi;
     // An index in the speed table 0.5, 1, 2, 4, 8, 16, 32, 64 m/s, from 1 through 8.
+    ITH_FIELD()
     int speedStep = 4;
     // The world-space point orbit and dolly gestures move around or toward.
+    ITH_FIELD()
     Vec3 pivot{0.0f};
+
+    friend bool operator==(const EditorCamera&, const EditorCamera&) = default;
 };
 
 // One frame of held viewport input. The viewport's input routing decides when these are set.

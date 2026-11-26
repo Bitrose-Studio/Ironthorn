@@ -69,6 +69,7 @@
 
 ITH_DECLARE_REFLECTION_MODULE(ecs)
 ITH_DECLARE_REFLECTION_MODULE(editor_core)
+ITH_DECLARE_REFLECTION_MODULE(shapes)
 
 namespace {
 
@@ -440,12 +441,13 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     ith::TypeRegistry types;
     ith::generated::registerReflection_ecs(types);
     ith::generated::registerReflection_editor_core(types);
+    ith::generated::registerReflection_shapes(types);
     ith::EditorSession session(types, {.projectDirectory = options.project, .jobs = &jobs, .config = &config});
     std::vector<ith::Error> warnings;
     const ith::Keymap keymap = ith::Keymap::load(config, session.commands(), warnings);
     warnings.insert(warnings.end(), config.warnings().begin(), config.warnings().end());
     for (const ith::Error& warning : warnings) {
-        // Commands of later editor modules (viewport, Play In Editor) are bound before they exist.
+        // Commands of later editor steps (the content drawer, Play In Editor) are bound before they exist.
         if (warning.code == "editor.keymap.unknown_command") {
             continue;
         }
@@ -577,6 +579,8 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     // What the user arranged since the last read-back goes into the session layout.
     dock.readBack();
     session.layouts().saveSession();
+    // The open level's viewport cameras are remembered for the next session (ADR-0042 rule 4).
+    session.saveViewports();
     for (const ith::Error& warning : session.takeWarnings()) {
         warn(warning);
     }

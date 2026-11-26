@@ -1,6 +1,6 @@
 #pragma once
 
-// Helpers of the editor_core tests: a type registry with the engine, editor_core and test types,
+// Helpers of the editor_core tests: a type registry with the ecs, editor_core, shapes and test types,
 // commands run with JSON text arguments, and the world as level text, which is the same for the
 // same world (ADR-0034 rule 9).
 
@@ -27,6 +27,7 @@
 
 ITH_DECLARE_REFLECTION_MODULE(ecs)
 ITH_DECLARE_REFLECTION_MODULE(editor_core)
+ITH_DECLARE_REFLECTION_MODULE(shapes)
 ITH_DECLARE_REFLECTION_MODULE(test_editor_core)
 
 namespace ith::test::editor {
@@ -36,6 +37,7 @@ inline const TypeRegistry& types() {
         TypeRegistry result;
         generated::registerReflection_ecs(result);
         generated::registerReflection_editor_core(result);
+        generated::registerReflection_shapes(result);
         generated::registerReflection_test_editor_core(result);
         return result;
     }();

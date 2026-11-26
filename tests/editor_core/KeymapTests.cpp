@@ -19,6 +19,7 @@
 #include <ostream> // doctest prints std::string operands through an ostream
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -32,22 +33,10 @@ using ith::test::editor::json;
 using ith::test::editor::run;
 using ith::test::editor::types;
 
-// Commands of Keymap.json that later editor steps register: the viewport (step 11), the content
-// drawer (step 12) and Play In Editor (step 13).
+// Commands of Keymap.json that later editor steps register: the content drawer (step 12) and Play
+// In Editor (step 13).
 constexpr std::string_view kLaterCommands[] = {
-    "ith.viewport.focus_selection",
-    "ith.viewport.translate_tool",
-    "ith.viewport.rotate_tool",
-    "ith.viewport.scale_tool",
-    "ith.viewport.cycle_tool",
-    "ith.viewport.snap_to_floor",
-    "ith.viewport.game_view",
-    "ith.viewport.immersive",
-    "ith.content_browser.open_drawer",
-    "ith.play.play",
-    "ith.play.simulate",
-    "ith.play.stop",
-    "ith.play.free_mouse",
+    "ith.content_browser.open_drawer", "ith.play.play", "ith.play.simulate", "ith.play.stop", "ith.play.free_mouse",
     "ith.play.possess_or_eject",
 };
 
@@ -157,6 +146,21 @@ TEST_SUITE("editor_core.keymap") {
         CHECK(*keymap.commandFor(chord("Ctrl+Alt+Keyboard.S")) == "ith.file.save_as");
         CHECK(*keymap.commandFor(chord("Keyboard.Escape")) == "ith.edit.select_none");
         CHECK(*keymap.commandFor(chord("Keyboard.Escape"), ith::KeymapContext::PlayInEditor) == "ith.play.stop");
+        // The viewport's keys (ADR-0042 rule 29) name registered commands, so they warn no more.
+        for (const auto& [key, id] :
+             {std::pair{"Keyboard.F", "ith.viewport.focus_selection"},
+              std::pair{"Keyboard.W", "ith.viewport.translate_tool"},
+              std::pair{"Keyboard.E", "ith.viewport.rotate_tool"}, std::pair{"Keyboard.R", "ith.viewport.scale_tool"},
+              std::pair{"Keyboard.Space", "ith.viewport.cycle_tool"},
+              std::pair{"Keyboard.End", "ith.viewport.snap_to_floor"},
+              std::pair{"Keyboard.G", "ith.viewport.game_view"}, std::pair{"Keyboard.F11", "ith.viewport.immersive"}}) {
+            CAPTURE(id);
+            CHECK(*keymap.commandFor(chord(key)) == id);
+            CHECK(session.commands().find(id) != nullptr);
+            CHECK(std::ranges::none_of(warnings, [&](const ith::Error& warning) {
+                return warning.message == "no command " + std::string(id);
+            }));
+        }
         for (const auto& [bound, id] : keymap.bindings()) {
             const bool registered = session.commands().find(id) != nullptr;
             const bool later =

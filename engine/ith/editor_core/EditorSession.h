@@ -11,10 +11,10 @@
 //   session.execute("ith.file.save_as", saveArgs);
 //   session.waitIdle(); // the file is written
 //
-// The session registers the built-in commands of editor_core (the Edit, Entity, Selection, File
-// and Query commands); editor_ui and game editor modules add theirs to the same registry. `types`
-// names the component types that commands and level files may use and must outlive the session.
-// Headless: tests and automation use it directly. Main thread only.
+// The session registers the built-in commands of editor_core (the Edit, Entity, Selection, File,
+// Query, Window and Viewport commands); editor_ui and game editor modules add theirs to the same
+// registry. `types` names the component types that commands and level files may use and must
+// outlive the session. Headless: tests and automation use it directly. Main thread only.
 //
 // Files. Saving serializes the level on the main thread (it reads the world) and writes the file
 // durably on the background lane; opening reads the file on the background lane and loads it on
@@ -26,6 +26,7 @@
 #include "ith/editor_core/EditorDocument.h"
 #include "ith/editor_core/LayoutSession.h"
 #include "ith/editor_core/PanelRegistry.h"
+#include "ith/editor_core/Viewports.h"
 #include "ith/foundation/Expected.h"
 #include "ith/jobs/JobCounter.h"
 #include "ith/serialization/Document.h"
@@ -91,6 +92,18 @@ public:
 
     [[nodiscard]] const LayoutSession& layouts() const noexcept { return m_layouts; }
 
+    // The viewports' cameras, tool, gizmo space and snapping (ADR-0042). Their file is
+    // <project>/Saved/Editor/Viewports.json when the session has a project directory. When a level
+    // closes (New Level, or Open Level once the new level has loaded), its cameras are saved as
+    // saveViewports() does; the level that replaces it gets its own saved cameras, or the defaults.
+    [[nodiscard]] Viewports& viewports() noexcept { return m_viewports; }
+
+    [[nodiscard]] const Viewports& viewports() const noexcept { return m_viewports; }
+
+    // Keeps the open level's cameras and writes the viewports file when it changed (ADR-0042 rule
+    // 4). An untitled level, which has no file yet, keeps none. The editor calls it at exit.
+    void saveViewports();
+
     [[nodiscard]] const TypeRegistry& types() const noexcept { return *m_types; }
 
     [[nodiscard]] const EditorSessionOptions& options() const noexcept { return m_options; }
@@ -147,6 +160,7 @@ private:
     CommandRegistry m_commands;
     PanelRegistry m_panels;
     LayoutSession m_layouts;
+    Viewports m_viewports;
     serialization::EntityMapping m_mapping;
     std::unique_ptr<FileOperation> m_operation;
     JobCounter m_pending;
@@ -157,10 +171,11 @@ private:
 };
 
 // Register the built-in commands (EditCommands.cpp, FileCommands.cpp, QueryCommands.cpp,
-// LayoutCommands.cpp).
+// LayoutCommands.cpp, ViewportCommands.cpp).
 void registerEditCommands(CommandRegistry& registry);
 void registerFileCommands(CommandRegistry& registry);
 void registerQueryCommands(CommandRegistry& registry);
 void registerLayoutCommands(CommandRegistry& registry);
+void registerViewportCommands(CommandRegistry& registry);
 
 } // namespace ith

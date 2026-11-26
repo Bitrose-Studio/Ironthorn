@@ -4,8 +4,9 @@
 ([ADR-0029](../decisions/0029-editor-ui-toolkit.md) rule 1,
 [ADR-0037](../decisions/0037-editor-commands-transactions-selection-and-automation.md)): the
 document and its world, commands, transactions and undo, selection, change counters, the panels'
-view models, panels and layouts, level files, the keymap and automation. It includes no ImGui and
-opens no window, so everything here is tested headless, under sanitizers too. `editor_ui` draws its state and calls its commands.
+view models, panels and layouts, the viewports, level files, the keymap and automation. It includes
+no ImGui and opens no window, so everything here is tested headless, under sanitizers too.
+`editor_ui` draws its state and calls its commands.
 
 ## The session
 
@@ -171,6 +172,73 @@ bounds fit at the supplied width/height aspect. For `radius = length(bounds.half
 `max(1 m, 1.1 * radius / sin(limitingHalfFov))`. This enclosing-sphere fit has a 10% margin and
 conservatively includes every corner; point bounds are viewed from one metre. Empty bounds are a
 programmer error and leave the camera unchanged.
+
+## Viewports
+
+`session.viewports()` is the `ith::Viewports` store (`Viewports.h`,
+[ADR-0042](../decisions/0042-editor-viewport.md) rules 3, 4, 20 and 26). It holds one
+`ViewportState` per viewport panel instance, `ith.viewport.1` to `ith.viewport.4`, whether the
+panel is open or not: the `camera`, the `gameView` flag and the image rectangle the panel reports
+(`imagePosition`, `imageSize` in window pixels; `aspect()` is 1 until the panel has drawn). Next to
+them is one editor-wide state: the transform tool (translate at first), the gizmo space (world) and
+snapping (on, 0.1 m). Panels draw the store, the commands below change it and tests drive it
+directly. None of it dirties the level or makes an undo entry.
+
+```cpp
+ith::ViewportState* viewport = session.viewports().find("ith.viewport.1");
+ith::updateCamera(viewport->camera, input, deltaSeconds);
+const ith::Mat4 projection =
+    ith::projectionMatrix(viewport->camera, viewport->aspect(), ith::kViewportNearPlane);
+```
+
+Cameras are remembered per user, per project, per level in `<project>/Saved/Editor/Viewports.json`,
+an `ith.editor_viewports` document (version 1) whose `levels` object holds, by level asset id, each
+viewport instance's reflected `EditorCamera`. The session keeps the closing level's cameras when New
+Level runs and when Open Level has loaded its level, then gives the new level its saved cameras or
+the default ones; the editor calls `session.saveViewports()` at exit. An untitled level keeps none,
+and a level whose cameras are all the default gets no entry until they change. The file is read the
+first time it is needed and written atomically, only when what it would hold changed. A missing
+file, as in a fresh project, simply means default cameras. An unreadable file (another format, a
+newer version, a camera with a speed step outside 1–8 or a pitch outside (−π/2, π/2)) means default
+cameras and one warning in the `EditorViewports` log category; the next save replaces it. The tool,
+the gizmo space, snapping and the game-view flags are session state and are not saved. Follow-up:
+pruning the entries of levels that no longer exist.
+
+The Viewport commands ([ADR-0042](../decisions/0042-editor-viewport.md) rule 29) are bound in
+`Keymap.json`. Those that take a `"viewport"` argument use `ith::kDefaultViewport`
+(`ith.viewport.1`) when it is left out.
+
+| Id | Key | Kind | What it does |
+|---|---|---|---|
+| `ith.viewport.translate_tool`, `rotate_tool`, `scale_tool` | W, E, R | Action | Selects the tool; returns `{"tool": "translate"}` and so on |
+| `ith.viewport.cycle_tool` | Space | Action | Translate → rotate → scale → translate |
+| `ith.viewport.focus_selection` | F | Action | Frames the selection in `"viewport"`; disabled with an empty selection; not undoable |
+| `ith.viewport.snap_to_floor` | End | Edit | Drops the selection (or `"ids"`) onto what is below it; one undo entry |
+| `ith.viewport.toggle_gizmo_space` | | Action | World ↔ local; returns `{"space": ...}` |
+| `ith.viewport.set_snap` | | Action | `"enabled"` and `"step"` (metres, positive), each optional; returns both |
+| `ith.viewport.game_view` | G | Action | Toggles the game-view flag of `"viewport"` |
+| `ith.viewport.immersive` | F11 | Action | Registered; disabled with the reason "not in P2" |
+
+World bounds are a `ShapeRenderer`'s `shapeBounds` moved by `World::worldMatrixOf`, the matrix
+`WorldTransform` holds once transforms are propagated, computed at once. **Focus** frames the union
+of the selected entities' bounds (an entity without a shape adds its position) with `ith::focus` at
+the viewport's aspect. **Snap to Floor** moves each selected root that has a shape (a selected
+entity with no selected ancestor) straight down or up, by its own shape only: its children's shapes
+don't count (ADR-0042 rule 28 as written). Its bottom comes to rest on the highest support at or
+below it, within 1 mm, or, when it hangs below every support, on the highest one. Supports are the
+ground (y = 0) and the tops of the bounds of enabled shapes outside the moved subtrees whose X and Z
+ranges overlap the entity's; a disabled entity is never a support. Children follow their roots;
+entities without a shape are skipped, and so is a root whose parent has a zero scale, where no local
+translation can move it. A drop under 0.01 mm counts as resting, so what already rests makes no
+entry.
+
+When a level is opened, every entity with a `LocalTransform` gets an identity `WorldTransform`, as
+`ith.entity.create` gives one: the component is Transient, so levels don't save it, and transform
+propagation fills only entities that have it. This is not a change of the level: no undo entry, and
+the level stays clean.
+
+Placing a shape needs no command of its own: `ith.entity.create` with an `ith::ShapeRenderer` in
+`components` does it. The editor registers the `shapes` module's reflection for that.
 
 ## View models
 
@@ -428,8 +496,16 @@ runner serves the headless tests and the editor's `--automation` run.
   refusals, argument errors);
 - the file tests (save and reopen with and without a job system, failed writes and opens, unsaved
   changes, busy refusals, opening by asset id) and the query tests;
+- the viewport tests: the store's defaults and the default camera, the viewports file's round trip
+  per level, writing only when changed, a missing file (silent) and unreadable ones (one warning),
+  the session keeping a level's cameras when it closes and at exit, the tool, gizmo-space, snap and
+  game-view commands, Focus (the selection's world bounds at the viewport's aspect, disabled with an
+  empty selection, not undoable) and Snap to Floor (the ground, stacked shapes, a plane, hanging
+  below every support, entities without bounds, disabled shapes, children following their roots
+  under scaled, rotated, stretched and collapsed parents, one undo entry and none for a second
+  End), and the WorldTransforms an opened level gets without an undo entry;
 - the keymap tests: chords, layers and conflicts, the engine's `Keymap.json` (every id registered
-  or listed as coming with a later step), and the consumer;
+  or listed as coming with a later step; the viewport keys resolve), and the consumer;
 - the automation tests: the matcher, script errors, every script in `tests/editor_core/scripts`
   run in a fresh project, and the **coverage test**, which fails when a registered command is run
   by no script. A new command therefore comes with a script step;

@@ -680,8 +680,8 @@ ith::propagateTransforms(world);                 // or directly
   entity's `ChildOf` or `LocalTransform` if it keeps one; otherwise it is now a root counted as the
   identity, so its `WorldTransform` is set to the identity at once and its children's `ChildOf` is
   stamped. `Changed<ChildOf>` can therefore report a child whose link didn't change.
-- Code that needs a world matrix before the next propagation multiplies the local transforms of
-  the entity's ancestors itself.
+- Code that needs a world matrix before the next propagation calls `world.worldMatrixOf(entity)`:
+  the matrix `WorldTransform` will hold, composed from the local transforms up the hierarchy.
 
 ## Change detection
 

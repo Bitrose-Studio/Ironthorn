@@ -233,6 +233,12 @@ public:
     // Constant time on average.
     [[nodiscard]] Entity findByStableId(const Uuid& id) const;
 
+    // The entity's world matrix, composed from its own and its ancestors' local transforms
+    // (world = parent * local, ADR-0006; an entity without a LocalTransform counts as the
+    // identity): the matrix WorldTransform will hold after propagation, computable before it, for
+    // tools that need it at once. Identity for a stale handle. Linear in the entity's depth.
+    [[nodiscard]] Mat4 worldMatrixOf(Entity entity) const;
+
     // True when the entity is alive and has a T. Constant time. T may be written const.
     template <typename T>
     [[nodiscard]] bool has(Entity entity) const;
@@ -569,9 +575,6 @@ private:
     // The sibling after a live entity among its parent's children, or among the roots when it has
     // no parent; null when it is the last.
     [[nodiscard]] Entity nextSiblingOf(Entity entity) const;
-
-    // The entity's world matrix from its ancestors' local transforms; identity for a dead entity.
-    [[nodiscard]] Mat4 worldMatrixOf(Entity entity) const;
 
     // Despawns an entity and the children that go with it: those marked despawnWithParent, or all
     // of them when `everything` is set. The other children are detached first.

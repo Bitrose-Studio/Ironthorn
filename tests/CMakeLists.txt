@@ -855,6 +855,7 @@ if(TARGET ith_editor_core)
             editor_core/LayoutTests.cpp
             editor_core/ModelTests.cpp
             editor_core/TransactionTests.cpp
+            editor_core/ViewportTests.cpp
             editor_core/ViewModelTests.cpp
         LIBRARIES ith::editor_core ith_test_editor_core_components)
 endif()

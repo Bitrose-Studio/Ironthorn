@@ -71,7 +71,9 @@ public:
     void reset();
 
     // After a level was read into mutableWorld(): its id and path, an empty history, no selection,
-    // clean. Precondition (asserted): no transaction is open.
+    // clean. Every entity with a LocalTransform and no WorldTransform (Transient, so levels don't
+    // save it) gets an identity one, as ith.entity.create gives, for transform propagation to fill;
+    // that is not a change of the level. Precondition (asserted): no transaction is open.
     void adopt(const Uuid& levelId, std::string path);
 
     // Gives the level a path, after a Save As.

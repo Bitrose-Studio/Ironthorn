@@ -1,8 +1,12 @@
 #include "ith/editor_core/EditorDocument.h"
 
+#include "ith/ecs/Hierarchy.h"
+#include "ith/ecs/Query.h"
 #include "ith/foundation/Assert.h"
+#include "ith/foundation/Entity.h"
 
 #include <utility>
+#include <vector>
 
 namespace ith {
 
@@ -18,6 +22,15 @@ void EditorDocument::reset() {
 
 void EditorDocument::adopt(const Uuid& levelId, std::string path) {
     ITH_ASSERT_MSG(!m_transactions.isOpen(), "editor: a level was opened while a transaction is open");
+    // WorldTransform is Transient, so a loaded level has none; give one to every placed entity, as
+    // ith.entity.create does, so transform propagation and the viewport see it. Outside the
+    // history: the history starts here.
+    std::vector<Entity> unplaced;
+    m_world.query<const LocalTransform, Without<WorldTransform>, IncludeDisabled>().forEach(
+        [&unplaced](Entity entity, const LocalTransform&) { unplaced.push_back(entity); });
+    for (const Entity entity : unplaced) {
+        m_world.add(entity, WorldTransform{});
+    }
     m_history.reset();
     m_selection.clear();
     m_levelId = levelId;
