@@ -1,6 +1,7 @@
 # ADR-0042: Editor world and viewport (amends 0029, 0037)
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0043](0043-editor-ui-user-texture-state.md)
 - **Date:** 2026-11-24
 - **Related:** amends [ADR-0029](0029-editor-ui-toolkit.md) rule 7 (the viewport consumer's place
   in the input stack) and states the viewport redraw rule its rule 12 asks for; amends
