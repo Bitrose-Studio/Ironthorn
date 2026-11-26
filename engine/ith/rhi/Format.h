@@ -37,4 +37,9 @@ enum class Format : std::uint8_t {
 // True for the depth (and depth-stencil) formats.
 [[nodiscard]] bool isDepthFormat(Format format);
 
+// True for the colour formats every backend can sample with a linear filter: the normalized, sRGB,
+// packed and 16-bit float formats. False for Unknown, the integer formats, the 32-bit float
+// formats (Vulkan doesn't guarantee linear filtering for them) and the depth formats.
+[[nodiscard]] bool isLinearFilterable(Format format);
+
 } // namespace ith::rhi

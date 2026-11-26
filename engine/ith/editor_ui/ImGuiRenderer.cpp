@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -40,6 +41,22 @@ constexpr std::uint64_t kMinimumUploadSize = std::uint64_t{256} * 1024;
 
 constexpr std::uint64_t alignUp(std::uint64_t value, std::uint64_t alignment) {
     return (value + alignment - 1) / alignment * alignment;
+}
+
+// ImU64 is unsigned long long, which std::uint64_t need not be, so compare sizes.
+static_assert(sizeof(ImTextureID) == sizeof(UiTextureId),
+              "user-texture ids carry a 32-bit generation in the high half");
+
+constexpr std::uint32_t textureIndex(ImTextureID id) {
+    return static_cast<std::uint32_t>(id) - 1;
+}
+
+constexpr std::uint32_t textureGeneration(ImTextureID id) {
+    return static_cast<std::uint32_t>(id >> 32);
+}
+
+constexpr ImTextureID userTextureId(std::size_t index, std::uint32_t generation) {
+    return (static_cast<ImTextureID>(generation) << 32) | static_cast<ImTextureID>(index + 1);
 }
 
 // Identifies ImGui's request to reset the render state; every draw sets its whole state anyway.
@@ -153,7 +170,9 @@ UiRenderer::~UiRenderer() {
         ImGui::GetPlatformIO().DrawCallback_ResetRenderState = nullptr;
     }
     for (const Texture& texture : m_textures) {
-        m_device->destroy(texture.handle);
+        if (texture.owned) {
+            m_device->destroy(texture.handle);
+        }
     }
     for (const FrameBuffer& frame : m_frames) {
         m_device->destroy(frame.buffer);
@@ -183,6 +202,147 @@ bool UiRenderer::reserve(FrameBuffer& frame, std::uint64_t size) {
     return true;
 }
 
+void UiRenderer::cancelGraphImports() {
+    m_importsOpen = false;
+    m_graphSerial = 0;
+}
+
+void UiRenderer::beginGraphImports() {
+    m_pendingFree.clear();
+    m_graphTextures.assign(m_textures.size(), rg::Texture{});
+    m_graphSerial = 0;
+    m_importsOpen = true;
+}
+
+UiRenderer::Texture* UiRenderer::findUserTexture(UiTextureId id) {
+    if (id == 0 || textureGeneration(id) == 0) {
+        return nullptr;
+    }
+    const std::uint32_t index = textureIndex(id);
+    if (index >= m_textures.size()) {
+        return nullptr;
+    }
+    Texture& texture = m_textures[index];
+    if (texture.owned || texture.generation != textureGeneration(id) || texture.handle == rhi::TextureHandle{}) {
+        return nullptr;
+    }
+    return &texture;
+}
+
+std::size_t UiRenderer::freeTextureSlot() const {
+    for (std::size_t i = 0; i < m_textures.size(); ++i) {
+        if (m_textures[i].handle == rhi::TextureHandle{} &&
+            std::ranges::find(m_pendingFree, i) == m_pendingFree.end()) {
+            return i;
+        }
+    }
+    return m_textures.size();
+}
+
+UiTextureId UiRenderer::registerUserTexture(rhi::TextureHandle handle, const rhi::TextureDesc& desc,
+                                            rg::ImportedState initialState) {
+    ITH_ASSERT_MSG(!m_importsOpen, "registerUserTexture() is outside the graph-import phase");
+    if (m_importsOpen) {
+        return 0;
+    }
+    ITH_ASSERT_MSG(m_textures.size() < std::numeric_limits<std::uint32_t>::max(),
+                   "the UI texture table index and its plus-one id fit in 32 bits");
+    if (m_textures.size() >= std::numeric_limits<std::uint32_t>::max()) {
+        return 0;
+    }
+    // The UI's sampler filters linearly, so the format must be linear filterable on every backend.
+    const bool valid = m_device->isValid(handle) && desc.dimension == rhi::TextureDimension::Texture2D &&
+                       desc.width > 0 && desc.height > 0 && desc.depth == 1 && desc.layers == 1 && desc.mipLevels > 0 &&
+                       rhi::isLinearFilterable(desc.format) && rhi::hasAny(desc.usage, rhi::TextureUsage::Sampled) &&
+                       !desc.debugName.empty();
+    ITH_ASSERT_MSG(valid, "a UI user texture is a live, named, single-layer 2D texture of a linear-filterable colour "
+                          "format with Sampled usage");
+    if (!valid) {
+        return 0;
+    }
+    const auto duplicate = std::ranges::find_if(m_textures, [&](const Texture& texture) {
+        return texture.handle != rhi::TextureHandle{} && texture.handle == handle;
+    });
+    ITH_ASSERT_MSG(duplicate == m_textures.end(), "an RHI texture is registered with the UI only once");
+    if (duplicate != m_textures.end()) {
+        return 0;
+    }
+
+    const std::size_t index = freeTextureSlot();
+    if (index == m_textures.size()) {
+        m_textures.push_back({});
+    }
+    ++m_nextUserGeneration;
+    // Wrapping after 2^32 registrations is unreachable in practice; zero stays reserved for atlas ids.
+    if (m_nextUserGeneration == 0) {
+        ++m_nextUserGeneration;
+    }
+    Texture texture;
+    texture.handle = handle;
+    texture.state = initialState;
+    texture.debugName = desc.debugName;
+    texture.desc = desc;
+    texture.desc.debugName = {};
+    texture.generation = m_nextUserGeneration;
+    m_textures[index] = std::move(texture);
+    return userTextureId(index, m_nextUserGeneration);
+}
+
+void UiRenderer::unregisterUserTexture(UiTextureId id) {
+    ITH_ASSERT_MSG(!m_importsOpen, "unregisterUserTexture() is outside the graph-import phase");
+    if (m_importsOpen) {
+        return;
+    }
+    Texture* texture = findUserTexture(id);
+    ITH_ASSERT_MSG(texture != nullptr, "unregisterUserTexture() needs a currently registered user-texture id");
+    if (texture == nullptr) {
+        return;
+    }
+    const std::size_t index = textureIndex(id);
+    *texture = {};
+    m_pendingFree.push_back(index);
+}
+
+rg::Texture UiRenderer::importTexture(rg::RenderGraph& graph, std::size_t index) {
+    Texture& texture = m_textures[index];
+    if (texture.handle == rhi::TextureHandle{} || !m_device->isValid(texture.handle)) {
+        return {};
+    }
+    rhi::TextureDesc desc = texture.desc;
+    desc.debugName = texture.debugName;
+    return graph.importTexture({.texture = texture.handle, .desc = desc, .state = &texture.state, .writable = true});
+}
+
+rg::Texture UiRenderer::importUserTexture(rg::RenderGraph& graph, UiTextureId id) {
+    ITH_ASSERT_MSG(m_importsOpen, "importUserTexture() follows endFrame() and precedes addRenderPasses()");
+    if (!m_importsOpen) {
+        return {};
+    }
+    const Texture* texture = findUserTexture(id);
+    if (texture == nullptr || !m_device->isValid(texture->handle)) {
+        return {};
+    }
+    m_graphTextures.resize(m_textures.size());
+    const std::size_t index = textureIndex(id);
+    if (m_graphTextures[index].isNull()) {
+        const rg::Texture imported = importTexture(graph, index);
+        if (!imported.isNull()) {
+            if (m_graphSerial == 0) {
+                m_graphSerial = imported.serial();
+            } else if (m_graphSerial != imported.serial()) {
+                ITH_ASSERT_MSG(false, "all UI user-texture imports and passes belong to one graph serial");
+                return {};
+            }
+            m_graphTextures[index] = imported;
+        }
+    }
+    return m_graphTextures[index];
+}
+
+bool UiRenderer::graphSerialMatches(rg::Texture target) const {
+    return m_graphSerial == 0 || m_graphSerial == target.serial();
+}
+
 void UiRenderer::handleTextureRequests() {
     const ImDrawData* drawData = ImGui::GetDrawData();
     if (drawData == nullptr || drawData->Textures == nullptr) {
@@ -200,17 +360,20 @@ void UiRenderer::handleTextureRequests() {
             if (!handle) {
                 continue; // asked again next frame; its draws are skipped
             }
-            const auto empty = std::ranges::find_if(
-                m_textures, [](const Texture& texture) { return texture.handle == rhi::TextureHandle{}; });
-            const auto index = static_cast<std::uint32_t>(empty - m_textures.begin());
-            if (empty == m_textures.end()) {
+            const std::size_t index = freeTextureSlot();
+            if (index == m_textures.size()) {
                 m_textures.push_back({});
             }
-            m_textures[index] = {.handle = *handle, .desc = desc, .state = {}};
+            m_textures[index] = {};
+            m_textures[index].handle = *handle;
+            m_textures[index].debugName = desc.debugName;
+            m_textures[index].desc = desc;
+            m_textures[index].desc.debugName = {};
+            m_textures[index].owned = true;
             data->SetTexID(static_cast<ImTextureID>(index) + 1);
             m_pending.push_back(
                 {.data = data,
-                 .texture = index,
+                 .texture = static_cast<std::uint32_t>(index),
                  .rect = {0, 0, static_cast<unsigned short>(data->Width), static_cast<unsigned short>(data->Height)}});
         } else if (data->Status == ImTextureStatus_WantUpdates) {
             const auto index = static_cast<std::uint32_t>(data->TexID - 1);
@@ -259,14 +422,15 @@ void UiRenderer::copyGeometry(std::span<std::byte> memory) {
                 continue;
             }
             const ImTextureID id = command.GetTexID();
-            const auto texture = static_cast<std::size_t>(id - 1);
+            const auto texture = static_cast<std::size_t>(textureIndex(id));
             const std::optional<rhi::Rect> scissor = clampedScissor(command.ClipRect, origin, pixels, framebuffer);
             if (!scissor || command.ElemCount == 0 || id == ImTextureID_Invalid || texture >= m_textures.size() ||
-                m_textures[texture].handle == rhi::TextureHandle{}) {
+                m_textures[texture].generation != textureGeneration(id) ||
+                m_textures[texture].handle == rhi::TextureHandle{} || !m_device->isValid(m_textures[texture].handle)) {
                 continue;
             }
             m_draws.push_back({.scissor = *scissor,
-                               .texture = static_cast<std::uint32_t>(texture),
+                               .tableIndex = static_cast<std::uint32_t>(texture),
                                .indexCount = command.ElemCount,
                                .firstIndex = firstIndex + command.IdxOffset,
                                .vertexOffset = firstVertex + command.VtxOffset});
@@ -298,7 +462,7 @@ void UiRenderer::prepare(std::uint32_t frameSlot) {
         const auto rowPitch =
             static_cast<std::uint32_t>(alignUp(std::uint64_t{upload.rect.w} * 4, rhi::kTextureCopyRowAlignment));
         m_uploads.push_back(
-            {.texture = upload.texture,
+            {.tableIndex = upload.texture,
              .bufferOffset = size,
              .rowPitch = rowPitch,
              .region = {.x = upload.rect.x, .y = upload.rect.y, .width = upload.rect.w, .height = upload.rect.h}});
@@ -327,7 +491,7 @@ void UiRenderer::prepare(std::uint32_t frameSlot) {
     copyGeometry(memory);
 
     const auto liveTextures = std::ranges::count_if(
-        m_textures, [](const Texture& texture) { return texture.handle != rhi::TextureHandle{}; });
+        m_textures, [](const Texture& texture) { return texture.owned && texture.handle != rhi::TextureHandle{}; });
     m_stats = {.draws = static_cast<std::uint32_t>(m_draws.size()),
                .vertices = static_cast<std::uint32_t>(vertexCount),
                .indices = static_cast<std::uint32_t>(indexCount),
@@ -342,13 +506,27 @@ void UiRenderer::addPasses(rg::RenderGraph& graph, rg::Texture target, rhi::Load
     ITH_ASSERT_MSG(m_prepared, "addPasses() follows prepare()");
     m_prepared = false;
     FrameBuffer& frame = m_frames[m_slot];
-    m_graphTextures.assign(m_textures.size(), rg::Texture{});
-    for (std::size_t i = 0; i < m_textures.size(); ++i) {
-        Texture& texture = m_textures[i];
-        if (texture.handle != rhi::TextureHandle{}) {
-            m_graphTextures[i] = graph.importTexture(
-                {.texture = texture.handle, .desc = texture.desc, .state = &texture.state, .writable = true});
+    ITH_ASSERT_MSG(m_importsOpen, "addPasses() follows endFrame()'s graph-import phase");
+    if (!m_importsOpen) {
+        return;
+    }
+    // EditorUi::addRenderPasses() rejected a mismatched serial before prepare().
+    if (m_graphSerial == 0) {
+        m_graphSerial = target.serial();
+    }
+    ITH_ASSERT(m_graphSerial == target.serial());
+    m_graphTextures.resize(m_textures.size());
+    for (Upload& copy : m_uploads) {
+        if (m_graphTextures[copy.tableIndex].isNull()) {
+            m_graphTextures[copy.tableIndex] = importTexture(graph, copy.tableIndex);
         }
+        copy.texture = m_graphTextures[copy.tableIndex];
+    }
+    for (Draw& draw : m_draws) {
+        if (m_graphTextures[draw.tableIndex].isNull()) {
+            m_graphTextures[draw.tableIndex] = importTexture(graph, draw.tableIndex);
+        }
+        draw.texture = m_graphTextures[draw.tableIndex];
     }
     const rg::Buffer upload =
         frame.buffer != rhi::BufferHandle{}
@@ -361,7 +539,7 @@ void UiRenderer::addPasses(rg::RenderGraph& graph, rg::Texture target, rhi::Load
             [&](rg::PassBuilder& pass) {
                 pass.read(upload, rg::BufferUse::CopySrc);
                 for (const Upload& copy : m_uploads) {
-                    pass.write(m_graphTextures[copy.texture], rg::TextureUse::CopyDst);
+                    pass.write(copy.texture, rg::TextureUse::CopyDst);
                 }
             },
             [this, upload](rg::PassContext& context) {
@@ -369,7 +547,7 @@ void UiRenderer::addPasses(rg::RenderGraph& graph, rg::Texture target, rhi::Load
                     context.list().copyBufferToTexture({.buffer = context.buffer(upload),
                                                         .bufferOffset = copy.bufferOffset,
                                                         .rowPitch = copy.rowPitch,
-                                                        .texture = context.texture(m_graphTextures[copy.texture]),
+                                                        .texture = context.texture(copy.texture),
                                                         .region = copy.region});
                 }
             });
@@ -403,12 +581,13 @@ void UiRenderer::addPasses(rg::RenderGraph& graph, rg::Texture target, rhi::Load
                 list.pushConstants(Constants{.scale = m_scale,
                                              .translate = m_translate,
                                              .vertices = vertices,
-                                             .texture = context.sampledIndex(m_graphTextures[draw.texture]),
+                                             .texture = context.sampledIndex(draw.texture),
                                              .textureSampler = sampler,
                                              .vertexOffset = draw.vertexOffset});
                 list.drawIndexed(draw.indexCount, 1, draw.firstIndex, 0, 0);
             }
         });
+    m_importsOpen = false;
 }
 
 } // namespace ith

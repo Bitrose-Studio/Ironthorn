@@ -10,8 +10,9 @@
 // UiDraw records with clamped scissors. addPasses() then adds "EditorUiUpload" (Copy: the texture
 // copies) and "EditorUi" (Raster: the draws), whose execute callables read only those records.
 //
-// ImGui's texture ids are indices into the renderer's texture table, plus one (0 is ImGui's
-// invalid id). The vertex offset of each draw goes to the shader in the push constants.
+// ImGui-owned texture ids are indices into the renderer's texture table, plus one (0 is ImGui's
+// invalid id). User-texture ids also carry a generation, so an unregistered id can't name a later
+// occupant of its slot. The vertex offset of each draw goes to the shader in the push constants.
 
 #include "ith/editor_ui/EditorUi.h"
 #include "ith/foundation/Expected.h"
@@ -22,8 +23,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace ith {
@@ -43,8 +46,26 @@ public:
     // by the device). Precondition: the ImGui context still exists.
     ~UiRenderer();
 
+    // Closes an import phase that no addPasses() closed (called by EditorUi::newFrame()), so an
+    // abandoned graph's serial doesn't bind the next frame. Keeps the graph handles and pending
+    // free slots.
+    void cancelGraphImports();
+    // Opens the graph-import phase after ImGui::Render() (called by EditorUi::endFrame()): forgets
+    // the last graph's handles and serial, and releases the slots unregistered since the last call
+    // for reuse. The last graph must have executed or been reset by then.
+    void beginGraphImports();
+
     // Reads ImGui's draw data of the last ImGui::Render(); see the header comment.
     void prepare(std::uint32_t frameSlot);
+
+    // Registers or unregisters a borrowed texture; see EditorUi's public contract.
+    [[nodiscard]] UiTextureId registerUserTexture(rhi::TextureHandle handle, const rhi::TextureDesc& desc,
+                                                  rg::ImportedState initialState = {});
+    void unregisterUserTexture(UiTextureId id);
+    // Imports a registered texture once in this graph-building phase, for scene and UI passes.
+    [[nodiscard]] rg::Texture importUserTexture(rg::RenderGraph& graph, UiTextureId id);
+    // Whether the target belongs to the graph used by earlier user imports; checked before prepare().
+    [[nodiscard]] bool graphSerialMatches(rg::Texture target) const;
 
     // Adds the passes for the last prepare().
     void addPasses(rg::RenderGraph& graph, rg::Texture target, rhi::LoadOp load,
@@ -55,16 +76,20 @@ public:
     // One draw: indices from the upload buffer, the shader adding `vertexOffset` to each index.
     struct Draw {
         rhi::Rect scissor;
-        // An index into the texture table.
-        std::uint32_t texture = 0;
+        // The texture table entry the draw samples, as of prepare(); addPasses() resolves it.
+        std::uint32_t tableIndex = 0;
+        // Resolved in addPasses(); execution never consults the mutable texture table.
+        rg::Texture texture;
         std::uint32_t indexCount = 0;
         std::uint32_t firstIndex = 0;
         std::uint32_t vertexOffset = 0;
     };
 
-    // One texture copy from the upload buffer.
+    // One texture copy from the upload buffer, with its graph texture resolved in addPasses().
     struct Upload {
-        std::uint32_t texture = 0;
+        // The texture table entry (always an ImGui-owned texture) the copy writes.
+        std::uint32_t tableIndex = 0;
+        rg::Texture texture;
         std::uint64_t bufferOffset = 0;
         std::uint32_t rowPitch = 0;
         rhi::TexelRegion region;
@@ -74,7 +99,13 @@ private:
     struct Texture {
         rhi::TextureHandle handle;
         rhi::TextureDesc desc;
+        // Renderer-owned for both atlas and user textures; its address is stable in the deque.
         rg::ImportedState state;
+        // Owned copy used for graph imports; desc.debugName is empty after registration.
+        std::string debugName;
+        // Zero for ImGui-owned ids; nonzero for a user registration.
+        std::uint32_t generation = 0;
+        bool owned = false;
     };
 
     // A frame in flight's upload buffer.
@@ -96,12 +127,21 @@ private:
     void copyGeometry(std::span<std::byte> memory);
     // Returns false when the buffer of `slot` can't hold `size` bytes and can't be grown.
     bool reserve(FrameBuffer& frame, std::uint64_t size);
+    // Imports one live table entry; a destroyed RHI handle produces a null graph handle.
+    [[nodiscard]] rg::Texture importTexture(rg::RenderGraph& graph, std::size_t index);
+    // Finds only a live user registration, never an ImGui-owned entry or a stale generation.
+    [[nodiscard]] Texture* findUserTexture(UiTextureId id);
+    // A null table slot that is not waiting for the next graph-import phase to allow its reuse.
+    [[nodiscard]] std::size_t freeTextureSlot() const;
 
     rhi::Device* m_device;
     rhi::PipelineHandle m_pipeline;
     rhi::SamplerHandle m_sampler;
-    // The texture table; a destroyed texture's entry has a null handle and is reused.
-    std::vector<Texture> m_textures;
+    // Stable storage: graphs keep pointers to entries' ImportedState until execute() finishes.
+    // A destroyed texture's entry has a null handle and is reused without moving the entry.
+    std::deque<Texture> m_textures;
+    // Unregistered slots whose state a pending graph may still write; released by beginGraphImports().
+    std::vector<std::size_t> m_pendingFree;
     std::array<FrameBuffer, rhi::kFramesInFlight> m_frames{};
     // The last prepare()'s frame slot, records and projection.
     std::uint32_t m_slot = 0;
@@ -112,8 +152,12 @@ private:
     std::uint64_t m_indexOffset = 0;
     std::array<float, 2> m_scale{};
     std::array<float, 2> m_translate{};
-    // This frame's graph handles of the textures, by table index; filled by addPasses().
+    // This frame's graph handles of the textures, by table index. Scene requests fill them first;
+    // addPasses() fills those used by uploads or draws, then closes the graph-building phase.
     std::vector<rg::Texture> m_graphTextures;
+    std::uint32_t m_graphSerial = 0;
+    bool m_importsOpen = false;
+    std::uint32_t m_nextUserGeneration = 0;
     UiRenderStats m_stats;
 };
 

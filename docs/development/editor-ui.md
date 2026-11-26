@@ -110,8 +110,8 @@ functions.
 - **`EditorUi`** (Raster) draws into the target: one pipeline with alpha blending and no depth,
   vertices pulled by bindless index (the RHI has no vertex input), the draw's first vertex in the
   push constants, one `drawIndexed` per command with its scissor, and a linear clamp sampler.
-  ImGui's texture ids are indices into the renderer's texture table, resolved to bindless indices
-  in the pass.
+  ImGui-owned texture ids are indices into the renderer's texture table; user-texture ids also
+  carry a generation. Both resolve to bindless sampled indices in the pass, per draw command.
 
 Colours are linear inside the shader: ImGui's colours are sRGB-encoded bytes, which the vertex
 shader decodes, so blending happens in linear space and the sRGB target encodes on write
@@ -125,7 +125,55 @@ takes any bytes). So `editor_ui` builds without the shader compiler, in sanitize
 There is no shader cache yet; compiling takes a fraction of a second.
 
 `EditorUi::renderStats()` reports the last frame's draws, vertices, indices, texture uploads,
-textures held, the upload buffer's size and the bounds of the scissors.
+ImGui-owned textures held, the upload buffer's size and the bounds of the scissors.
+
+### User textures
+
+A panel registers a borrowed texture with `EditorUi::registerUserTexture(handle, desc,
+initialState)`: a single-layer 2D texture with `Sampled` usage, a non-empty `desc.debugName` and a
+linear-filterable format (`rhi::isLinearFilterable`: no integer, 32-bit float or depth formats,
+since the UI's sampler filters linearly and Vulkan doesn't guarantee that for 32-bit floats). The
+texture must belong to the UI's device; that is the caller's responsibility and is not checked.
+The renderer owns its persistent `ImportedState` from then on, starting at a copy of
+`initialState`, but never owns or destroys the RHI texture. Pass the texture's current state when
+the caller knows it (as its last graph wrote it back), so the first barrier orders after that use;
+the default `{}` (Undefined) lets the first use discard the contents.
+
+The returned `UiTextureId` converts to `ImTextureID` in the panel's `.cpp` for `ImGui::Image`
+(which accepts it as an `ImTextureRef` in the pinned ImGui version). Unknown, unregistered and stale
+ids skip their draws, and generations prevent an old id from naming a later occupant of the same
+table slot. Registration changes assert while the graph-import phase between `endFrame()` and
+`addRenderPasses()` is open.
+
+After `endFrame()`, `importUserTexture(graph, id)` returns the texture's one import for that graph.
+The viewport's scene passes write that handle before `addRenderPasses()` adds `EditorUi`, which
+samples the same import; the graph therefore places the render-target-to-shader-read barrier. Use
+one graph per frame, don't reset it between these calls and `addRenderPasses()`, and never import a
+registered RHI texture directly with `graph.importTexture()`. The target given to
+`addRenderPasses()` must belong to the graph of that frame's `importUserTexture()` calls; a mismatch
+asserts and adds nothing, so the frame's texture changes are kept for later. A registration enters
+the UI graph only through an explicit request or a reference from that frame's draws; an otherwise
+unused texture is not imported.
+
+The UI's passes read the renderer's copies of the frame's records, which stay valid until the next
+`endFrame()`: execute or reset the graph before then, because the next `endFrame()` starts new
+imports from the states that graph writes back and lets freed table slots be reused. Nothing checks
+this in debug builds: a check could not tell a graph still waiting to execute from one abandoned on
+purpose (after a failed compile, say). Unregistering between `addRenderPasses()` and execution is
+safe: the pending graph still samples the original texture, and its slot is not reused before the
+next `endFrame()`. Before destroying the `EditorUi`, execute or reset every graph that holds its
+passes or user-texture imports, since those graphs point at state the `EditorUi` owns.
+
+`newFrame`, `endFrame`, `registerUserTexture`, `unregisterUserTexture`, `importUserTexture` and
+`addRenderPasses` assert that they run on the thread that created the `EditorUi`.
+
+Normally the owner unregisters after every participating graph has executed and before
+`Device::destroy()`. Destroying first is tolerated once every graph that imported the texture has
+executed: subsequent draws are skipped and unregistration is still required. RHI deferred
+destruction keeps the native texture and its descriptors alive until frames in flight no longer use
+them. After unregistration the texture's graph state stays with the renderer and is unknown to the
+caller, so registering or importing the same RHI texture again must start from the default `{}`
+(Undefined), which discards its contents.
 
 ## Theme, fonts and icons
 
@@ -312,8 +360,9 @@ passed and 1 when it failed.
   events (routing over a window and over empty space, keys and text into a text field, layout
   letters, focus loss, mouse capture), the clipboard, the IME area and the cursor through a
   recording host; the renderer on the null device (atlas creation and partial updates, a growing
-  atlas destroying its old texture, upload buffer growth, scissor clamping, recorded commands,
-  released GPU objects); the theme and fonts; the shell's menus, chords and status; the icons
+  atlas destroying its old texture, upload buffer growth, scissor clamping, recorded commands, user
+  textures and their shared scene/UI graph imports, stale-id handling, released GPU objects); the
+  theme and fonts; the shell's menus, chords and status; the icons
   against `codepoints.json`; the shader source; the idle policy.
 - `editor_automation_null` and `editor_automation_gpu` (label `sample`, the second also `gpu`):
   `ironthorn_editor` on SDL's offscreen driver runs `tests/editor/open_edit_save_reopen.json` in a
@@ -330,7 +379,9 @@ passed and 1 when it failed.
   golden images in `tests/editor_ui_gpu/golden` are uncompressed binary PPM stored with Git LFS
   (`*.ppm` in `.gitattributes`); `ITH_UPDATE_GOLDEN=1` rewrites them, on Windows for WARP and in a
   Linux container with Ubuntu 24.04's `mesa-vulkan-drivers` for lavapipe. A backend without its
-  software device reports itself skipped.
+  software device reports itself skipped. Separate user-texture tests on WARP and lavapipe clear a
+  registered texture to a known colour in a scene pass, draw it with `ImGui::Image`, and check every
+  readback pixel; they need no golden file.
 - `imgui_confined` and `imgui_confined_refuses_imgui_outside_editor_ui` (label `lint`).
 
 ## Not here yet

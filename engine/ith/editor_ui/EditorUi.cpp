@@ -45,6 +45,12 @@ struct EditorUi::Fonts {
 
 EditorUi::EditorUi() = default;
 
+// NOLINTNEXTLINE(readability-convert-member-functions-to-static): reads m_thread when asserts are on
+void EditorUi::assertThread() const {
+    ITH_ASSERT_MSG(std::this_thread::get_id() == m_thread,
+                   "EditorUi user-texture and render calls use its creating thread");
+}
+
 Expected<std::unique_ptr<EditorUi>> EditorUi::create(const EditorUiDesc& desc) {
     ITH_ASSERT_MSG(desc.device != nullptr && desc.input != nullptr && desc.window != kNoWindow,
                    "an EditorUi needs a device, the input and a window");
@@ -61,6 +67,7 @@ Expected<std::unique_ptr<EditorUi>> EditorUi::create(const EditorUiDesc& desc) {
     }
 
     std::unique_ptr<EditorUi> ui(new EditorUi());
+    ui->m_thread = std::this_thread::get_id();
     ui->m_theme = desc.theme;
     ui->m_displayScale = desc.displayScale;
     ui->m_fonts = std::make_unique<Fonts>();
@@ -149,13 +156,16 @@ EditorUi::~EditorUi() {
 }
 
 void EditorUi::newFrame(const UiFrameInput& input) {
+    assertThread();
     ITH_ASSERT_MSG(!m_frameOpen, "newFrame() while a UI frame is open");
+    m_renderer->cancelGraphImports();
     m_platform->newFrame(input);
     ImGui::NewFrame();
     m_frameOpen = true;
 }
 
 void EditorUi::endFrame() {
+    assertThread();
     ITH_ASSERT_MSG(m_frameOpen, "endFrame() without newFrame()");
     if (!m_frameOpen) {
         return;
@@ -164,12 +174,40 @@ void EditorUi::endFrame() {
     m_platform->endFrame();
     m_frameOpen = false;
     m_frameEnded = true;
+    m_renderer->beginGraphImports();
+}
+
+UiTextureId EditorUi::registerUserTexture(rhi::TextureHandle texture, const rhi::TextureDesc& desc,
+                                          rg::ImportedState initialState) {
+    assertThread();
+    return m_renderer->registerUserTexture(texture, desc, initialState);
+}
+
+void EditorUi::unregisterUserTexture(UiTextureId texture) {
+    assertThread();
+    m_renderer->unregisterUserTexture(texture);
+}
+
+rg::Texture EditorUi::importUserTexture(rg::RenderGraph& graph, UiTextureId texture) {
+    assertThread();
+    ITH_ASSERT_MSG(!m_frameOpen && m_frameEnded,
+                   "importUserTexture() follows endFrame() and precedes addRenderPasses()");
+    if (m_frameOpen || !m_frameEnded) {
+        return {};
+    }
+    return m_renderer->importUserTexture(graph, texture);
 }
 
 void EditorUi::addRenderPasses(rg::RenderGraph& graph, rg::Texture target, std::uint32_t frameSlot, rhi::LoadOp load,
                                const std::array<float, 4>& clearColor) {
+    assertThread();
     ITH_ASSERT_MSG(!m_frameOpen && m_frameEnded, "addRenderPasses() follows endFrame()");
     if (m_frameOpen || !m_frameEnded) {
+        return;
+    }
+    const bool serialMatches = m_renderer->graphSerialMatches(target);
+    ITH_ASSERT_MSG(serialMatches, "the UI user-texture imports and passes belong to one graph serial");
+    if (!serialMatches) {
         return;
     }
     m_frameEnded = false;

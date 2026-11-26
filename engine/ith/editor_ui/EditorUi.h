@@ -47,6 +47,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace ith {
@@ -153,6 +154,10 @@ struct UiFrameInput {
     bool focused = true;
 };
 
+// An opaque user-texture registration. Zero is invalid. A panel in editor_ui converts this value to
+// ImTextureID for ImGui::Image; no ImGui type crosses the module boundary.
+using UiTextureId = std::uint64_t;
+
 // What the renderer prepared for the last frame, for tests and statistics.
 struct UiRenderStats {
     std::uint32_t draws = 0;
@@ -183,26 +188,72 @@ public:
     EditorUi(EditorUi&&) = delete;
     EditorUi& operator=(EditorUi&&) = delete;
     // Removes the input consumer, destroys the UI's textures (deferred by the device) and the
-    // ImGui context.
+    // ImGui context. Execute or reset every graph that holds the UI's passes or user-texture imports
+    // first: such a graph points at state the EditorUi owns.
     ~EditorUi();
 
     // Starts a UI frame: hands the frame's window sizes, time and focus to ImGui, applies the
     // cursor the last frame asked for, and begins ImGui's frame, after which panels draw. The
     // events Input routed to the UI since the last frame are applied here, so the want-capture
-    // flags they were routed by come from the frame before (ImGui's normal contract). Precondition
-    // (asserted): no frame is open.
+    // flags they were routed by come from the frame before (ImGui's normal contract). Main thread
+    // (asserted). Precondition (asserted): no frame is open.
     void newFrame(const UiFrameInput& input);
 
-    // Ends the UI frame and turns it into draw data. Precondition (asserted): a frame is open.
+    // Ends the UI frame and turns it into draw data, and opens the graph-import phase of
+    // importUserTexture(). Main thread (asserted). Precondition (asserted): a frame is open.
     void endFrame();
+
+    // Registers a borrowed, single-layer 2D texture with Sampled usage for an editor_ui panel to
+    // draw. Its format must be linear filterable (rhi::isLinearFilterable: no integer, 32-bit float
+    // or depth formats), since the UI's sampler filters linearly. `desc` is the description the
+    // texture was created with and needs a non-empty debugName; the description and name are copied.
+    // The renderer owns the texture's ImportedState from here on, starting at a copy of
+    // `initialState`, and never destroys the texture. Pass the texture's current state when the
+    // caller knows it (as its last graph wrote it back), so the first barrier waits for that use; the
+    // default (Undefined) lets the first use discard the contents. After an unregistration the
+    // caller doesn't know the state, so registering the same texture again must pass the default.
+    // The texture must belong to this device; that is the caller's responsibility, not checked. Main
+    // thread (asserted). Preconditions (asserted): no graph-import phase is open, the texture is
+    // live, the description follows these rules, and the texture is not already registered. Returns
+    // zero when a precondition fails without assertions.
+    [[nodiscard]] UiTextureId registerUserTexture(rhi::TextureHandle texture, const rhi::TextureDesc& desc,
+                                                  rg::ImportedState initialState = {});
+
+    // Stops drawing a registered user texture. Draws that still use its id, including after its table
+    // slot is reused, are skipped. Does not destroy the texture: normally unregister after every
+    // graph that imported it has executed and before Device::destroy(). Destroying first is tolerated
+    // once every graph that imported the texture has executed: later draws are skipped, but
+    // unregistration is still required. A graph built before the call still samples the texture
+    // when it executes, and the freed slot is not reused before the next endFrame(). The texture's
+    // graph state stays with the renderer, so a later registration or direct graph import of the
+    // same RHI texture must start from the default ImportedState (Undefined), which discards its
+    // contents. Main thread (asserted). Preconditions (asserted): no graph-import phase is open and
+    // the id is currently registered.
+    void unregisterUserTexture(UiTextureId texture);
+
+    // Returns the registered texture's import in `graph`, importing it once for reuse by the viewport
+    // scene passes and the EditorUi pass. Add the scene passes with this handle before
+    // addRenderPasses(); the graph then orders their writes before the UI's sampled read. A texture
+    // enters the graph only when requested here or referenced by this frame's draws; an unused
+    // registration is not imported. Use one graph per frame, never import the same RHI texture
+    // directly with graph.importTexture(), and execute the graph before the next frame's imports.
+    // Returns a null handle for an unknown, unregistered or destroyed id. Main thread (asserted).
+    // Preconditions (asserted): after endFrame() and before addRenderPasses(), with every such call
+    // and the UI passes using the same graph serial; do not reset the graph between these calls and
+    // addRenderPasses().
+    [[nodiscard]] rg::Texture importUserTexture(rg::RenderGraph& graph, UiTextureId texture);
 
     // Adds the UI's passes to `graph` after copying the last endFrame()'s geometry and texture
     // changes into the upload buffer of `frameSlot` (rhi::Frame::slot): "EditorUiUpload" (Copy), when
     // textures change, and "EditorUi" (Raster), which draws into `target` with `load` (and
-    // `clearColor` for LoadOp::Clear). Imports the upload buffer and every UI texture. Call it once
-    // per frame after the device's beginFrame() and before graph.compile(); the passes read only
-    // the renderer's copies, valid until the next addRenderPasses(). Precondition (asserted): no UI
-    // frame is open, and endFrame() ran since the last call.
+    // `clearColor` for LoadOp::Clear). Imports the upload buffer and each texture used by an upload,
+    // a draw or an explicit importUserTexture() call. Call it once per frame after the device's
+    // beginFrame() and before graph.compile(). The passes read only the renderer's copies, valid
+    // until the next endFrame(): execute (or reset) the graph before then. Nothing checks that it
+    // ran; a debug check could not tell a pending graph from an abandoned one. Main thread
+    // (asserted). Preconditions (asserted): no UI frame is open, endFrame() ran since the last call,
+    // and `target` belongs to the graph of this frame's importUserTexture() calls (a mismatch adds
+    // nothing and keeps this frame's texture changes for the next call).
     void addRenderPasses(rg::RenderGraph& graph, rg::Texture target, std::uint32_t frameSlot,
                          rhi::LoadOp load = rhi::LoadOp::Load,
                          const std::array<float, 4>& clearColor = {0.0f, 0.0f, 0.0f, 1.0f});
@@ -234,12 +285,14 @@ private:
     struct Fonts;
 
     EditorUi();
+    void assertThread() const;
 
     std::unique_ptr<Fonts> m_fonts;
     std::unique_ptr<UiPlatformBackend> m_platform;
     std::unique_ptr<UiRenderer> m_renderer;
     ThemeTokens m_theme;
     float m_displayScale = 1.0f;
+    std::thread::id m_thread;
     bool m_frameOpen = false;
     bool m_frameEnded = false;
 };
