@@ -62,3 +62,5 @@ These decisions are still open. Each is needed by the [roadmap](../architecture.
 | Performance regression captures (scripted camera paths recording frame time, CPU and GPU zones and memory per tier, compared against budgets in CI) | P3, with the first renderer |
 | Material model (OpenPBR-based real-time subset, per-tier approximations) | P3 |
 | Animation retargeting (rigs, chain mapping, runtime and editor batch retarget) | P5 |
+| Plugin and project manifests (plugin name, version, dependencies, provided services, settings schema, editor counterpart; how a project enables plugins; only enabled plugins link into a shipped game) | P5, before the abilities plugin |
+| Destruction plugin (pre-fractured meshes authored at import, fracture on impact through physics, debris budgets and cleanup per tier) | After P8, once physics and the renderer are stable |
