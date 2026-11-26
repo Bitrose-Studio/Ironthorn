@@ -846,6 +846,7 @@ if(TARGET ith_editor_core)
 
     ith_add_test_suite(editor_core
         SOURCES
+            editor_core/AddShapeTests.cpp
             editor_core/AutomationTests.cpp
             editor_core/EditCommandTests.cpp
             editor_core/EditorCameraTests.cpp
@@ -879,22 +880,26 @@ if(TARGET ith_editor_ui)
             editor_ui/PanelTests.cpp
             editor_ui/RendererTests.cpp
             editor_ui/ShellTests.cpp
+            editor_ui/ViewportPanelTests.cpp
         LIBRARIES ith::editor_ui ith::imgui)
     target_compile_definitions(ith_editor_ui_tests PRIVATE
         "ITH_LUCIDE_CODEPOINTS=\"${font_lucide_SOURCE_DIR}/codepoints.json\"")
     add_dependencies(ith_editor_ui_tests ith_engine_config)
 endif()
 
-# The golden screenshot of the empty editor shell (ADR-0029 rule 18) on the software GPU of each
-# backend the machine has (WARP, lavapipe), with the UI shader compiled at run time, and analytic
+# The golden screenshots of the empty editor shell (ADR-0029 rule 18) and of the Viewport panel with a
+# cube and a sphere on the grid (ADR-0042 rule 30) on the software GPU of each backend the machine has
+# (WARP, lavapipe), with the shaders compiled at run time, and analytic
 # WARP and lavapipe pixel tests of a user texture drawn by ImGui::Image. The images are binary PPM
 # files in tests/editor_ui_gpu/golden, stored with Git LFS; ITH_UPDATE_GOLDEN=1 rewrites them. Needs
 # the shader compiler, so not in sanitizer builds.
 if(TARGET ith_editor_ui AND ITH_BUILD_SHADER_COMPILER)
     ith_add_test_suite(editor_ui_gpu
         SOURCES
+            editor_ui_gpu/GoldenImage.h
             editor_ui_gpu/ShellGoldenTests.cpp
             editor_ui_gpu/UserTextureTests.cpp
+            editor_ui_gpu/ViewportGoldenTests.cpp
         LIBRARIES ith::editor_ui ith::rhi_select ith::shader_compiler ith::imgui
         LABELS gpu)
     target_compile_definitions(ith_editor_ui_gpu_tests PRIVATE

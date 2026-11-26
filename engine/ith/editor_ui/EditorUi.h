@@ -229,6 +229,13 @@ public:
     // importUserTexture(). Main thread (asserted). Precondition (asserted): a frame is open.
     void endFrame();
 
+    // Gives up a frame that won't be rendered: after endFrame() when addRenderPasses() won't follow
+    // (the device had no frame, the target couldn't be imported, rendering failed, or the editor
+    // exits). Closes the graph-import phase, so textures may be registered and unregistered again
+    // (teardown included); the frame's texture requests stay for the next frame. Does nothing when
+    // no frame awaits its passes. Main thread (asserted). Precondition (asserted): no frame is open.
+    void abandonFrame();
+
     // Registers a borrowed, single-layer 2D texture with Sampled usage for an editor_ui panel to
     // draw. Its format must be linear filterable (rhi::isLinearFilterable: no integer, 32-bit float
     // or depth formats), since the UI's sampler filters linearly. `desc` is the description the

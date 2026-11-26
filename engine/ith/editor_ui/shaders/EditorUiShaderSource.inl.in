@@ -1,2 +1,0 @@
-// Generated from engine/ith/editor_ui/shaders/EditorUi.slang by the build. Do not edit.
-constexpr const char kSource[] = R"ith_shader(@ITH_EDITOR_UI_SHADER_SOURCE@)ith_shader";

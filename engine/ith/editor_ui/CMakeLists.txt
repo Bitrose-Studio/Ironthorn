@@ -1,10 +1,10 @@
 # The editor's UI on Dear ImGui (ADR-0029): the ImGui context with our own platform backend (engine
 # events, clipboard, IME and cursor through ith::Platform) and renderer backend (render graph
 # passes on the RHI), the theme, fonts and icons, the idle policy, the shell and the panels (Output
-# Log, Outliner, Details). ImGui is private to this module: it links ith::imgui privately, and no
-# public header names an ImGui type (the imgui_confined test). The UI shader is compiled into the
-# module as text and compiled to bytecode by the editor application, so this module builds without
-# the shader compiler, in sanitizer builds too (ADR-0029 rule 19).
+# Log, Outliner, Details, Viewport). ImGui is private to this module: it links ith::imgui privately,
+# and no public header names an ImGui type (the imgui_confined test). The UI and viewport shaders are
+# compiled into the module as text and compiled to bytecode by the editor application, so this
+# module builds without the shader compiler, in sanitizer builds too (ADR-0029 rule 19).
 ith_add_module(editor_ui
     LAYER editor
     KIND editor
@@ -33,6 +33,10 @@ ith_add_module(editor_ui
         OutlinerPanel.cpp
         Theme.h
         Theme.cpp
+        ViewportPanel.h
+        ViewportPanel.cpp
+        ViewportShaders.h
+        ViewportShaders.cpp
     DEPENDS
         foundation
         file_system
@@ -45,6 +49,8 @@ ith_add_module(editor_ui
         math
         reflection
         assets
+        ecs
+        shapes
         editor_core
     PRIVATE_LIBRARIES
         ith::imgui)
@@ -54,11 +60,16 @@ if(NOT TARGET ith_editor_ui)
     return()
 endif()
 
-# The shader source as a string literal. CMake configures again when the shader changes.
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/EditorUi.slang")
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/shaders/EditorUi.slang" ITH_EDITOR_UI_SHADER_SOURCE)
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/shaders/EditorUiShaderSource.inl.in"
-    "${PROJECT_BINARY_DIR}/generated/editor_ui/EditorUiShaderSource.inl" @ONLY)
+# Each shader's source as a string literal, generated/editor_ui/<Name>ShaderSource.inl. CMake
+# configures again when a shader changes.
+foreach(shader IN ITEMS EditorUi Shapes Grid)
+    set(ITH_SHADER_FILE "${shader}.slang")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${ITH_SHADER_FILE}")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${ITH_SHADER_FILE}" ITH_SHADER_SOURCE)
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/shaders/ShaderSource.inl.in"
+        "${PROJECT_BINARY_DIR}/generated/editor_ui/${shader}ShaderSource.inl" @ONLY)
+endforeach()
 
 # The editor fonts and their licences, copied to fonts/ next to the executables of every
 # configuration (EditorUiDesc::fontDirectory), as the engine configuration is copied to Config/.

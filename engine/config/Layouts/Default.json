@@ -9,7 +9,10 @@
         "split": "top_bottom",
         "ratio": 0.7,
         "first": {
-          "tabs": [],
+          "tabs": [
+            "ith.viewport.1"
+          ],
+          "active": "ith.viewport.1",
           "central": true
         },
         "second": {

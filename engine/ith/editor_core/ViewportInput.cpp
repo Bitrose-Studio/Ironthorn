@@ -207,8 +207,8 @@ std::optional<std::size_t> ViewportConsumer::viewportAt(float x, float y) const 
         const ViewportState& state = m_viewports->at(index);
         const Vec2 position = state.imagePosition;
         const Vec2 size = state.imageSize;
-        if (size.x > 0.0f && size.y > 0.0f && x >= position.x && x < position.x + size.x && y >= position.y &&
-            y < position.y + size.y) {
+        if (state.imageHovered && size.x > 0.0f && size.y > 0.0f && x >= position.x && x < position.x + size.x &&
+            y >= position.y && y < position.y + size.y) {
             return index;
         }
     }

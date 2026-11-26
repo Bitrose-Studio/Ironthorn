@@ -18,6 +18,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <ostream> // doctest prints std::string operands through an ostream
@@ -163,10 +164,8 @@ struct UiFixture {
     // One UI frame: `draw` runs between newFrame and endFrame.
     template <typename Draw>
     void frame(Draw&& draw, bool focused = true) {
-        ui->newFrame({.size = {kWidth, kHeight},
-                      .pixelSize = {kWidth, kHeight},
-                      .deltaSeconds = 1.0f / 60.0f,
-                      .focused = focused});
+        ui->newFrame(
+            {.size = {kWidth, kHeight}, .pixelSize = pixelSize, .deltaSeconds = 1.0f / 60.0f, .focused = focused});
         draw();
         ui->endFrame();
         render();
@@ -184,8 +183,12 @@ struct UiFixture {
         graph.reset();
         const rg::Texture texture =
             graph.importTexture({.texture = target, .desc = targetDesc, .state = &targetState, .writable = true});
+        if (beforeUi) {
+            beforeUi(graph);
+        }
         ui->addRenderPasses(graph, texture, (*begun)->slot, rhi::LoadOp::Clear);
         graph.compile();
+        lastGraph = graph.dump();
         Expected<void, rhi::Error> executed = graph.execute(*pool);
         REQUIRE_MESSAGE(executed.hasValue(), (executed ? std::string() : executed.error().toString()));
         REQUIRE(device->endFrame().hasValue());
@@ -208,6 +211,13 @@ struct UiFixture {
     RecordingHost host;
     std::string fonts;
     std::unique_ptr<EditorUi> ui;
+    // The window's size in pixels that frame() hands the UI; twice the window size is a display scale
+    // of 2.
+    WindowSize pixelSize{kWidth, kHeight};
+    // Adds passes to the graph after the UI frame and before the UI's passes (viewport scene passes).
+    std::function<void(rg::RenderGraph&)> beforeUi;
+    // The dump of the last rendered graph, compiled.
+    std::string lastGraph;
     std::uint64_t timeNs = 1'000'000'000;
 };
 

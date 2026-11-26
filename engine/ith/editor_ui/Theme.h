@@ -11,6 +11,7 @@
 //
 // defaultDarkTheme() is a neutral dark theme until the editor theme's values are set.
 
+#include <array>
 #include <cstdint>
 
 namespace ith {
@@ -43,6 +44,15 @@ struct ThemeTokens {
     // Status colours, for the Output Log and the status bar.
     ThemeColor warning{0xE0B040};
     ThemeColor error{0xE05050};
+    // The Viewport panel (ADR-0042 rules 18 and 20): the background behind the scene, the grid's
+    // minor (1 m) and major (10 m) lines and its X (z = 0) and Z (x = 0) axis lines, and the tint of
+    // selected shapes. The alphas of the grid colours are the lines' opacity.
+    ThemeColor viewportBackground{0x2A2A2F};
+    ThemeColor gridMinor{0x6A6A72, 90};
+    ThemeColor gridMajor{0x8A8A94, 170};
+    ThemeColor gridAxisX{0xD84545, 230};
+    ThemeColor gridAxisZ{0x4A78E0, 230};
+    ThemeColor viewportSelection{0xF0A030};
 
     // The base type size, and the monospace size, in units.
     float fontSize = 14.0f;
@@ -72,6 +82,10 @@ struct ThemeTokens {
 [[nodiscard]] inline ThemeTokens defaultDarkTheme() {
     return {};
 }
+
+// The colour as linear RGB and alpha in 0..1: each sRGB channel decoded, the alpha scaled. For clear
+// colours of sRGB targets and colours shaders blend in linear space.
+[[nodiscard]] std::array<float, 4> linearColor(ThemeColor color);
 
 // Applies `theme` to the current ImGui context's style, its sizes times `displayScale`: resets
 // the style, sets its colour table from the tokens, scales every size, and sets the font size and

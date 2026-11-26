@@ -4,6 +4,10 @@
 
 #include <imgui.h>
 
+#include <array>
+#include <cmath>
+#include <cstdint>
+
 namespace ith {
 namespace {
 
@@ -82,6 +86,15 @@ void setColors(ImGuiStyle& style, const ThemeTokens& theme) {
 }
 
 } // namespace
+
+std::array<float, 4> linearColor(ThemeColor color) {
+    const auto channel = [](std::uint32_t value) {
+        const float encoded = static_cast<float>(value & 0xFFu) / 255.0f;
+        return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+    };
+    return {channel(color.rgb >> 16), channel(color.rgb >> 8), channel(color.rgb),
+            static_cast<float>(color.alpha) / 255.0f};
+}
 
 void applyTheme(const ThemeTokens& theme, float displayScale) {
     ITH_ASSERT_MSG(ImGui::GetCurrentContext() != nullptr, "applyTheme needs the editor UI's ImGui context");

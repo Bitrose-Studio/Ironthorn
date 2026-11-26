@@ -13,6 +13,8 @@
 #include "ith/rhi_select/CreateDevice.h"
 #include "ith/shader_compiler/ShaderCompiler.h"
 
+#include "GoldenImage.h"
+
 #include <doctest/doctest.h>
 #include <imgui.h>
 
@@ -29,24 +31,13 @@
 #include <vector>
 
 using namespace ith;
+using namespace ith::test::golden;
 
 namespace {
 
 constexpr std::uint32_t kSize = 64;
 constexpr std::uint32_t kRowPitch = kSize * 4;
 constexpr std::array<float, 4> kColour{0.2f, 0.4f, 0.6f, 1.0f};
-
-std::vector<std::byte> compileStage(ShaderCompiler& compiler, rhi::ShaderFormat format, std::string_view entry,
-                                    ShaderStage stage) {
-    Expected<std::vector<std::byte>> code =
-        compiler.compile({.name = kEditorUiShaderName,
-                          .source = editorUiShaderSource(),
-                          .entryPoint = entry,
-                          .stage = stage,
-                          .target = format == rhi::ShaderFormat::Dxil ? ShaderTarget::Dxil : ShaderTarget::Spirv});
-    REQUIRE_MESSAGE(code.hasValue(), (code ? std::string() : code.error().message));
-    return std::move(*code);
-}
 
 void drawImage(UiTextureId texture) {
     ImGui::SetNextWindowPos({0.0f, 0.0f});
@@ -67,8 +58,10 @@ void checkUserTexture(rhi::Device& device) {
     REQUIRE(compiler.hasValue());
     const rhi::ShaderFormat shaderFormat = device.capabilities().shaderFormat;
     const std::vector<std::byte> vertex =
-        compileStage(*compiler, shaderFormat, kEditorUiVertexEntry, ShaderStage::Vertex);
-    const std::vector<std::byte> pixel = compileStage(*compiler, shaderFormat, kEditorUiPixelEntry, ShaderStage::Pixel);
+        compileStage(*compiler, shaderFormat, kEditorUiShaderName, editorUiShaderSource(), kEditorUiVertexEntry,
+                     ShaderStage::Vertex);
+    const std::vector<std::byte> pixel = compileStage(*compiler, shaderFormat, kEditorUiShaderName,
+                                                      editorUiShaderSource(), kEditorUiPixelEntry, ShaderStage::Pixel);
     const Expected<std::string> executable = fs::executableDirectory();
     REQUIRE(executable.hasValue());
     const std::string fonts = fs::joinPath(*executable, "fonts");

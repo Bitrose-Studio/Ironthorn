@@ -16,9 +16,10 @@
 //   }
 //
 // It routes by the image rectangles the viewport panels reported to the Viewports store in the last
-// frame (ViewportState::imagePosition, imageSize, in window pixels). Mouse presses, motion, the wheel
-// and releases are consumed only over a viewport image, or while the consumer holds a drag that
-// started on one, until its release. One drag is held at a time; presses of other buttons during it
+// frame (ViewportState::imagePosition, imageSize, in window pixels, and imageHovered). Mouse presses,
+// motion, the wheel and releases are consumed only over a hovered viewport image (nothing drawn on
+// top of it in the last frame), or while the consumer holds a drag that started on one, until its
+// release. One drag is held at a time; presses of other buttons during it
 // are swallowed. What a press on an image starts depends on its button and on Alt at the press:
 //
 //   RMB          fly: mouse look, W/A/S/D/Q/E move, the wheel changes the speed step (rule 6)
@@ -107,7 +108,8 @@ public:
     }
 
     // The index (Viewports::at) of the viewport whose last reported image contains the point at `x`,
-    // `y` in window pixels, or std::nullopt. An image without area contains no point.
+    // `y` in window pixels and was hovered in the last frame (ViewportState::imageHovered), or
+    // std::nullopt. An image without area contains no point.
     [[nodiscard]] std::optional<std::size_t> viewportAt(float x, float y) const noexcept;
 
 private:

@@ -179,7 +179,8 @@ programmer error and leave the camera unchanged.
 [ADR-0042](../decisions/0042-editor-viewport.md) rules 3, 4, 20 and 26). It holds one
 `ViewportState` per viewport panel instance, `ith.viewport.1` to `ith.viewport.4`, whether the
 panel is open or not: the `camera`, the `gameView` flag and the image rectangle the panel reports
-(`imagePosition`, `imageSize` in window pixels; `aspect()` is 1 until the panel has drawn). Next to
+(`imagePosition`, `imageSize` in window pixels; `aspect()` is 1 until the panel has drawn) and
+whether the image is hovered with nothing on top of it (`imageHovered`). Next to
 them is one editor-wide state: the transform tool (translate at first), the gizmo space (world) and
 snapping (on, 0.1 m). Panels draw the store, the commands below change it and tests drive it
 directly. None of it dirties the level or makes an undo entry.
@@ -240,6 +241,12 @@ the level stays clean.
 Placing a shape needs no command of its own: `ith.entity.create` with an `ith::ShapeRenderer` in
 `components` does it. The editor registers the `shapes` module's reflection for that.
 
+**Add Shape** (`AddShape.h`): `kShapeChoices` lists the four shapes with their names, in
+enumerator order, and `addShapeArgs(shape, camera)` gives the arguments of `ith.entity.create` that
+add one: labelled with its name, a `ShapeRenderer` of the default colour, 2 m in front of the camera
+along its view direction, its bottom on y = 0. The Outliner's context menu runs it with the camera
+of `ith.viewport.1` ([editor UI](editor-ui.md#viewport)).
+
 ### Viewport input
 
 `ith::ViewportConsumer` (`ViewportInput.h`, [ADR-0042](../decisions/0042-editor-viewport.md) rules
@@ -262,7 +269,8 @@ if (viewportInput.update(deltaSeconds)) {
 ```
 
 It routes by the image rectangles the panels reported to the `Viewports` store in the last frame.
-Mouse presses, motion and the wheel are consumed only over a viewport image, or while the consumer
+Mouse presses, motion and the wheel are consumed only over a hovered viewport image (`imageHovered`:
+no floating panel or popup over it in that frame), or while the consumer
 holds a drag that started on one; the drag stays held outside the image until its button's release.
 One drag is held at a time, and presses of other buttons during it are swallowed. The button and
 Alt at the press decide the gesture:

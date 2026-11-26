@@ -83,9 +83,11 @@ struct Fixture {
         ith::ViewportState& first = session.viewports().at(0);
         first.imagePosition = {100.0f, 100.0f};
         first.imageSize = {400.0f, 300.0f};
+        first.imageHovered = true;
         ith::ViewportState& second = session.viewports().at(1);
         second.imagePosition = {600.0f, 100.0f};
         second.imageSize = {200.0f, 200.0f};
+        second.imageHovered = true;
         // The window has focus; Rotate is the tool, so running translate_tool shows.
         events({Event{.type = EventType::WindowFocusGained}});
         session.viewports().setTool(ViewportTool::Rotate);
@@ -309,6 +311,13 @@ TEST_SUITE("editor_core.viewport_input") {
         CHECK(fixture.viewports.viewportAt(700.0f, 200.0f) == std::optional<std::size_t>(1));
         fixture.session.viewports().at(1).imageSize = {0.0f, 200.0f};
         CHECK_FALSE(fixture.viewports.viewportAt(700.0f, 200.0f).has_value());
+        // An image with something drawn on top of it (not hovered) takes nothing either.
+        fixture.session.viewports().at(0).imageHovered = false;
+        CHECK_FALSE(fixture.viewports.viewportAt(200.0f, 200.0f).has_value());
+        fixture.events({press(MouseButton::Middle, 200.0f, 200.0f)});
+        CHECK_FALSE(fixture.viewports.holdsDrag());
+        fixture.events({release(MouseButton::Middle, 200.0f, 200.0f)});
+        fixture.session.viewports().at(0).imageHovered = true;
 
         // Over the image motion is consumed, without a drag too.
         fixture.events({release(MouseButton::Right, 50.0f, 50.0f), moved(200.0f, 200.0f, 3.0f, 0.0f)});

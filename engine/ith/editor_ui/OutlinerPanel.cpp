@@ -1,8 +1,11 @@
 #include "ith/editor_ui/OutlinerPanel.h"
 
+#include "ith/editor_core/AddShape.h"
 #include "ith/editor_core/CommandRegistry.h"
+#include "ith/editor_core/EditorCamera.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/PanelRegistry.h"
+#include "ith/editor_core/Viewports.h"
 #include "ith/editor_ui/Icons.h"
 #include "ith/foundation/Log.h"
 
@@ -11,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
+#include <string>
 #include <utility>
 
 namespace ith {
@@ -131,8 +135,32 @@ void OutlinerPanel::draw() {
             }
             ImGui::EndDragDropTarget();
         }
+        drawContextMenu();
     }
     ImGui::EndChild();
+}
+
+void OutlinerPanel::drawContextMenu() {
+    if (!ImGui::BeginPopupContextWindow("##outliner_context")) {
+        return;
+    }
+    if (ImGui::BeginMenu("Add Shape")) {
+        for (const ShapeChoice& choice : kShapeChoices) {
+            const std::string name(choice.name);
+            if (ImGui::MenuItem(name.c_str())) {
+                // In front of the default viewport's camera; the new entity becomes the selection.
+                const ViewportState* viewport = m_session->viewports().find(kDefaultViewport);
+                const EditorCamera camera = viewport != nullptr ? viewport->camera : EditorCamera{};
+                if (Expected<serialization::Value> created =
+                        m_session->execute("ith.entity.create", addShapeArgs(choice.shape, camera));
+                    !created) {
+                    ITH_LOG_WARNING(Outliner, "{}", created.error().message);
+                }
+            }
+        }
+        ImGui::EndMenu();
+    }
+    ImGui::EndPopup();
 }
 
 void OutlinerPanel::drawRow(std::size_t rowIndex) {

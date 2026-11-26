@@ -1,0 +1,2 @@
+// Generated from engine/ith/editor_ui/shaders/@ITH_SHADER_FILE@ by the build. Do not edit.
+constexpr const char kSource[] = R"ith_shader(@ITH_SHADER_SOURCE@)ith_shader";

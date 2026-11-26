@@ -287,6 +287,7 @@ TEST_SUITE("editor_ui.platform") {
         // Inside the ImGui window, which wants the mouse over all of it.
         viewports.at(0).imagePosition = {150.0f, 150.0f};
         viewports.at(0).imageSize = {200.0f, 200.0f};
+        viewports.at(0).imageHovered = true;
         ViewportConsumer viewportInput(viewports);
         UiFixture fixture({.viewports = &viewportInput}, &viewportInput);
         fixture.events({mouseMoved(200.0f, 200.0f)});
@@ -338,6 +339,7 @@ TEST_SUITE("editor_ui.platform") {
         Viewports viewports;
         viewports.at(0).imagePosition = {150.0f, 150.0f};
         viewports.at(0).imageSize = {200.0f, 200.0f};
+        viewports.at(0).imageHovered = true;
         ViewportConsumer viewportInput(viewports);
         UiFixture fixture({.viewports = &viewportInput}, &viewportInput);
         // A second window with a button and more lines than fit, so the wheel scrolls it.
@@ -405,6 +407,7 @@ TEST_SUITE("editor_ui.platform") {
         Viewports viewports;
         viewports.at(0).imagePosition = {150.0f, 150.0f};
         viewports.at(0).imageSize = {200.0f, 200.0f};
+        viewports.at(0).imageHovered = true;
         ViewportConsumer viewportInput(viewports);
         UiFixture fixture({.viewports = &viewportInput}, &viewportInput);
         fixture.events({press(MouseButton::Right, 200.0f, 200.0f)});

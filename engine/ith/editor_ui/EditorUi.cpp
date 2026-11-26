@@ -177,6 +177,13 @@ void EditorUi::endFrame() {
     m_renderer->beginGraphImports();
 }
 
+void EditorUi::abandonFrame() {
+    assertThread();
+    ITH_ASSERT_MSG(!m_frameOpen, "abandonFrame() while a UI frame is open");
+    m_frameEnded = false;
+    m_renderer->cancelGraphImports();
+}
+
 UiTextureId EditorUi::registerUserTexture(rhi::TextureHandle texture, const rhi::TextureDesc& desc,
                                           rg::ImportedState initialState) {
     assertThread();

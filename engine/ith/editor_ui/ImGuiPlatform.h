@@ -9,17 +9,19 @@
 // - key presses only while ImGui wants text input (a text field is active), so W in a text field
 //   types W and doesn't reach the keymap below; it is then also the window's focused consumer
 //   with acceptsText, which turns the platform's text input on;
-// - mouse presses, motion and the wheel while ImGui wants the mouse, except over a viewport image
-//   while no ImGui popup is open: those go on to the viewport consumer below (ADR-0042 rule 9).
+// - mouse presses, motion and the wheel while ImGui wants the mouse, except over a hovered viewport
+//   image (ViewportState::imageHovered) while no ImGui popup is open: those go on to the viewport
+//   consumer below (ADR-0042 rule 9).
 // While the viewport consumer holds a drag, the mouse presses, motion and wheel are its alone:
 // ImGui neither sees nor takes them and is told the mouse is gone, so a drag that leaves the image
-// keeps going and touches no panel; releases still reach ImGui. The want-capture flags come from
-// the previous ImGui frame, because routing runs before NewFrame; whether a
-// text field is active is known at the end of the frame that activates it (ImGui reports it with
-// the IME data), so the focus and the key routing follow at once. While the
-// mouse is captured (Play In Editor), ImGui is told the mouse is gone. Relative mouse mode is on
-// while the mouse is captured or a viewport flies (ADR-0042 rule 11); when fly ends, the cursor is
-// put back where its press was before relative mode turns off.
+// keeps going and touches no panel; releases still reach ImGui. When the drag ends, ImGui gets the
+// mouse's last position back (a fly's press position, where the cursor is put back), so hover
+// follows the cursor before it next moves. The want-capture flags come from the previous ImGui
+// frame, because routing runs before NewFrame; whether a text field is active is known at the end
+// of the frame that activates it (ImGui reports it with the IME data), so the focus and the key
+// routing follow at once. While the mouse is captured (Play In Editor), ImGui is told the mouse is
+// gone. Relative mouse mode is on while the mouse is captured or a viewport flies (ADR-0042 rule
+// 11); when fly ends, the cursor is put back where its press was before relative mode turns off.
 
 #include "ith/input/Input.h"
 #include "ith/math/Types.h"
@@ -91,6 +93,9 @@ private:
     bool m_relativeMouse = false;
     // Where the current fly's press was, in window pixels, to put the cursor back when it ends.
     std::optional<Vec2> m_flyStart;
+    // The last mouse position an event carried, in window pixels, also while ImGui is told the mouse
+    // is gone: ImGui gets it back when the mouse shows again.
+    std::optional<Vec2> m_lastMouse;
     // A text field is active (ImGui's IME data), and the consumer holds the text focus for it.
     bool m_textInput = false;
     bool m_focusedForText = false;

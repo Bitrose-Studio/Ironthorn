@@ -434,7 +434,7 @@ TEST_SUITE("editor_core.layout_session") {
         CHECK(noConfig.load("Default").error().code == "editor.layout.no_config");
         CHECK(noConfig.reset().name.empty());
         CHECK(ith::openPanels(noConfig.current()) ==
-              std::vector<std::string>{"ith.output_log", "ith.outliner", "ith.details"});
+              std::vector<std::string>{"ith.viewport.1", "ith.output_log", "ith.outliner", "ith.details"});
         CHECK(noConfig.list().valueOr(std::vector<ith::LayoutListing>{{}}).empty());
     }
 
@@ -517,10 +517,10 @@ TEST_SUITE("editor_core.layout_session") {
             CHECK(readText(sessionFile).find("0.6123") != std::string::npos);
 
             REQUIRE(layouts.open("ith.viewport").hasValue());
-            CHECK(layouts.takeFocusRequest() == std::optional<std::string>("ith.viewport.1"));
+            CHECK(layouts.takeFocusRequest() == std::optional<std::string>("ith.viewport.2"));
             CHECK_FALSE(layouts.takeFocusRequest().has_value());
             CHECK(layouts.generation() == generation + 1);
-            CHECK(layouts.close("ith.viewport.1").valueOr(false));
+            CHECK(layouts.close("ith.viewport.2").valueOr(false));
             CHECK(layouts.close("ith.viewport.9").error().code == "editor.layout.unknown_panel");
             CHECK(readBacks == 2);
         }
@@ -529,7 +529,7 @@ TEST_SUITE("editor_core.layout_session") {
             const ith::LayoutLoad restored = layouts.restore();
             CHECK(restored.name.empty());
             CHECK(layouts.current().main.nodes.front().ratio == 0.6123);
-            CHECK_FALSE(ith::isPanelOpen(layouts.current(), "ith.viewport.1"));
+            CHECK_FALSE(ith::isPanelOpen(layouts.current(), "ith.viewport.2"));
         }
         {
             writeText(sessionFile, "{ broken");

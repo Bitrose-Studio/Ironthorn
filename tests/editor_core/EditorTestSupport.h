@@ -108,6 +108,7 @@ inline Config projectConfig(const std::string& projectRoot) {
 
 // The panels the editor registers today, as editor_ui does but without views (ADR-0040 rule 3).
 inline void addEditorPanels(PanelRegistry& panels) {
+    panels.add({.id = "ith.viewport", .displayName = "Viewport", .defaultDock = DockPlace::Center, .maxInstances = 4});
     panels.add({.id = "ith.outliner", .displayName = "Outliner", .defaultDock = DockPlace::Right});
     panels.add({.id = "ith.details", .displayName = "Details", .defaultDock = DockPlace::Right});
     panels.add({.id = "ith.output_log", .displayName = "Output Log", .defaultDock = DockPlace::Bottom});

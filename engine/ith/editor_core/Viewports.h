@@ -97,6 +97,10 @@ struct ViewportState {
     // hidden or closed viewport takes no input; zero size until the panel has drawn.
     Vec2 imagePosition{0.0f};
     Vec2 imageSize{0.0f};
+    // Whether the mouse was over the image in the panel's last frame with nothing drawn on top of it
+    // (a floating panel, a popup). The viewport consumer takes presses, motion and the wheel only over
+    // a hovered image; false until the panel has drawn, and in frames it doesn't draw the image.
+    bool imageHovered = false;
 
     // The image's width / height; 1 while the image has no area.
     [[nodiscard]] float aspect() const noexcept {

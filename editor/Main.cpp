@@ -1,7 +1,7 @@
 // ironthorn_editor: the Ironthorn editor (ADR-0008, ADR-0029, ADR-0040). It opens a window with the
 // editor shell - the main menu with the File, Edit and Window commands and their shortcuts, the dock
-// space with the panels (Outliner, Details, Output Log) in the last session's layout, and the
-// status bar - over one editor session of a project.
+// space with the panels (Viewport, Outliner, Details, Output Log) in the last session's layout,
+// and the status bar - over one editor session of a project.
 //
 //   ironthorn_editor --project <dir>            edits the project in <dir>
 //   ironthorn_editor ... --user-dir <dir>       the user configuration layer (default: the user's
@@ -33,6 +33,9 @@
 #include "ith/editor_ui/IdlePolicy.h"
 #include "ith/editor_ui/OutlinerPanel.h"
 #include "ith/editor_ui/OutputLog.h"
+#include "ith/editor_ui/Theme.h"
+#include "ith/editor_ui/ViewportPanel.h"
+#include "ith/editor_ui/ViewportShaders.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
 #include "ith/foundation/Assert.h"
@@ -53,7 +56,6 @@
 #include <array>
 #include <charconv>
 #include <chrono>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -63,7 +65,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -207,45 +208,61 @@ ith::rhi::Device createEditorDevice(const Options& options) {
     return std::move(*null);
 }
 
-// The UI shader's two stages for the device: SPIR-V or DXIL, and SPIR-V for the null device, which
-// takes any bytes, so its runs check the shader too (ADR-0029 rule 9).
-struct UiShaders {
-    std::vector<std::byte> vertex;
-    std::vector<std::byte> pixel;
+// The editor's shader stages for the device (ADR-0029 rule 9, ADR-0042 rule 17): the UI's and the
+// viewport's shapes and grid passes, in SPIR-V or DXIL, and SPIR-V for the null device, which takes
+// any bytes, so its runs check the shaders too.
+struct EditorShaders {
+    std::vector<std::byte> uiVertex;
+    std::vector<std::byte> uiPixel;
+    std::vector<std::byte> shapesVertex;
+    std::vector<std::byte> shapesPixel;
+    std::vector<std::byte> gridVertex;
+    std::vector<std::byte> gridPixel;
 };
 
-ith::Expected<UiShaders> compileUiShaders(ith::rhi::ShaderFormat format) {
+ith::Expected<EditorShaders> compileEditorShaders(ith::rhi::ShaderFormat format) {
     ith::Expected<ith::ShaderCompiler> compiler = ith::ShaderCompiler::create();
     if (!compiler) {
         return ith::makeUnexpected(compiler.error());
     }
     const ith::ShaderTarget target =
         format == ith::rhi::ShaderFormat::Dxil ? ith::ShaderTarget::Dxil : ith::ShaderTarget::Spirv;
-    UiShaders shaders;
-    for (const auto& [entry, stage, output] :
-         {std::tuple{ith::kEditorUiVertexEntry, ith::ShaderStage::Vertex, &shaders.vertex},
-          std::tuple{ith::kEditorUiPixelEntry, ith::ShaderStage::Pixel, &shaders.pixel}}) {
-        ith::Expected<std::vector<std::byte>> code = compiler->compile({.name = ith::kEditorUiShaderName,
-                                                                        .source = ith::editorUiShaderSource(),
-                                                                        .entryPoint = entry,
-                                                                        .stage = stage,
+
+    struct Stage {
+        std::string_view name;
+        std::string_view source;
+        std::string_view entry;
+        ith::ShaderStage stage;
+        std::vector<std::byte>* output;
+    };
+
+    EditorShaders shaders;
+    const std::array stages{
+        Stage{ith::kEditorUiShaderName, ith::editorUiShaderSource(), ith::kEditorUiVertexEntry,
+              ith::ShaderStage::Vertex, &shaders.uiVertex},
+        Stage{ith::kEditorUiShaderName, ith::editorUiShaderSource(), ith::kEditorUiPixelEntry, ith::ShaderStage::Pixel,
+              &shaders.uiPixel},
+        Stage{ith::kViewportShapesShaderName, ith::viewportShapesShaderSource(), ith::kViewportShapesVertexEntry,
+              ith::ShaderStage::Vertex, &shaders.shapesVertex},
+        Stage{ith::kViewportShapesShaderName, ith::viewportShapesShaderSource(), ith::kViewportShapesPixelEntry,
+              ith::ShaderStage::Pixel, &shaders.shapesPixel},
+        Stage{ith::kViewportGridShaderName, ith::viewportGridShaderSource(), ith::kViewportGridVertexEntry,
+              ith::ShaderStage::Vertex, &shaders.gridVertex},
+        Stage{ith::kViewportGridShaderName, ith::viewportGridShaderSource(), ith::kViewportGridPixelEntry,
+              ith::ShaderStage::Pixel, &shaders.gridPixel},
+    };
+    for (const Stage& stage : stages) {
+        ith::Expected<std::vector<std::byte>> code = compiler->compile({.name = stage.name,
+                                                                        .source = stage.source,
+                                                                        .entryPoint = stage.entry,
+                                                                        .stage = stage.stage,
                                                                         .target = target});
         if (!code) {
             return ith::makeUnexpected(code.error());
         }
-        *output = std::move(*code);
+        *stage.output = std::move(*code);
     }
     return shaders;
-}
-
-// An sRGB theme colour as the linear clear colour of an sRGB target.
-std::array<float, 4> linearColor(ith::ThemeColor color) {
-    const auto channel = [](std::uint32_t value) {
-        const float encoded = static_cast<float>(value & 0xFFu) / 255.0f;
-        return encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
-    };
-    return {channel(color.rgb >> 16), channel(color.rgb >> 8), channel(color.rgb),
-            static_cast<float>(color.alpha) / 255.0f};
 }
 
 // Where the UI draws: the window's swapchain, or an offscreen texture of the window's size when the
@@ -324,9 +341,10 @@ private:
     ith::rg::ImportedState m_state;
 };
 
-// Renders the UI's last frame. Returns false when the device is lost or the frame failed.
+// Renders the UI's last frame, after the viewports' scene passes in the same graph. Returns false
+// when the device is lost or the frame failed.
 bool render(ith::rhi::Device& device, RenderTarget& target, ith::rg::RenderGraph& graph, ith::rg::ResourcePool& pool,
-            ith::EditorUi& ui) {
+            ith::EditorUi& ui, ith::ViewportPanel& viewports) {
     ith::Expected<std::optional<ith::rhi::Frame>, ith::rhi::Error> frame = device.beginFrame(target.swapchain());
     if (!frame) {
         std::fprintf(stderr, "ironthorn_editor: %s\n", frame.error().toString().c_str());
@@ -340,7 +358,9 @@ bool render(ith::rhi::Device& device, RenderTarget& target, ith::rg::RenderGraph
     const ith::rg::Texture texture = target.import(graph, **frame);
     ith::Expected<void, ith::rhi::Error> executed;
     if (!texture.isNull()) {
-        ui.addRenderPasses(graph, texture, (*frame)->slot, ith::rhi::LoadOp::Clear, linearColor(ui.theme().background));
+        viewports.addRenderPasses(graph);
+        ui.addRenderPasses(graph, texture, (*frame)->slot, ith::rhi::LoadOp::Clear,
+                           ith::linearColor(ui.theme().background));
         graph.compile();
         executed = graph.execute(pool);
     }
@@ -388,6 +408,19 @@ void applyInput(const ith::Input& input, ith::Window& window) {
         } else {
             static_cast<void>(window.startTextInput());
         }
+    }
+}
+
+// Ends the session at exit: a save still writing finishes (ADR-0037 rule 16), what the user arranged
+// since the last read-back goes into the session layout, the open level's viewport cameras are
+// remembered for the next session (ADR-0042 rule 4), and the session's warnings are printed.
+void finishSession(ith::EditorSession& session, ith::DockLayout& dock) {
+    session.waitIdle();
+    dock.readBack();
+    session.layouts().saveSession();
+    session.saveViewports();
+    for (const ith::Error& warning : session.takeWarnings()) {
+        warn(warning);
     }
 }
 
@@ -464,7 +497,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
 
     ith::rhi::Device device = createEditorDevice(options);
     const ith::rhi::Capabilities& capabilities = device.capabilities();
-    ith::Expected<UiShaders> shaders = compileUiShaders(capabilities.shaderFormat);
+    ith::Expected<EditorShaders> shaders = compileEditorShaders(capabilities.shaderFormat);
     if (!shaders) {
         return fail(shaders.error());
     }
@@ -490,8 +523,8 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     ith::Expected<std::unique_ptr<ith::EditorUi>> created =
         ith::EditorUi::create({.device = &device,
                                .targetFormat = kTargetFormat,
-                               .vertexShader = shaders->vertex,
-                               .pixelShader = shaders->pixel,
+                               .vertexShader = shaders->uiVertex,
+                               .pixelShader = shaders->uiPixel,
                                .fontDirectory = fonts,
                                .input = &input,
                                .window = window.id(),
@@ -504,6 +537,18 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         return fail(created.error());
     }
     ith::EditorUi& ui = **created;
+    ith::Expected<std::unique_ptr<ith::ViewportPanel>> viewportPanel =
+        ith::ViewportPanel::create(session, ui, device,
+                                   {.shapesVertex = shaders->shapesVertex,
+                                    .shapesPixel = shaders->shapesPixel,
+                                    .gridVertex = shaders->gridVertex,
+                                    .gridPixel = shaders->gridPixel});
+    if (!viewportPanel) {
+        created->reset();
+        input.removeConsumer(viewportConsumer);
+        input.removeConsumer(shortcutConsumer);
+        return fail(viewportPanel.error());
+    }
 
     // The Output Log shows the log from here on; the dock space restores the last session's layout,
     // or the default one (ADR-0040 rule 16), once the panels are registered.
@@ -513,6 +558,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         warn(sinkAdded.error());
     }
     // Registered in the Window menu's order (ADR-0040 rule 3); the Outliner is also the Rename prompt.
+    ith::registerViewport(session.panels(), **viewportPanel);
     ith::OutlinerPanel outliner(session);
     ith::registerOutliner(session, outliner);
     ith::DetailsPanel details(session);
@@ -569,9 +615,10 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
                      .pixelSize = window.pixelSize(),
                      .deltaSeconds = deltaSeconds,
                      .focused = input.focusedWindow() == window.id()});
+        (*viewportPanel)->newFrame();
         ith::drawEditorShell(session, keymap, shell, dock);
         ui.endFrame();
-        if (!render(device, target, graph, pool, ui)) {
+        if (!render(device, target, graph, pool, ui, **viewportPanel)) {
             status = 1;
             break;
         }
@@ -593,16 +640,13 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         }
         ITH_PROFILE_FRAME();
     }
-    // A save still writing finishes before the editor goes (ADR-0037 rule 16).
-    session.waitIdle();
-    // What the user arranged since the last read-back goes into the session layout.
-    dock.readBack();
-    session.layouts().saveSession();
-    // The open level's viewport cameras are remembered for the next session (ADR-0042 rule 4).
-    session.saveViewports();
-    for (const ith::Error& warning : session.takeWarnings()) {
-        warn(warning);
-    }
+    finishSession(session, dock);
+    // A graph whose execution failed still holds the passes; the last UI frame may not have been
+    // rendered (minimized, failed), leaving the UI in its graph-import phase. Both are closed before
+    // the viewport's targets, user textures of the UI, go first.
+    graph.reset();
+    ui.abandonFrame();
+    viewportPanel->reset();
     created->reset();
     input.removeConsumer(viewportConsumer);
     input.removeConsumer(shortcutConsumer);

@@ -11,8 +11,10 @@
 // or F2 renames in place (Enter or leaving the field keeps the name, Esc drops it), dragging a row
 // drops the selection before, after or inside another row, or below the rows to make them the last
 // roots (OutlinerModel::zoneAt), and a click on the empty space clears the selection. Entities that
-// are disabled, or below a disabled one, are dimmed. Every change runs a command through the model;
-// a refused one is logged.
+// are disabled, or below a disabled one, are dimmed. A right click opens the context menu, whose Add
+// Shape submenu (Cube, Sphere, Plane, Cylinder) runs ith.entity.create with addShapeArgs
+// (AddShape.h): the shape 2 m in front of the camera of ith.viewport.1, resting on the ground,
+// selected. Every change runs a command through the model; a refused one is logged.
 
 #include "ith/editor_core/OutlinerModel.h"
 #include "ith/editor_ui/EditorUi.h"
@@ -49,6 +51,7 @@ public:
 
 private:
     void drawRow(std::size_t rowIndex);
+    void drawContextMenu();
     void drawRename(const OutlinerEntry& entry);
     void drawNode(const TreeRow& row, const OutlinerEntry& entry);
     void dragAndDrop(const OutlinerEntry& entry);

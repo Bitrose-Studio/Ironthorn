@@ -312,6 +312,7 @@ InputReply UiPlatformBackend::onInputEvent(const Event& event) {
             return InputReply::Consumed;
         }
         case EventType::MouseMoved:
+            m_lastMouse = Vec2{event.x, event.y};
             // A held viewport drag is the viewport's alone: ImGui neither sees nor takes its motion.
             if (viewportDragHeld()) {
                 return InputReply::NotConsumed;
@@ -321,6 +322,7 @@ InputReply UiPlatformBackend::onInputEvent(const Event& event) {
         case EventType::MouseButtonDown:
         case EventType::MouseButtonUp: {
             const bool down = event.type == EventType::MouseButtonDown;
+            m_lastMouse = Vec2{event.x, event.y};
             // Presses during a held viewport drag are the viewport's; every release still reaches
             // ImGui, which saw the drag's own press before the drag began.
             if (down && viewportDragHeld()) {
@@ -372,6 +374,13 @@ void UiPlatformBackend::newFrame(const UiFrameInput& frame) {
     const bool mouseHidden = captured || viewportDragHeld();
     if (mouseHidden && !m_mouseHidden) {
         io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
+    } else if (!mouseHidden && m_mouseHidden) {
+        // The mouse shows again where it is, or where an ended fly puts it back below, so hover
+        // (a viewport image's too) follows it before it next moves.
+        const std::optional<Vec2> at = m_flyStart.has_value() ? m_flyStart : m_lastMouse;
+        if (at.has_value()) {
+            io.AddMousePosEvent(at->x / m_pixelsPerUnitX, at->y / m_pixelsPerUnitY);
+        }
     }
     m_mouseHidden = mouseHidden;
 

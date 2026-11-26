@@ -102,14 +102,16 @@ reaches it to ImGui, and consumes:
   end of the frame that activates it, so the focus follows at once;
 - **mouse presses, motion and the wheel while ImGui wants the mouse** (the pointer is over an ImGui
   window, or a drag started in one). Over the empty dock space the events go on to the consumers
-  below. So do the mouse events over a viewport image, by the rectangles the panels reported last
-  frame, while no ImGui popup is open: ImGui sees them but leaves them to the viewport consumer
-  (`EditorUiDesc::viewports`, ADR-0042 rule 9).
+  below. So do the mouse events over a hovered viewport image, by the rectangles and hover the
+  panels reported last frame ([Viewport](#viewport)), while no ImGui popup is open: ImGui sees them
+  but leaves them to the viewport consumer (`EditorUiDesc::viewports`, ADR-0042 rule 9).
 
 While the viewport consumer holds a drag, its presses, motion and wheel are the viewport's alone:
 ImGui neither sees nor takes them and is told the mouse is gone, so a camera drag that leaves the
 image keeps going and never clicks, hovers or scrolls another panel. Releases still reach ImGui
-(without a position), since it saw the drag's own press before the drag began.
+(without a position), since it saw the drag's own press before the drag began. When the drag ends,
+ImGui gets the mouse's last position back (for a fly, the press position the cursor is warped to),
+so hover follows the cursor before it next moves.
 
 The want-capture flags come from the previous ImGui frame, because routing runs before
 `NewFrame`. While the mouse is captured (Play In Editor), ImGui is told the mouse is gone. Editor
@@ -185,7 +187,11 @@ safe: the pending graph still samples the original texture, and its slot is not 
 next `endFrame()`. Before destroying the `EditorUi`, execute or reset every graph that holds its
 passes or user-texture imports, since those graphs point at state the `EditorUi` owns.
 
-`newFrame`, `endFrame`, `registerUserTexture`, `unregisterUserTexture`, `importUserTexture` and
+A frame that won't be rendered after `endFrame()` (the device had no frame, the target couldn't be
+imported, rendering failed, or the editor exits) leaves the import phase open, which refuses
+registrations; `abandonFrame()` closes it. The next `newFrame()` closes it too.
+
+`newFrame`, `endFrame`, `abandonFrame`, `registerUserTexture`, `unregisterUserTexture`, `importUserTexture` and
 `addRenderPasses` assert that they run on the thread that created the `EditorUi`.
 
 Normally the owner unregisters after every participating graph has executed and before
@@ -275,10 +281,11 @@ ith::DetailsPanel details(session);
 ith::registerDetails(session.panels(), details); // "ith.details"
 ith::OutputLog log(history, ui.theme());
 ith::registerOutputLog(session.panels(), log);   // "ith.output_log"
+ith::registerViewport(session.panels(), **viewport); // "ith.viewport", instances 1 to 4
 ```
 
-A change a panel can't make (a refused command) goes to the log, in the category `Outliner` or
-`Details`.
+A change a panel can't make (a refused command) goes to the log, in the category `Outliner`,
+`Details` or `Viewport`.
 
 ### Outliner
 
@@ -297,6 +304,7 @@ matches are dimmed.
 | Double click, or F2 | Rename in place: Enter or leaving the field keeps the name, Esc drops it |
 | Drag a row | Drop before or after another row (its top or bottom quarter), inside it (the middle), or on the empty space below the rows (the end of the roots); a line or frame shows where |
 | Click the empty space | Select None |
+| Right click | The context menu: Add Shape (see [Viewport](#viewport)) |
 
 F2 reaches the Outliner through the rename command's prompt: the keymap and the Edit menu
 *invoke* `ith.edit.rename`, and `registerOutliner` makes the prompt start renaming the primary
@@ -341,6 +349,129 @@ boxes, pickers and text fields set their value with one command each.
 **Multi-select.** Values that differ between the selected entities show "Multiple Values"; an edit
 writes the same value to all of them.
 
+### Viewport
+
+`ViewportPanel` (`ViewportPanel.h`) draws the editor world from editor core's `Viewports` store
+([editor core](editor-core.md#viewports)), as [ADR-0042](../decisions/0042-editor-viewport.md)
+rules 8 and 13 to 20 decide. It is the panel `ith.viewport`, instances `ith.viewport.1` to
+`ith.viewport.4`, docked in the centre; the engine's `Default.json` opens instance 1 in the central
+stack.
+
+```cpp
+// at start-up, after EditorUi::create; the shaders are compiled by the application
+auto viewport = ith::ViewportPanel::create(session, ui, device,
+    {.shapesVertex = shapesVertex, .shapesPixel = shapesPixel,
+     .gridVertex = gridVertex, .gridPixel = gridPixel});
+ith::registerViewport(session.panels(), **viewport);
+
+// every frame, after ui.newFrame(), before the panels draw:
+(*viewport)->newFrame();               // releases the targets of hidden viewports
+// after ui.endFrame() and device.beginFrame():
+graph.reset();
+const ith::rg::Texture target = graph.importBackbuffer(frame);
+(*viewport)->addRenderPasses(graph);   // the scene passes, before the UI's
+ui.addRenderPasses(graph, target, frame.slot, ith::rhi::LoadOp::Clear, clearColor);
+```
+
+Destroy the panel before the `EditorUi`: its targets are user textures of the UI. Its destructor,
+`newFrame()` and `draw()` register and unregister targets, so they run outside the UI's
+graph-import phase; when the last frame wasn't rendered (a minimized window, a failed frame),
+`EditorUi::abandonFrame()` closes that phase first. After a graph with the panel's passes fails to
+execute, `invalidate()` makes every instance render again. The shell must not draw the panel after
+it is destroyed.
+
+**Targets.** Each open instance owns a colour target, `R8G8B8A8Srgb` with `RenderTarget | Sampled`,
+the size of its image in pixels (the image's size in window coordinates times the framebuffer
+scale; each side at most the device's `maxTextureDimension2D`, with one warning when the image
+is larger). It is registered as a [user texture](#user-textures) and shown with an image under an
+invisible button. When the size changes, the panel unregisters the old target, destroys it (the
+device defers that until the GPU is done) and creates a new one, during its draw, never in the
+import phase. A target that can't be created is logged once and tried again only at another size.
+An image without area has no target and adds no passes. The depth target, `D32Float` cleared to
+0, is a render graph transient of the same size. An instance not drawn in a frame (a
+hidden tab, a closed panel) releases its target at the start of the next frame, in
+`ViewportPanel::newFrame()`, outside the import phase; shown again, it gets a new target and
+renders once.
+
+**Passes.** `addRenderPasses()` adds two raster passes per instance that must render, on the
+colour target's one import from `EditorUi::importUserTexture()`, so the `EditorUi` pass that shows
+the image reads after them:
+
+- `ViewportShapes` clears colour (the theme's `viewportBackground`) and depth, then draws every
+  enabled entity with a `ShapeRenderer` and a `WorldTransform`, one draw each. The four unit meshes
+  are in one upload buffer, written once at creation, the indices already offset to each shape's
+  first vertex. Each draw's push constants (128 bytes) carry the clip matrix, the local-to-view
+  3x3 for the normals and the colour. Shading is unlit with a fixed light from the camera, a little
+  above and to the left, so the faces of a box differ. Selected entities are mixed halfway toward
+  the theme's `viewportSelection`. Depth is reversed (greater-equal). Nothing is culled, so a
+  mirrored shape (a negative scale) draws, its normals flipped by the sign of its determinant.
+- `ViewportGrid` draws the grid as one fullscreen triangle. Each pixel casts its view ray at
+  y = 0 and writes the hit's depth, so the grid is depth-tested against the shapes. It has minor
+  lines every metre and major lines every 10 m; the X axis (z = 0) and the Z axis (x = 0) have
+  their own colours. The minor lines fade where they get denser than a few pixels, and everything
+  fades out at 50 m plus 10 times the camera's height. The colours are the theme's `gridMinor`,
+  `gridMajor`, `gridAxisX` and `gridAxisZ`.
+
+Rendering is camera-relative ([ADR-0006](../decisions/0006-math-and-coordinate-conventions.md)
+rule 7): the camera's position is subtracted from every world matrix on the CPU. Game view
+(`ith.viewport.game_view`) draws neither the grid nor the tint. Once per graph, before the first
+draw list, the panel runs `propagateTransforms` on the editor world. That writes only the Transient
+`WorldTransform`, so the history and the dirty state stay as they were.
+
+**The redraw rule** (ADR-0042 rule 16). An instance renders only when something it shows changed
+since its last render:
+
+- the camera's position, yaw, pitch or field of view (not its speed step or pivot);
+- the entities, their values or the open level (`EditorChanges`);
+- the selection, except in game view, which doesn't show it;
+- its target's size;
+- the game-view flag.
+
+Otherwise it adds no passes and the image shows the last render. The UI around it still follows
+the [idle policy](#idle-policy).
+
+**Input contract.** Every frame an instance draws, it reports its image to its `ViewportState`:
+
+- `imagePosition` and `imageSize` in window pixels (ImGui coordinates times the framebuffer scale,
+  the units of mouse events);
+- `imageHovered`, which is ImGui's `IsItemHovered` on the invisible button: false while a floating
+  panel or a popup lies over the image.
+
+`addRenderPasses()` gives an instance that wasn't drawn that frame (a hidden tab, a closed panel) a
+zero size and no hover. The viewport consumer and the platform backend route mouse input to an
+image only while it is hovered, or while a drag that started on it is held. The invisible button
+keeps an LMB drag on the image from moving a floating window. When a held drag ends, the platform
+backend gives ImGui the mouse's position back, so the image is hovered again without a move.
+
+**Toolbar.** Above the image, every control runs a command and changes nothing itself:
+
+| Control | Command |
+|---|---|
+| Translate, Rotate, Scale | `ith.viewport.translate_tool`, `rotate_tool`, `scale_tool` |
+| Snap, and the step (0.01 to 1 m) | `ith.viewport.set_snap` with `enabled` or `step` |
+| World / Local | `ith.viewport.toggle_gizmo_space` |
+| Game View | `ith.viewport.game_view` with the instance as `viewport` |
+| Speed *n* | shows the camera's fly speed step (the wheel with RMB held changes it) |
+
+A refused command is logged in the category `Viewport`.
+
+**Add Shape.** The Outliner's context menu (a right click in its rows) has **Add Shape**, with
+Cube, Sphere, Plane and Cylinder. Each runs `ith.entity.create` with the arguments of
+`addShapeArgs(shape, camera)` ([editor core](editor-core.md), `AddShape.h`, with the shapes and
+their names in `kShapeChoices`):
+
+- the shape's name as the label;
+- a `ShapeRenderer` of the default colour;
+- a `LocalTransform` 2 m in front of the camera of `ith.viewport.1`, along its view direction,
+  lifted or lowered so the shape's bottom rests on y = 0.
+
+The new entity becomes the selection, and the next frame draws it.
+
+**Shaders.** `Shapes.slang` and `Grid.slang` in `editor_ui/shaders` are compiled into the module as
+text (`ViewportShaders.h`: `viewportShapesShaderSource()`, `viewportGridShaderSource()`, the entry
+points and the push-constant sizes) and compiled by the application at start-up. They have no
+variants.
+
 ## Tests of the panels
 
 `tests/editor_ui/PanelTests.cpp` draws the Outliner and Details in fixed windows on the null
@@ -364,7 +495,8 @@ It creates the platform window, the job system (whose main-thread wake ends the 
 RHI device and the window's swapchain, the configuration layers (engine `<exe>/Config` and its
 platform folder, project `<project>/Config` and its platform folder, and the user layer:
 `--user-dir`, else `Ironthorn/Editor` in the user's configuration folder), an `EditorSession`
-of the project, the keymap, the UI and the Outliner, Details and Output Log panels, then runs the
+of the project, the keymap, the UI and the Viewport, Outliner, Details and Output Log panels (the
+UI and viewport shaders compiled from Slang for the device at start-up), then runs the
 loop of ADR-0035 rule 22: events (waiting while idle), main-thread jobs, input routing, the UI
 frame, rendering. Where the window has no native handle (SDL's `offscreen` driver) it draws into an offscreen texture; where no GPU device
 can be created it renders on the null device. Closing the window quits after a running save has
@@ -387,7 +519,14 @@ passed and 1 when it failed.
   upload buffer growth, scissor clamping, recorded commands, user textures and their shared
   scene/UI graph imports, stale-id handling, released GPU objects); the theme and fonts; the
   shell's menus, chords and status; the icons against `codepoints.json`; the shader source; the
-  idle policy.
+  idle policy; the Viewport panel (`ViewportPanelTests.cpp`: registration and the default layout's
+  central stack, the colour target and its user texture following the image's size at framebuffer
+  scales 1 and 2, the redraw rule over ten idle frames and after each kind of change, no passes
+  without area, the rectangle in window pixels, a zero rectangle while hidden and the target
+  released the frame after, no hover under a floating window and hover back after a drag, disabled
+  and mirrored shapes, two viewports in one graph, a clamped oversize target with one warning,
+  teardown after an unrendered frame, the toolbar, and Add Shape from the Outliner's context menu,
+  drawn by the next frame).
 - `editor_automation_null` and `editor_automation_gpu` (label `sample`, the second also `gpu`):
   `ironthorn_editor` on SDL's offscreen driver runs `tests/editor/open_edit_save_reopen.json` in a
   fresh project - create, rename, attach, undo, redo, save, new level, open, query - on the null
@@ -405,12 +544,19 @@ passed and 1 when it failed.
   Linux container with Ubuntu 24.04's `mesa-vulkan-drivers` for lavapipe. A backend without its
   software device reports itself skipped. Separate user-texture tests on WARP and lavapipe clear a
   registered texture to a known colour in a scene pass, draw it with `ImGui::Image`, and check every
-  readback pixel; they need no golden file.
+  readback pixel; they need no golden file. A second golden image shows the Viewport panel, 640 x
+  400, with a red cube and a blue sphere on the grid from a pinned camera
+  (`golden/viewport_d3d12.ppm`, `golden/viewport_vulkan.ppm`), every shader compiled at run time.
+  A test on each backend also resizes the viewport and hides it across frames, so its targets are
+  destroyed and recreated under the debug layers, and must end on that golden image. The helpers of
+  the golden tests are in `GoldenImage.h`.
 - `imgui_confined` and `imgui_confined_refuses_imgui_outside_editor_ui` (label `lint`).
 
 ## Not here yet
 
-- The Content Browser, toolbar and viewport (later P2 steps); asset pickers in Details.
-- A shader cache for the UI shader (with the shader cache of ADR-0011 rule 8).
+- The Content Browser and the main toolbar (later P2 steps); asset pickers in Details.
+- In the viewport: picking, the translate gizmo and the selection outline (ADR-0042 rules 21 to
+  26); the active viewport for Add Shape is always `ith.viewport.1`.
+- A shader cache for the UI and viewport shaders (with the shader cache of ADR-0011 rule 8).
 - File dialogs, and a Quit command with the Save / Don't Save / Cancel dialog.
 - Right-to-left and complex scripts, which ImGui can't shape (P4 brings shaped text).
