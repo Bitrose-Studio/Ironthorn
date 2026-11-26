@@ -1,6 +1,7 @@
 # ADR-0007: Logging and profiling
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0044](0044-gpu-profiling-zones.md)
 - **Date:** 2026-11-20
 - **Related:** [ADR-0001](0001-cpp-language-and-safety-rules.md) (no exceptions, no RTTI, asserts),
   [ADR-0004](0004-modules-and-layering.md) (foundation holds logging and profiling hooks; no

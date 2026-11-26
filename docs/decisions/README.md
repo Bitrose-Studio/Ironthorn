@@ -11,9 +11,9 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0004](0004-modules-and-layering.md) | Engine modules and layering | Accepted |
 | [0005](0005-reference-hardware.md) | Reference hardware for scalability tiers | Accepted, amended by [0022](0022-gpu-minimum-features-completed.md) |
 | [0006](0006-math-and-coordinate-conventions.md) | Math library and coordinate conventions | Accepted |
-| [0007](0007-logging-and-profiling.md) | Logging and profiling | Accepted |
+| [0007](0007-logging-and-profiling.md) | Logging and profiling | Accepted, amended by [0044](0044-gpu-profiling-zones.md) |
 | [0008](0008-editor-familiar-to-unreal-developers.md) | An editor familiar to Unreal Engine developers | Accepted, amended by [0037](0037-editor-commands-transactions-selection-and-automation.md) |
-| [0009](0009-rhi.md) | Rendering hardware interface over Vulkan and Direct3D 12 | Accepted, amended by [0021](0021-rhi-device-structure-and-backend-modules.md) |
+| [0009](0009-rhi.md) | Rendering hardware interface over Vulkan and Direct3D 12 | Accepted, amended by [0021](0021-rhi-device-structure-and-backend-modules.md), [0044](0044-gpu-profiling-zones.md) |
 | [0010](0010-serialization.md) | Serialization formats and versioning | Accepted, amended by [0020](0020-serialization-rules-completed.md) |
 | [0011](0011-shader-language-and-pipeline.md) | Shader language and pipeline | Accepted, amended by [0023](0023-build-time-shaders-for-samples-and-tests.md) |
 | [0012](0012-windowing-and-event-loop.md) | Windowing and the platform event loop | Accepted, amended by [0025](0025-job-system.md), [0027](0027-input-rules-completed.md) |
@@ -48,6 +48,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0041](0041-editor-amendments-after-outliner-and-details.md) | Editor amendments after the Outliner and Details (amends 0035, 0037) | Accepted |
 | [0042](0042-editor-viewport.md) | Editor world and viewport (amends 0029, 0037) | Accepted, amended by [0043](0043-editor-ui-user-texture-state.md) |
 | [0043](0043-editor-ui-user-texture-state.md) | Editor UI user textures: the renderer owns the import state (amends 0042) | Accepted |
+| [0044](0044-gpu-profiling-zones.md) | GPU profiling zones (amends 0007, 0009) | Accepted |
 
 ## Planned
 
