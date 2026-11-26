@@ -12,11 +12,12 @@
 
 #include "ith/rhi_vulkan/VulkanDevice.h"
 
-// The backend's SPIR-V check is internal; its tests need no GPU.
+// The backend's SPIR-V check and GPU timing choice are internal; their tests need no GPU.
 #include "ith/rhi/CommandList.h"
 #include "ith/rhi/Device.h"
 #include "ith/rhi_select/CreateDevice.h"
 #include "ith/rhi_vulkan/SpirvCheck.h"
+#include "ith/rhi_vulkan/VulkanGpuTiming.h"
 
 #ifdef ITH_TEST_HAS_SHADER_COMPILER
 #include "ith/shader_compiler/ShaderCompiler.h"
@@ -417,6 +418,238 @@ TEST_SUITE("rhi_vulkan.frames") {
         }
         CHECK(device->frameNumber() == 20);
         REQUIRE(device->waitIdle().hasValue());
+    }
+}
+
+namespace {
+
+#ifdef ITH_ENABLE_PROFILING
+constexpr bool kProfiling = true;
+#else
+constexpr bool kProfiling = false;
+#endif
+
+// Whether GPU zones are active without a viewer (IRONTHORN_PROFILING_ON_DEMAND off), so that they
+// write timestamps in these tests.
+#if defined(ITH_ENABLE_PROFILING) && !defined(TRACY_ON_DEMAND)
+constexpr bool kZonesActive = true;
+#else
+constexpr bool kZonesActive = false;
+#endif
+
+// Frames with GPU zones: nested, around and inside rendering, and one in a list that is discarded
+// and never runs; the last frame reads back a cleared target, which the zones must not change.
+// The zones and the collection at each endFrame() must leave the commands and the validation
+// layer alone. They write timestamps only where zones are active (kZonesActive, or a viewer).
+void recordZoneFrames(Device& device) {
+    const TextureHandle target = makeTexture(device, targetDesc());
+    const BufferHandle readback = makeBuffer(device, BufferUsage::CopyDst, MemoryType::Readback, 1024);
+    constexpr int kFrames = 4;
+    for (int frame = 0; frame < kFrames; ++frame) {
+        if (!beginFrame(device)) {
+            return;
+        }
+        // In the last frame: it turns the device's GPU zones off where they are active.
+        if (frame + 1 == kFrames) {
+            CommandList& discarded = device.openCommandList("Discarded");
+            discarded.beginGpuZone("Never runs");
+            discarded.endGpuZone();
+            device.discard(discarded);
+        }
+
+        CommandList& list = device.openCommandList("Zones");
+        list.beginGpuZone("Frame");
+        list.beginGpuZone("Clear");
+        TextureBarrier toTarget = toRenderTarget(target);
+        if (frame > 0) {
+            // After the previous frame's clear.
+            toTarget.stagesBefore = PipelineStage::ColorOutput;
+            toTarget.accessBefore = Access::RenderTargetWrite;
+        }
+        list.barrier(toTarget);
+        const std::array colors{ColorAttachment{.texture = target, .clearColor = {0.25f, 0.5f, 0.75f, 1.0f}}};
+        list.beginRendering({.colors = colors});
+        list.beginGpuZone("Inside rendering");
+        list.endGpuZone();
+        list.endRendering();
+        list.endGpuZone();
+        if (frame + 1 == kFrames) {
+            list.beginGpuZone("Read back");
+            readBack(list, target, readback);
+            list.endGpuZone();
+        }
+        list.endGpuZone();
+        REQUIRE(device.submit(list).hasValue());
+        REQUIRE(device.endFrame().hasValue());
+    }
+    REQUIRE(device.waitIdle().hasValue());
+    const std::span<const std::byte> pixels = device.mappedMemory(readback);
+    for (std::uint32_t y = 0; y < 4; ++y) {
+        for (std::uint32_t x = 0; x < 4; ++x) {
+            checkTexel(pixels, x, y, {64, 128, 191, 255});
+        }
+    }
+}
+
+// 70 frames of 512 zones: 71,680 queries where zones are active, more than Tracy's pool holds.
+void recordManyZones(Device& device) {
+    constexpr int kFrames = 70;
+    constexpr int kZonesPerFrame = 512;
+    for (int frame = 0; frame < kFrames; ++frame) {
+        if (!beginFrame(device)) {
+            return;
+        }
+        CommandList& list = device.openCommandList("Many zones");
+        for (int zone = 0; zone < kZonesPerFrame; ++zone) {
+            list.beginGpuZone("Zone");
+            list.endGpuZone();
+        }
+        REQUIRE(device.submit(list).hasValue());
+        REQUIRE(device.endFrame().hasValue());
+    }
+    REQUIRE(device.waitIdle().hasValue());
+}
+
+const char* timingName(VulkanGpuTiming timing) {
+    switch (timing) {
+        case VulkanGpuTiming::Off:
+            return "off";
+        case VulkanGpuTiming::Calibrated:
+            return "calibrated";
+        case VulkanGpuTiming::Uncalibrated:
+            return "uncalibrated";
+    }
+    return "?";
+}
+
+} // namespace
+
+TEST_SUITE("rhi_vulkan.profiling") {
+    TEST_CASE("GPU zones are calibrated only with the extension, a host clock and host query reset") {
+        using ith::rhi::vulkan::chooseGpuTiming;
+        using ith::rhi::vulkan::GpuTimingSupport;
+        constexpr GpuTimingSupport kEverything{
+            .timestamps = true, .hostQueryReset = true, .calibratedTimestamps = true, .hostTimeDomain = true};
+        static_assert(chooseGpuTiming(kEverything) == VulkanGpuTiming::Calibrated);
+
+        GpuTimingSupport support = kEverything;
+        support.hostTimeDomain = false; // the extension without the host's clock
+        CHECK(chooseGpuTiming(support) == VulkanGpuTiming::Uncalibrated);
+        support = kEverything;
+        support.calibratedTimestamps = false; // no extension, or only VK_KHR_calibrated_timestamps
+        support.hostTimeDomain = false;
+        CHECK(chooseGpuTiming(support) == VulkanGpuTiming::Uncalibrated);
+        support = kEverything;
+        support.hostQueryReset = false; // the calibrated context resets its queries from the host once
+        CHECK(chooseGpuTiming(support) == VulkanGpuTiming::Uncalibrated);
+        support = GpuTimingSupport{.timestamps = true};
+        CHECK(chooseGpuTiming(support) == VulkanGpuTiming::Uncalibrated);
+        support = kEverything;
+        support.timestamps = false;
+        CHECK(chooseGpuTiming(support) == VulkanGpuTiming::Off);
+        CHECK(chooseGpuTiming({}) == VulkanGpuTiming::Off);
+    }
+
+    TEST_CASE("GPU zones over frames leave the commands' results and the validation layer alone") {
+        std::optional<Device> device = makeDevice();
+        if (!device) {
+            return;
+        }
+        const VulkanGpuTiming timing = vulkanGpuTimingForTesting(*device);
+        MESSAGE("GPU zones on " << device->capabilities().adapter.name << ": " << std::string(timingName(timing)));
+        if (!kProfiling) {
+            CHECK(timing == VulkanGpuTiming::Off);
+        }
+        recordZoneFrames(*device);
+    }
+
+    TEST_CASE("a device whose calibrated timestamps are avoided times GPU zones uncalibrated") {
+        avoidCalibratedVulkanGpuTimingForTesting(true);
+        std::optional<Device> device = makeDevice();
+        avoidCalibratedVulkanGpuTimingForTesting(false);
+        if (!device) {
+            return;
+        }
+        // Not calibrated; uncalibrated on every device the suite runs on (desktop drivers,
+        // lavapipe), which writes one timestamp on the queue at creation.
+        const VulkanGpuTiming timing = vulkanGpuTimingForTesting(*device);
+        MESSAGE("GPU zones with calibration avoided: " << std::string(timingName(timing)));
+        CHECK(timing != VulkanGpuTiming::Calibrated);
+        if (!kProfiling) {
+            CHECK(timing == VulkanGpuTiming::Off);
+        }
+        recordZoneFrames(*device);
+    }
+
+    // A list with zones that never runs leaves queries unwritten. Tracy collects them in order and
+    // would wait for them for good, and once its 65,536 queries had wrapped around, zones would
+    // write queries that were never reset (VUID-vkCmdWriteTimestamp-None-00830), which validation
+    // reports. The backend turns GPU zones off for the device instead (said once on stderr). Where
+    // zones are active, each case drops a list with zones and then records 71,680 queries' worth;
+    // elsewhere it checks that nothing changes.
+    TEST_CASE("zones of a discarded list that isn't the first one turn the device's GPU zones off") {
+        std::optional<Device> device = makeDevice();
+        if (!device) {
+            return;
+        }
+        MESSAGE("zones active without a viewer: " << std::string(kZonesActive ? "yes" : "no"));
+        if (!beginFrame(*device)) {
+            return;
+        }
+        CommandList& first = device->openCommandList("Runs");
+        CommandList& second = device->openCommandList("Never runs"); // the second list of its pool
+        first.beginGpuZone("Runs");
+        first.endGpuZone();
+        second.beginGpuZone("Dropped");
+        second.endGpuZone();
+        CHECK_FALSE(vulkanGpuZonesDisabledForTesting(*device));
+        device->discard(second);
+        CHECK(vulkanGpuZonesDisabledForTesting(*device) == kZonesActive);
+        REQUIRE(device->submit(first).hasValue());
+        REQUIRE(device->endFrame().hasValue());
+        recordManyZones(*device);
+        CHECK(vulkanGpuZonesDisabledForTesting(*device) == kZonesActive);
+    }
+
+    TEST_CASE("zones of a list whose submission failed turn the device's GPU zones off") {
+        std::optional<Device> device = makeDevice();
+        if (!device) {
+            return;
+        }
+        if (!beginFrame(*device)) {
+            return;
+        }
+        CommandList& list = device->openCommandList("Submission fails");
+        list.beginGpuZone("Never runs");
+        list.endGpuZone();
+        failNextVulkanSubmitForTesting(*device, true);
+        const Expected<void, Error> submitted = device->submit(list);
+        REQUIRE_FALSE(submitted.hasValue());
+        CHECK(submitted.error().code == ErrorCode::OutOfMemory);
+        CHECK_FALSE(device->isLost());
+        CHECK(vulkanGpuZonesDisabledForTesting(*device) == kZonesActive);
+        REQUIRE(device->endFrame().hasValue());
+        recordManyZones(*device);
+    }
+
+    // A list still open at endFrame() (asserted) may still be recording on another thread, so the
+    // backend turns GPU zones off without looking at what it recorded, viewer or not.
+    TEST_CASE("a list endFrame() finds still open turns the device's GPU zones off") {
+        std::optional<Device> device = makeDevice();
+        if (!device) {
+            return;
+        }
+        const bool profiled = vulkanGpuTimingForTesting(*device) != VulkanGpuTiming::Off;
+        if (!beginFrame(*device)) {
+            return;
+        }
+        static_cast<void>(device->openCommandList("Left open"));
+        {
+            const ith::test::AssertCapture capture;
+            REQUIRE(device->endFrame().hasValue());
+        }
+        CHECK(vulkanGpuZonesDisabledForTesting(*device) == profiled);
+        recordManyZones(*device);
     }
 }
 

@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <ostream> // doctest prints std::string_view operands through it
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -26,6 +27,13 @@ using ith::rhi::test::makeGraphicsPipeline;
 using ith::rhi::test::makeTexture;
 
 namespace {
+
+// Whether GPU zones are compiled in (CommandList::beginGpuZone()).
+#ifdef ITH_ENABLE_PROFILING
+constexpr bool kProfiling = true;
+#else
+constexpr bool kProfiling = false;
+#endif
 
 struct DrawConstants {
     std::uint32_t vertices = 0;
@@ -399,6 +407,70 @@ TEST_SUITE("rhi.command_list_checks") {
         CHECK(device.submit(list).hasValue());
         CHECK(capture.count() == 2);
         endFrame(device);
+    }
+
+    TEST_CASE("GPU zones nest, span rendering and markers, and the null backend records nothing for them") {
+        NullGpu gpu;
+        Device device = makeDevice(gpu);
+        const TextureHandle target = makeTexture(device, TextureUsage::RenderTarget);
+        beginFrame(device);
+        CommandList& list = device.openCommandList("Zones");
+        const ith::test::AssertCapture capture;
+        const std::array colors{ColorAttachment{.texture = target}};
+        list.beginGpuZone("Frame");
+        {
+            const std::string name = "Pass " + std::to_string(3); // a run-time name, gone after the call
+            list.beginGpuZone(name);
+        }
+        list.beginMarker("Marker");
+        list.beginRendering({.colors = colors});
+        list.beginGpuZone("Inside rendering");
+        list.endGpuZone();
+        list.endRendering();
+        list.endGpuZone(); // closes "Pass 3" inside the marker
+        list.endMarker();
+        list.beginGpuZone("");
+        list.endGpuZone();
+        list.endGpuZone();
+        CHECK(capture.count() == 0);
+        CHECK(gpu.commandCount() == 4); // the markers and the rendering
+        REQUIRE(device.submit(list).hasValue());
+        endFrame(device);
+    }
+
+    TEST_CASE("misused GPU zones are asserted and dropped with profiling, and compile to nothing without") {
+        NullGpu gpu;
+        Device device = makeDevice(gpu);
+        beginFrame(device);
+        CommandList& list = device.openCommandList("Misused zones");
+        const ith::test::AssertCapture capture;
+        list.endGpuZone(); // none open
+        for (std::uint32_t depth = 0; depth <= kMaxGpuZoneDepth; ++depth) {
+            list.beginGpuZone("Deep"); // the last one is too deep
+        }
+        CHECK(capture.count() == (kProfiling ? 2 : 0));
+        for (std::uint32_t depth = 0; depth < kMaxGpuZoneDepth; ++depth) {
+            list.endGpuZone(); // the dropped zone needs no end
+        }
+        CHECK(capture.count() == (kProfiling ? 2 : 0));
+        list.beginGpuZone("Left open");
+        CHECK(device.submit(list).hasValue());
+        CHECK(capture.count() == (kProfiling ? 3 : 0));
+        list.beginGpuZone("After submit"); // a closed list
+        CHECK(capture.count() == (kProfiling ? 4 : 0));
+        endFrame(device);
+
+        // A list opened again starts without zones, though the last one was left open.
+        beginFrame(device);
+        CommandList& again = device.openCommandList("Again");
+        again.endGpuZone();
+        CHECK(capture.count() == (kProfiling ? 5 : 0));
+        // Discarding with a zone open asserts too; the list is still discarded.
+        again.beginGpuZone("Open at discard");
+        device.discard(again);
+        CHECK(capture.count() == (kProfiling ? 6 : 0));
+        endFrame(device);
+        CHECK(gpu.commandCount() == 0);
     }
 
     TEST_CASE("offsets and counts that reach past a buffer are asserted and dropped") {

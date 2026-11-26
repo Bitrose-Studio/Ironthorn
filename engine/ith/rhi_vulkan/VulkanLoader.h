@@ -53,6 +53,7 @@ namespace ith::rhi::vulkan {
     X(vkSetDebugUtilsObjectNameEXT)                                                                                    \
     X(vkCmdBeginDebugUtilsLabelEXT)                                                                                    \
     X(vkCmdEndDebugUtilsLabelEXT)                                                                                      \
+    X(vkGetPhysicalDeviceCalibrateableTimeDomainsEXT)                                                                  \
     ITH_VULKAN_SURFACE_FUNCTIONS(X)
 
 // Device functions; those of device extensions are null when the extension isn't enabled.
@@ -95,6 +96,13 @@ namespace ith::rhi::vulkan {
     X(vkAcquireNextImageKHR)                                                                                           \
     X(vkQueuePresentKHR)                                                                                               \
     X(vkGetDeviceFaultInfoEXT)                                                                                         \
+    X(vkGetCalibratedTimestampsEXT)                                                                                    \
+    X(vkCreateQueryPool)                                                                                               \
+    X(vkDestroyQueryPool)                                                                                              \
+    X(vkCmdWriteTimestamp)                                                                                             \
+    X(vkCreateFence)                                                                                                   \
+    X(vkDestroyFence)                                                                                                  \
+    X(vkWaitForFences)                                                                                                 \
     X(vkCmdPipelineBarrier2)                                                                                           \
     X(vkCmdBeginRendering)                                                                                             \
     X(vkCmdEndRendering)                                                                                               \

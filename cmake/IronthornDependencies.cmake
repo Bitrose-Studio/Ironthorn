@@ -127,9 +127,13 @@ if(IRONTHORN_PROFILING)
     add_library(ith::tracy ALIAS ith_tracy)
     # A system include: Tracy's headers don't build cleanly at our warning level (-Wextra-semi).
     target_include_directories(ith_tracy SYSTEM PUBLIC "${tracy_SOURCE_DIR}/public")
+    # IRONTHORN_PROFILING_ON_DEMAND off drops TRACY_ON_DEMAND: zones are then active without a
+    # viewer and their data stays queued in memory, for CI's profiling test runs.
+    if(IRONTHORN_PROFILING_ON_DEMAND)
+        target_compile_definitions(ith_tracy PUBLIC TRACY_ON_DEMAND)
+    endif()
     target_compile_definitions(ith_tracy PUBLIC
         TRACY_ENABLE
-        TRACY_ON_DEMAND
         TRACY_ONLY_LOCALHOST
         TRACY_NO_BROADCAST
         TRACY_NO_CRASH_HANDLER

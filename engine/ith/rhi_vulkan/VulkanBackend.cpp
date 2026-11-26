@@ -7,12 +7,15 @@
 #include "ith/rhi_vulkan/SpirvCheck.h"
 #include "ith/rhi_vulkan/VulkanApi.h"
 #include "ith/rhi_vulkan/VulkanDevice.h"
+#include "ith/rhi_vulkan/VulkanGpuTiming.h"
 #include "ith/rhi_vulkan/VulkanLoader.h"
+#include "ith/rhi_vulkan/VulkanProfiler.h"
 
 #include <vk_mem_alloc.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -47,6 +50,8 @@ constexpr bool kValidationAllowed = false;
 #else
 constexpr bool kValidationAllowed = true;
 #endif
+// Set by avoidCalibratedVulkanGpuTimingForTesting(); read when a device is created.
+std::atomic<bool> g_avoidCalibratedGpuTiming{false};
 
 const char* resultName(VkResult result) {
     switch (result) {
@@ -706,6 +711,21 @@ Expected<void, Error> VulkanBackend::createDevice(const DeviceDesc& /*desc*/) {
     if (m_deviceFault) {
         extensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
     }
+#ifdef ITH_ENABLE_PROFILING
+    // GPU zones (VulkanGpuTiming.h): what they need is enabled in profiling builds only, and only
+    // where the GPU has it, so the minimum is the same in every build.
+    GpuTimingSupport timing =
+        readGpuTimingSupport(m_vk, m_physicalDevice, m_queueFamily, info->features12.hostQueryReset == VK_TRUE,
+                             hasExtension(info->extensions, VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME));
+    if (g_avoidCalibratedGpuTiming.load(std::memory_order_acquire)) {
+        timing.calibratedTimestamps = false;
+    }
+    m_gpuTiming = chooseGpuTiming(timing);
+    if (m_gpuTiming == VulkanGpuTiming::Calibrated) {
+        v12.hostQueryReset = VK_TRUE;
+        extensions.push_back(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+    }
+#endif
     const float priority = 1.0f;
     const VkDeviceQueueCreateInfo queue{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                                         .queueFamilyIndex = m_queueFamily,
@@ -843,6 +863,16 @@ Expected<void, Error> VulkanBackend::initialize(const DeviceDesc& desc) {
     m_samplers.resize(limits.samplers, VK_NULL_HANDLE);
     m_pipelines.resize(limits.pipelines);
     m_swapchains.resize(limits.swapchains);
+#ifdef ITH_ENABLE_PROFILING
+    // Last, with the queue still idle: the uncalibrated path submits to it and waits.
+    m_gpuProfiler.start({.vk = &m_vk,
+                         .instance = m_instance,
+                         .physicalDevice = m_physicalDevice,
+                         .device = m_device,
+                         .queue = m_queue,
+                         .queueFamily = m_queueFamily,
+                         .timing = m_gpuTiming});
+#endif
     return {};
 }
 
@@ -851,6 +881,10 @@ VulkanBackend::~VulkanBackend() {
     // a backend whose creation stopped half-way.
     if (m_device != VK_NULL_HANDLE) {
         m_vk.vkDeviceWaitIdle(m_device);
+#ifdef ITH_ENABLE_PROFILING
+        // Its query pool belongs to the device.
+        m_gpuProfiler.stop();
+#endif
         for (SwapchainRecord& swapchain : m_swapchains) {
             releaseSwapchain(swapchain);
         }
@@ -1810,9 +1844,12 @@ void VulkanBackend::beginFrame(std::uint32_t /*frameSlot*/) {
 }
 
 VkResult VulkanBackend::submitBatch(const VkSubmitInfo2& batch) {
-    if (m_failNextSubmit.exchange(false, std::memory_order_acq_rel)) {
-        m_simulatedLoss.store(true, std::memory_order_release);
-        return VK_ERROR_DEVICE_LOST;
+    if (const VkResult failure = m_failNextSubmit.exchange(VK_SUCCESS, std::memory_order_acq_rel);
+        failure != VK_SUCCESS) {
+        if (failure == VK_ERROR_DEVICE_LOST) {
+            m_simulatedLoss.store(true, std::memory_order_release);
+        }
+        return failure;
     }
     return m_vk.vkQueueSubmit2(m_queue, 1, &batch, VK_NULL_HANDLE);
 }
@@ -1867,12 +1904,19 @@ Expected<void, Error> VulkanBackend::submit(std::span<detail::CommandListBackend
     return {};
 }
 
-Expected<detail::PresentStatus, Error> VulkanBackend::endFrame(std::uint32_t /*frameSlot*/,
+Expected<detail::PresentStatus, Error> VulkanBackend::endFrame([[maybe_unused]] std::uint32_t frameSlot,
                                                                std::optional<std::uint32_t> swapchainSlot,
                                                                std::uint64_t signalValue) {
     if (m_lost.load(std::memory_order_acquire)) {
         return makeUnexpected(lostError());
     }
+    // Once per frame, in profiling builds: the zones of earlier frames the GPU has finished, and a
+    // command buffer that resets their queries after them, which this batch submits.
+    VkCommandBufferSubmitInfo profilerCommands{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+#ifdef ITH_ENABLE_PROFILING
+    profilerCommands.commandBuffer = m_gpuProfiler.collect(frameSlot);
+#endif
+    const bool collected = profilerCommands.commandBuffer != VK_NULL_HANDLE;
     SwapchainRecord* swapchain = swapchainSlot ? &m_swapchains[*swapchainSlot] : nullptr;
     // Signals the timeline and, when presenting, the image's rendering semaphore after all the
     // frame's work. Semaphore signals of a submission cover everything submitted before it.
@@ -1891,10 +1935,17 @@ Expected<detail::PresentStatus, Error> VulkanBackend::endFrame(std::uint32_t /*f
     const VkSubmitInfo2 batch{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
                               .waitSemaphoreInfoCount = wait ? 1u : 0u,
                               .pWaitSemaphoreInfos = wait ? &*wait : nullptr,
+                              .commandBufferInfoCount = collected ? 1u : 0u,
+                              .pCommandBufferInfos = collected ? &profilerCommands : nullptr,
                               .signalSemaphoreInfoCount = signalCount,
                               .pSignalSemaphoreInfos = signals.data()};
     m_acquiredThisFrame = false;
     if (const VkResult result = submitBatch(batch); result != VK_SUCCESS) {
+#ifdef ITH_ENABLE_PROFILING
+        if (collected) {
+            m_gpuProfiler.disable("submitting the profiler's collection failed");
+        }
+#endif
         // The frame's value would never be signaled, and waits for it would never end: the
         // device can't be used any more (Backend.h).
         Error error = lostOnQueue();
@@ -1965,6 +2016,15 @@ Expected<void, Error> VulkanBackend::waitForValue(std::uint64_t value) {
     return {};
 }
 
+VulkanGpuTiming VulkanBackend::gpuTiming() const {
+#ifdef ITH_ENABLE_PROFILING
+    // Off when the profiler couldn't start.
+    return m_gpuProfiler.timing();
+#else
+    return m_gpuTiming;
+#endif
+}
+
 } // namespace ith::rhi::vulkan
 
 // --- Factory ------------------------------------------------------------------------------
@@ -1979,13 +2039,40 @@ Expected<Device, Error> createVulkanDevice(const DeviceDesc& desc) {
     return detail::makeDevice(std::move(*backend));
 }
 
-void failNextVulkanSubmitForTesting(Device& device) {
+void failNextVulkanSubmitForTesting(Device& device, bool outOfMemory) {
     detail::DeviceBackend* backend = detail::backendOf(device);
     if (backend == nullptr || backend->capabilities().backend != Backend::Vulkan) {
         ITH_ASSERT_MSG(false, "failNextVulkanSubmitForTesting() needs a live Vulkan device");
         return;
     }
-    static_cast<vulkan::VulkanBackend*>(backend)->failNextSubmit();
+    static_cast<vulkan::VulkanBackend*>(backend)->failNextSubmit(outOfMemory ? VK_ERROR_OUT_OF_DEVICE_MEMORY
+                                                                             : VK_ERROR_DEVICE_LOST);
+}
+
+VulkanGpuTiming vulkanGpuTimingForTesting(Device& device) {
+    detail::DeviceBackend* backend = detail::backendOf(device);
+    if (backend == nullptr || backend->capabilities().backend != Backend::Vulkan) {
+        ITH_ASSERT_MSG(false, "vulkanGpuTimingForTesting() needs a live Vulkan device");
+        return VulkanGpuTiming::Off;
+    }
+    return static_cast<vulkan::VulkanBackend*>(backend)->gpuTiming();
+}
+
+void avoidCalibratedVulkanGpuTimingForTesting(bool avoid) {
+    vulkan::g_avoidCalibratedGpuTiming.store(avoid, std::memory_order_release);
+}
+
+bool vulkanGpuZonesDisabledForTesting(Device& device) {
+    const detail::DeviceBackend* backend = detail::backendOf(device);
+    if (backend == nullptr || backend->capabilities().backend != Backend::Vulkan) {
+        ITH_ASSERT_MSG(false, "vulkanGpuZonesDisabledForTesting() needs a live Vulkan device");
+        return false;
+    }
+#ifdef ITH_ENABLE_PROFILING
+    return static_cast<const vulkan::VulkanBackend*>(backend)->gpuProfiler().disabled();
+#else
+    return false;
+#endif
 }
 
 } // namespace ith::rhi

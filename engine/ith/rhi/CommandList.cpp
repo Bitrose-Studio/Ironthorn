@@ -457,4 +457,24 @@ void CommandList::endMarker() {
     m_backend->endMarker();
 }
 
+#ifdef ITH_ENABLE_PROFILING
+// The depth checks run in every profiling build, Shipping included: the backends keep the open
+// zones in arrays of kMaxGpuZoneDepth.
+void CommandList::beginGpuZone(std::string_view name) {
+    if (!recording() || !check(m_gpuZoneDepth < kMaxGpuZoneDepth, "GPU zones nest deeper than kMaxGpuZoneDepth")) {
+        return;
+    }
+    ++m_gpuZoneDepth;
+    m_backend->beginGpuZone(name);
+}
+
+void CommandList::endGpuZone() {
+    if (!recording() || !check(m_gpuZoneDepth > 0, "endGpuZone() without beginGpuZone()")) {
+        return;
+    }
+    --m_gpuZoneDepth;
+    m_backend->endGpuZone();
+}
+#endif
+
 } // namespace ith::rhi

@@ -14,6 +14,8 @@
 #include "ith/rhi/Device.h"
 #include "ith/rhi/Error.h"
 
+#include <cstdint>
+
 namespace ith::rhi {
 
 // Creates a Vulkan 1.3 device on the GPU desc.adapter names: the best physical device that meets
@@ -43,7 +45,37 @@ Expected<Device, Error> createVulkanDevice(const DeviceDesc& desc);
 // or beginFrame() with a swapchain) fail with VK_ERROR_DEVICE_LOST, as a driver reset or hang
 // would, without submitting it. The device then reports DeviceLost from every call that can
 // fail; the GPU itself keeps working, so the objects are still released safely.
+// With `outOfMemory`, for tests of a failed submission the device survives: the next queue
+// submission fails with VK_ERROR_OUT_OF_DEVICE_MEMORY instead, submitting nothing, and
+// Device::submit() reports OutOfMemory; call it right before submit(), since a failed submission
+// in endFrame() or beginFrame() still makes the device lost.
 // Precondition (asserted): `device` came from createVulkanDevice() and wasn't moved from.
-void failNextVulkanSubmitForTesting(Device& device);
+void failNextVulkanSubmitForTesting(Device& device, bool outOfMemory = false);
+
+// How a Vulkan device times GPU zones (CommandList::beginGpuZone(); docs/development/rhi.md,
+// "GPU zones").
+enum class VulkanGpuTiming : std::uint8_t {
+    // No GPU zones: profiling is off (ITH_ENABLE_PROFILING), or the device can't time them.
+    Off,
+    // VK_EXT_calibrated_timestamps against the host's clock: the GPU timeline is aligned with the
+    // CPU's again at every collection.
+    Calibrated,
+    // Aligned once when the device is created, from a timestamp written on the graphics queue.
+    Uncalibrated,
+};
+
+// For tests of GPU zones: how `device` times them; Off without profiling.
+// Precondition (asserted): as failNextVulkanSubmitForTesting().
+[[nodiscard]] VulkanGpuTiming vulkanGpuTimingForTesting(Device& device);
+
+// For tests of GPU zones: with `avoid`, Vulkan devices created afterwards in this process time them
+// as if the GPU lacked calibrated timestamps (VulkanGpuTiming::Uncalibrated where possible).
+// Thread-safe; no effect without profiling.
+void avoidCalibratedVulkanGpuTimingForTesting(bool avoid);
+
+// For tests of GPU zones: whether the device turned its GPU zones off for good, after a command
+// list with zones never ran (docs/development/rhi.md, "GPU zones"); false without profiling or
+// while the device has no profiler. Precondition (asserted): as failNextVulkanSubmitForTesting().
+[[nodiscard]] bool vulkanGpuZonesDisabledForTesting(Device& device);
 
 } // namespace ith::rhi

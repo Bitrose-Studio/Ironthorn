@@ -162,10 +162,36 @@ Rules:
   arguments. A variable used only as a macro argument is unused then: mark it `[[maybe_unused]]`.
 - Include `Profile.h` in the `.cpp` files that profile, not in widely included headers: with
   profiling on it includes Tracy's header, which adds about 0.7 to 2 seconds to each translation
-  unit. Only `Profile.h` may include Tracy, and only `foundation` links it (the `tracy_confined`
+  unit. Only `Profile.h` and the GPU-zone sources of the RHI backends (`VulkanProfiler.cpp`,
+  `D3D12Profiler.cpp`) may include Tracy, and only `foundation` links it (the `tracy_confined`
   test).
 
-GPU zones, inside the Vulkan and Direct3D 12 backends (rule 12), come with a later change.
+### GPU zones
+
+GPU time is profiled through the RHI's command lists (rule 12), not through a macro:
+`rhi::CommandList::beginGpuZone(name)` and `endGpuZone()`. The render graph wraps every pass in a
+zone named after the pass, so a frame drawn through it shows each pass's GPU time without more
+code. Like the macros, the zones compile to nothing without profiling.
+
+In the viewer, each device's graphics queue is a GPU context of its own, "Vulkan graphics queue"
+or "Direct3D 12 graphics queue", and its zones show on that context's timeline, a frame or two
+after the GPU ran them: the backend collects them at each `Device::endFrame()`. Like CPU zones,
+they are recorded only while a viewer is connected, unless the build collects without one
+(`IRONTHORN_PROFILING_ON_DEMAND` off, below).
+
+- **Vulkan** uses `VK_EXT_calibrated_timestamps` with the host clock where the GPU has it, so the
+  GPU timeline stays aligned with the CPU's. Without it (lavapipe, for one) the timelines are
+  aligned once, when the device is created, and may drift apart over a long session; the backend
+  says so on stderr.
+- **Direct3D 12** aligns them at every collection.
+- **Memory**: per device, a pool or heap of 65,536 timestamp queries (512 KiB), and on Direct3D 12
+  a 512 KiB readback buffer outside D3D12MA; 0.5 to 1 MiB of host memory.
+- **Lists that never run** (discarded, or in a failed batch) lose their zones' times, and while
+  zones are active they turn GPU zones off for that device for good, as stderr says, even in
+  on-demand builds once a viewer has connected: recreate the device to get them back
+  ([RHI guide](rhi.md#gpu-zones)).
+
+The details, rules and limits are in the [RHI guide](rhi.md#gpu-zones).
 
 ### Building with the profiler
 
@@ -185,6 +211,16 @@ cmake --build --preset linux-clang-profile
 ctest --preset linux-clang-profile
 ```
 
+With `IRONTHORN_PROFILING`, the option `IRONTHORN_PROFILING_ON_DEMAND` (on by default) builds the
+client with `TRACY_ON_DEMAND`. Turned off, every zone, CPU and GPU, is recorded from the start
+whether or not a viewer ever connects, and the data stays queued in memory until one does: the
+process grows while it runs, so this is for test executables. CI builds the GPU suites that way,
+so that the GPU zones write, read and reset their timestamps under the validation layers.
+
+```powershell
+./scripts/dev.ps1 configure -Preset windows-profile -DIRONTHORN_PROFILING_ON_DEMAND=OFF
+```
+
 Any configuration may be built with the option on, Shipping included, to measure it. A build with
 it on is for measuring only and is never distributed: the engine has no packaging step yet, and
 the packaging step (roadmap P9) will refuse such builds (ADR-0007 rule 13). CMake refuses the
@@ -193,8 +229,9 @@ threads and a network listener of its own and, on Linux, replaces `dlclose` for 
 process, so a sanitizer would check a process that differs from the one that ships.
 
 CI builds and tests `linux-clang-profile` (rule 15), including runs of `window_player` and
-`scene_player`, and the Windows job builds `windows-profile` without running its tests, so MSVC
-compiles the enabled macros too. Every other job tests the macros switched off. `clang-tidy` runs
+`scene_player`, and runs its GPU suites again in a build with `IRONTHORN_PROFILING_ON_DEMAND` off.
+The Windows job builds `windows-profile` with that option off and runs its GPU suites on WARP, and
+builds `windows-clang-profile`, so MSVC and clang-cl compile the enabled code too. Every other job tests the macros switched off. `clang-tidy` runs
 on the `windows-clang` preset, with profiling off, so the enabled branch of `Profile.h` is not
 tidied.
 
@@ -206,7 +243,7 @@ are on the [release page](https://github.com/wolfpld/tracy/releases/tag/v0.15.0)
 the viewer from the same tag.
 
 Start the profiling build, then connect the viewer to `127.0.0.1`. The client is built with six
-definitions, the same in every translation unit:
+definitions (five with `IRONTHORN_PROFILING_ON_DEMAND` off), the same in every translation unit:
 
 - `TRACY_ENABLE`: the client is built in.
 - `TRACY_ON_DEMAND`: it collects data only while a viewer is connected, so a zone costs one

@@ -56,4 +56,9 @@ void removeD3D12DeviceForTesting(Device& device);
 // the call reports DeviceLost. Precondition (asserted): as removeD3D12DeviceForTesting().
 void failNextD3D12SignalForTesting(Device& device);
 
+// For tests of GPU zones: whether the device turned its GPU zones off for good, after a command
+// list with zones never ran (docs/development/rhi.md, "GPU zones"); false without profiling or
+// while the device has no profiler. Precondition (asserted): as removeD3D12DeviceForTesting().
+[[nodiscard]] bool d3d12GpuZonesDisabledForTesting(Device& device);
+
 } // namespace ith::rhi

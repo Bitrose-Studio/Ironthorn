@@ -16,6 +16,8 @@ ith_add_module(rhi_d3d12
         D3D12Backend.cpp
         D3D12CommandList.cpp
         D3D12Device.h
+        D3D12Profiler.h
+        D3D12Profiler.cpp
     DEPENDS
         foundation
         rhi

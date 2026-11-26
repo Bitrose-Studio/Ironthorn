@@ -116,6 +116,9 @@ struct DispatchIndirectArguments {
     std::uint32_t groupCountZ = 0;
 };
 
+// How deep GPU zones (CommandList::beginGpuZone()) nest in one command list.
+inline constexpr std::uint32_t kMaxGpuZoneDepth = 16;
+
 // Row pitch and offset alignment of buffer data copied to or from a texture (the stricter
 // Direct3D 12 rules, so the same upload and readback code works on both APIs).
 inline constexpr std::uint32_t kTextureCopyRowAlignment = 256;
@@ -246,6 +249,35 @@ public:
     // Precondition: a marker is open.
     void endMarker();
 
+    // Opens and closes a GPU timing zone named `name` for the profiler (ADR-0007 rule 12, ADR-0009
+    // rule 15): the GPU time of the commands between the two calls appears on the profiler's GPU
+    // timeline, under the queue's context (docs/development/logging.md, "GPU zones"). `name` is
+    // copied when needed and may be any run-time string. The render graph wraps each pass in one.
+    //
+    // Only profiling builds (ITH_ENABLE_PROFILING) record zones; elsewhere both functions are empty
+    // and inline, and compile to nothing. With profiling on, a zone costs one check unless it is
+    // active (a profiler viewer is connected, or the build collects without one:
+    // IRONTHORN_PROFILING_ON_DEMAND off), and then two GPU timestamps.
+    //
+    // Preconditions: zones nest at most kMaxGpuZoneDepth deep; endGpuZone() closes an open zone;
+    // every zone is closed before the list is submitted or discarded. Profiling builds drop a call
+    // that breaks one of the first two, in every configuration, and assert all three where asserts
+    // are compiled in (Debug and development builds); Release profiling builds don't check the
+    // third. Zones may span beginRendering() and
+    // endRendering() and may be opened and closed inside rendering. Zones and markers are
+    // independent of each other. Not checked: zones that one thread opens in several lists must
+    // close in the reverse order, since the profiler nests a thread's GPU zones; and no zone may
+    // be open inside a multiview rendering pass (when the RHI gains them), where Vulkan timestamps
+    // need one query per view.
+#ifdef ITH_ENABLE_PROFILING
+    void beginGpuZone(std::string_view name);
+    void endGpuZone();
+#else
+    void beginGpuZone(std::string_view /*name*/) {}
+
+    void endGpuZone() {}
+#endif
+
     // Only the device creates command lists; the key keeps the constructor out of reach.
     class Key {
         friend class detail::DeviceState;
@@ -287,6 +319,8 @@ private:
     bool m_indexBufferSet = false;
     BoundPipeline m_pipeline = BoundPipeline::None;
     std::uint32_t m_markerDepth = 0;
+    // Open GPU zones; always 0 without profiling.
+    std::uint32_t m_gpuZoneDepth = 0;
 };
 
 } // namespace ith::rhi

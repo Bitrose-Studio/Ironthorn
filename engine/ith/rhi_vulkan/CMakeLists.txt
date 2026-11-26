@@ -10,9 +10,12 @@ ith_add_module(rhi_vulkan
         VulkanBackend.cpp
         VulkanCommandList.cpp
         VulkanDevice.h
+        VulkanGpuTiming.h
         VulkanLoader.h
         VulkanLoader.cpp
         VulkanMemoryAllocator.cpp
+        VulkanProfiler.h
+        VulkanProfiler.cpp
         SpirvCheck.h
         SpirvCheck.cpp
     DEPENDS
@@ -23,6 +26,9 @@ ith_add_module(rhi_vulkan
         Vulkan::Headers
         ${CMAKE_DL_LIBS})
 
+# TRACY_VK_USE_SYMBOL_TABLE: with VK_NO_PROTOTYPES, Tracy's Vulkan helpers (VulkanProfiler.cpp, in
+# profiling builds) fetch the functions they call through vkGetInstanceProcAddr and
+# vkGetDeviceProcAddr instead of naming Vulkan's symbols.
 if(TARGET ith_rhi_vulkan)
-    target_compile_definitions(ith_rhi_vulkan PRIVATE VK_NO_PROTOTYPES)
+    target_compile_definitions(ith_rhi_vulkan PRIVATE VK_NO_PROTOTYPES TRACY_VK_USE_SYMBOL_TABLE)
 endif()

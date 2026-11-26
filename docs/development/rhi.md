@@ -145,9 +145,121 @@ variable-rate shading and sampler feedback are optional: `Capabilities` reports 
 renderer enables them per scalability tier. Nothing the Low tier needs may depend on them.
 Mesh-shader pipelines and draws come with the renderer's mesh path (ADR-0021).
 
+## GPU zones
+
+A command list times its work for the profiler with GPU zones (ADR-0007 rule 12, ADR-0009
+rule 15):
+
+```cpp
+list.beginGpuZone(pass.name); // any run-time string
+...                           // the commands to time
+list.endGpuZone();
+```
+
+The render graph wraps every pass in one, named after the pass. In the profiler the zones appear
+on a GPU timeline named after the queue ("Vulkan graphics queue", "Direct3D 12 graphics queue"),
+and each names the thread that recorded it ([Profiling](logging.md#gpu-zones)).
+
+- **Only profiling builds record zones** (`IRONTHORN_PROFILING`, which defines
+  `ITH_ENABLE_PROFILING`). Elsewhere `beginGpuZone()` and `endGpuZone()` are empty inline
+  functions and compile to nothing: no check, no backend call.
+- **Active zones.** By default the client collects on demand: a zone writes timestamps only
+  while a viewer is connected, and otherwise costs one check. With
+  `IRONTHORN_PROFILING_ON_DEMAND` off every zone is active from the start, two GPU timestamps and
+  a copy of the name each, and the data waits in memory for a viewer; CI builds that way so that
+  the zones' queries, resets and readbacks run under the validation layers
+  ([Building with the profiler](logging.md#building-with-the-profiler)).
+- **Rules:** zones nest at most `kMaxGpuZoneDepth` (16) deep; `endGpuZone()` closes an open
+  zone; every zone is closed before its list is submitted or discarded. Profiling builds drop a
+  call that breaks one of the first two in every configuration, and assert all three where
+  asserts are compiled in (Debug and development builds); Release profiling builds don't check
+  the third. A backend still closes a zone left open in a list, so that the profiler's timeline
+  stays balanced.
+- **Allowed:** zones may span `beginRendering()` and `endRendering()` and may open and close
+  inside rendering. They are independent of markers.
+- **Not checked:** zones that one thread opens in several lists must close in the reverse
+  order, because the profiler nests each thread's GPU zones; and no zone may be open inside a
+  multiview rendering pass, when the RHI gains them, since Vulkan timestamps then take one query
+  per view. A zone shows as ending on the thread that ended it on Direct3D 12, and on the thread
+  that began it on Vulkan; under the rules above they are the same thread.
+- **One Tracy GPU context per device**, on its graphics queue. The backend creates it with the
+  device and destroys it before the device, and collects the finished zones once per frame, in
+  `endFrame()`; zones appear a frame or two after they ran, and those of the last frame or two
+  before the device is destroyed are not collected.
+
+The null backend ignores zones; they aren't counted as commands.
+
+**Vulkan** (`VulkanProfiler.cpp`, Tracy's `TracyVulkan.hpp`). Tracy fetches its functions
+through `vkGetInstanceProcAddr` and `vkGetDeviceProcAddr` (`TRACY_VK_USE_SYMBOL_TABLE`), since the
+backend has no Vulkan symbols to link. The device takes one of two ways to put GPU timestamps on
+the CPU's timeline, chosen when it is created (`VulkanGpuTiming.h`):
+
+- **Calibrated**, where the GPU supports `VK_EXT_calibrated_timestamps`, reports the host clock
+  Tracy reads (`QueryPerformanceCounter` on Windows, `CLOCK_MONOTONIC_RAW` on Linux) among its
+  first four time domains, and has the `hostQueryReset` feature. The timelines are aligned again
+  at every collection. Tracy looks for the extension's EXT functions only, so a driver with
+  `VK_KHR_calibrated_timestamps` alone takes the other way.
+- **Uncalibrated** otherwise: a timestamp written on the graphics queue while the device is
+  created aligns the timelines once, so GPU zones may drift from the CPU's over a long session.
+  The backend says so on stderr. Lavapipe takes this way (it reports `CLOCK_MONOTONIC`, not the
+  raw clock), so CI runs it.
+- **No GPU zones** when the graphics queue writes no timestamps (`timestampValidBits` 0), or when
+  a start-up check fails that would otherwise leave Tracy waiting forever: creating a query pool
+  of Tracy's size, a test submission to the queue (uncalibrated), or reading calibrated
+  timestamps.
+
+The extension and `hostQueryReset` are enabled only in profiling builds and only where the GPU
+has them, so the minimum is the same in every build. The context's query pool holds 65,536
+timestamps (512 KiB of GPU memory, outside VMA), with 1 MiB of host memory for the results.
+
+The zones are the engine's own scopes on Tracy's context, not Tracy's `VkCtxScope`: they send
+Tracy the same zone records, end a zone with the thread that began it, and know whether a list's
+recording wrote queries. Collection runs in a small command buffer of the frame slot that the frame's
+last batch in `endFrame()` submits: it reads the finished queries and resets them with `vkCmdResetQueryPool`, ordered after the commands that wrote them; a
+reset from the host would race the GPU while their frame still runs.
+
+**Direct3D 12** (`D3D12Profiler.cpp`, Tracy's `TracyD3D12.hpp`). The context times the direct
+queue with a timestamp query heap of 65,536 queries and a 512 KiB committed `READBACK` buffer
+that each zone resolves its two timestamps into as it ends, plus 512 KiB of host memory. Tracy
+creates the heap and the buffer itself, outside D3D12MA, so they don't appear in D3D12MA's
+statistics or budget; that is acceptable in builds that exist only for measuring. The backend
+first checks that a heap of that size can be created. Collection reads the buffer and aligns the
+clocks again (`GetClockCalibration`) every frame. The zones are Tracy's own `D3D12ZoneScope`,
+whose heap, buffer and query numbering are private to it.
+
+**Lists that never run.** Tracy collects a context's queries in order. A list with active zones
+that never runs (discarded, closed unsubmitted by `endFrame()`, or in a batch that was skipped
+or whose submission failed) leaves queries that will never be written, which Tracy would wait for
+for good; on Vulkan the queries after them would also never be reset again, and once Tracy's pool
+wrapped around, zones would write queries that aren't reset. So when the device reports such a
+list abandoned, the backend turns GPU zones off for that device for good, and says so once on
+stderr: later zones record nothing, and the zones of the dropped list and of the frames still in
+flight are lost. They are also turned off when `endFrame()` finds a list still open (a broken
+rule), and on Vulkan when ending or submitting its collection fails.
+`vulkanGpuZonesDisabledForTesting()` and `d3d12GpuZonesDisabledForTesting()` report it.
+
+Limits:
+
+- Tracy numbers GPU contexts with 8 bits for the whole process and never reuses a number. Each
+  backend takes at most 128, one per device; devices created after that have no GPU zones and
+  say so on stderr. Only long test runs create that many devices.
+- A list with active zones that never runs turns the device's GPU zones off (above). Destroying a
+  Direct3D 12 device then waits up to 200 ms for the queries that never came.
+- A viewer that disconnects loses the zones in flight; one that connects sees zones from then on.
+- Not yet checked with a real Tracy viewer: how the zones display. The tests check the recording,
+  the collection and the validation layers; zones were also made active by hand with a client
+  that only completes the viewer's handshake.
+
+Testing: `vulkanGpuTimingForTesting()` reports how a Vulkan device times its zones, and
+`avoidCalibratedVulkanGpuTimingForTesting()` makes later devices take the uncalibrated way, so
+that both run on one machine. The GPU suites record frames with zones (nested, around and inside
+rendering, and in discarded lists or a failed submission followed by more than 65,536 queries'
+worth) under the validation layers; `failNextVulkanSubmitForTesting(device, true)` makes a
+submission fail without losing the device; the choice between the ways is tested without a GPU. They write timestamps only in a
+build with `IRONTHORN_PROFILING_ON_DEMAND` off, as in CI.
+
 ## Not yet
 
-- **GPU timing zones** (ADR-0009 rule 15) come with the profiler integration.
 - **Bindless shader checks** (rule 16): the RHI rejects shaders with more than 128 bytes of
   constants. Whether a shader declares resources outside the bindless model is checked by the
   backends (Direct3D 12 against its root signature, Vulkan by reading the SPIR-V's bindings), not
@@ -416,7 +528,8 @@ vertex input layout. `--scene triangle` draws three vertices in one `draw(3)`; t
 draws 10,000 cubes in one `drawIndexed(36, 10000)` with a 16-bit index buffer, per-instance
 position, size and color in a storage buffer, a camera in the push constants, a reversed `D32Float`
 depth buffer and one directional light. `--no-vsync` makes the printed frame time the time a
-frame takes; GPU time isn't measured until the RHI has timestamp queries.
+frame takes. In a profiling build, the GPU time of its render-graph pass shows in the profiler
+as a [GPU zone](#gpu-zones).
 
 The scenes' code (`Scenes.h`, `Scenes.cpp`) is compiled into the sample and into its GPU test.
 The sample and the test draw each scene in one pass of a [render graph](render-graph.md), which

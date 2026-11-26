@@ -129,10 +129,21 @@ D3D12CommandList::D3D12CommandList(D3D12Backend& backend, ComPtr<ID3D12CommandAl
                                    ComPtr<ID3D12GraphicsCommandList7> list)
     : m_backend(&backend), m_allocator(std::move(allocator)), m_list(std::move(list)) {}
 
+D3D12CommandList::~D3D12CommandList() {
+    // The device destroys its lists only when the GPU is done with them (Backend.h).
+#ifdef ITH_ENABLE_PROFILING
+    // Zones of a list left recording end into it; a closed list has none.
+    m_gpuZones.endAll();
+#endif
+}
+
 Expected<void, Error> D3D12CommandList::begin(std::uint32_t /*frameSlot*/, std::string_view debugName) {
     // A list left recording (discarded, or its batch failed) is closed before its allocator is
     // reset (Backend.h).
     static_cast<void>(close());
+#ifdef ITH_ENABLE_PROFILING
+    m_gpuZones.restart();
+#endif
     if (FAILED(m_allocator->Reset()) || FAILED(m_list->Reset(m_allocator.Get(), nullptr))) {
         return makeUnexpected(Error{.code = ErrorCode::OutOfMemory,
                                     .message = "Out of memory starting command list '" + std::string(debugName) + "'"});
@@ -151,6 +162,10 @@ HRESULT D3D12CommandList::close() {
         return S_OK;
     }
     m_recording = false;
+#ifdef ITH_ENABLE_PROFILING
+    // A zone left open (asserted by the device, or a discarded list's) still gets its end query.
+    m_gpuZones.endAll();
+#endif
     return m_list->Close();
 }
 
@@ -411,6 +426,30 @@ void D3D12CommandList::beginMarker(std::string_view name) {
 
 void D3D12CommandList::endMarker() {
     m_list->EndEvent();
+}
+
+// Profiling builds only call these (Backend.h).
+void D3D12CommandList::beginGpuZone([[maybe_unused]] std::string_view name) {
+#ifdef ITH_ENABLE_PROFILING
+    m_gpuZones.begin(m_backend->gpuProfiler(), m_list.Get(), name);
+#endif
+}
+
+void D3D12CommandList::endGpuZone() {
+#ifdef ITH_ENABLE_PROFILING
+    m_gpuZones.end();
+#endif
+}
+
+void D3D12CommandList::abandoned([[maybe_unused]] bool stillOpen) {
+#ifdef ITH_ENABLE_PROFILING
+    if (stillOpen) {
+        // Its recording may be unfinished, so the zones aren't read.
+        m_backend->gpuProfiler().disable("endFrame() closed a command list that was still open");
+    } else {
+        m_gpuZones.abandoned(m_backend->gpuProfiler());
+    }
+#endif
 }
 
 } // namespace ith::rhi::d3d12

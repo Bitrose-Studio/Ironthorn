@@ -10,6 +10,7 @@
 #include "ith/rhi/Capabilities.h"
 #include "ith/rhi/Device.h"
 #include "ith/rhi/Error.h"
+#include "ith/rhi_d3d12/D3D12Profiler.h"
 
 #include <D3D12MemAlloc.h>
 #include <directx/d3d12.h>
@@ -108,6 +109,12 @@ class D3D12CommandList final : public detail::CommandListBackend {
 public:
     D3D12CommandList(D3D12Backend& backend, ComPtr<ID3D12CommandAllocator> allocator,
                      ComPtr<ID3D12GraphicsCommandList7> list);
+    D3D12CommandList(const D3D12CommandList&) = delete;
+    D3D12CommandList& operator=(const D3D12CommandList&) = delete;
+    D3D12CommandList(D3D12CommandList&&) = delete;
+    D3D12CommandList& operator=(D3D12CommandList&&) = delete;
+    // Ends the GPU zones of a list left recording, while the list still exists.
+    ~D3D12CommandList() override;
 
     Expected<void, Error> begin(std::uint32_t frameSlot, std::string_view debugName) override;
     void barrier(const Barriers& barriers) override;
@@ -132,8 +139,12 @@ public:
     void copyTextureToBuffer(const BufferTextureCopy& copy) override;
     void beginMarker(std::string_view name) override;
     void endMarker() override;
+    void beginGpuZone(std::string_view name) override;
+    void endGpuZone() override;
+    void abandoned(bool stillOpen) override;
 
-    // Ends recording if the list is still recording; called by submit(). Returns the API's result.
+    // Ends recording if the list is still recording, closing GPU zones left open first; called by
+    // submit() and begin(). Returns the API's result.
     HRESULT close();
 
     [[nodiscard]] ID3D12CommandList* native() const { return m_list.Get(); }
@@ -152,6 +163,9 @@ private:
     std::vector<D3D12_BUFFER_BARRIER> m_bufferBarriers;
     std::vector<D3D12_TEXTURE_BARRIER> m_textureBarriers;
     std::wstring m_markerName;
+#ifdef ITH_ENABLE_PROFILING
+    GpuZones m_gpuZones;
+#endif
 };
 
 // The device side. Created by createD3D12Device() (D3D12Device.h).
@@ -223,6 +237,13 @@ public:
 
     [[nodiscard]] ID3D12CommandSignature* dispatchSignature() const { return m_dispatchSignature.Get(); }
 
+#ifdef ITH_ENABLE_PROFILING
+    // The GPU zones' context (D3D12Profiler.h), which command lists open zones on.
+    [[nodiscard]] GpuProfiler& gpuProfiler() { return m_gpuProfiler; }
+
+    [[nodiscard]] const GpuProfiler& gpuProfiler() const { return m_gpuProfiler; }
+#endif
+
 private:
     // Sets up everything after the device exists; fails with the API's error.
     Expected<void, Error> initialize(const DeviceDesc& desc);
@@ -277,6 +298,11 @@ private:
     std::vector<SwapchainRecord> m_swapchains;
     // Render-thread scratch space for submit().
     std::vector<ID3D12CommandList*> m_submitLists;
+#ifdef ITH_ENABLE_PROFILING
+    // Started by initialize() and stopped by the destructor before the device is released;
+    // collected in endFrame(). Command lists read it from any thread while the device exists.
+    GpuProfiler m_gpuProfiler;
+#endif
 };
 
 } // namespace ith::rhi::d3d12

@@ -130,8 +130,11 @@ Run `ctest --preset linux-tsan`, or pass the same `TSAN_OPTIONS` when starting a
 Profiling builds (`IRONTHORN_PROFILING`, the `linux-clang-profile`, `windows-profile` and
 `windows-clang-profile` presets) build the Tracy profiler client in; how to build them and connect
 the viewer is in the [profiling guide](logging.md#profiling). CMake refuses them together with a
-sanitizer option. CI tests `linux-clang-profile` and builds `windows-profile` (MSVC) without running
-its tests; `verify` builds neither.
+sanitizer option. With `-DIRONTHORN_PROFILING_ON_DEMAND=OFF` the client records without a viewer
+connected, which CI uses for the GPU suites so that the GPU zones run under the validation layers.
+CI tests `linux-clang-profile` (and its GPU suites again in that mode), runs the GPU suites of
+`windows-profile` (MSVC, WARP) in that mode, and builds `windows-clang-profile`; `verify` builds
+none of them.
 
 Shipping link test ([ADR-0017](../decisions/0017-runtime-and-editor-separation.md)): the sample
 players and server built in Shipping without the modules they must not link, as CI does. The

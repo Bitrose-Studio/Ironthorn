@@ -181,6 +181,13 @@ public:
 
     void endMarker() override { count(); }
 
+    // The null backend has no profiler: zones record nothing and aren't counted as commands.
+    void beginGpuZone(std::string_view /*name*/) override {}
+
+    void endGpuZone() override {}
+
+    void abandoned(bool /*stillOpen*/) override {}
+
 private:
     void count() {
         const MutexLock lock(m_gpu->m_mutex);

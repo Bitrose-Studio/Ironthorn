@@ -69,7 +69,10 @@ A pass has a name, a type, a setup callable and an execute callable.
   `shaderReadIndex()`, `shaderWriteIndex()`), which asserts that the pass declared the resource
   with a matching use. Execute callables live in the graph's arena and are destroyed at `reset()`.
 - Each pass records inside a marker with its name, so PIX, RenderDoc and validation messages
-  name it.
+  name it. In profiling builds it also records inside a GPU zone of the same name, its barriers
+  included, so the profiler shows each pass's GPU time ([RHI guide](rhi.md#gpu-zones)). An
+  execute callable may open zones of its own inside it, up to 15 deep, and closes them before it
+  returns.
 - `PassFlags::NeverCull` keeps a pass whose effect the graph can't see (a readback, a timestamp).
 
 ### Uses
@@ -216,7 +219,9 @@ reordering, per-mip and per-layer barriers, split barriers, caching compiled gra
 management, a struct-based pass parameter form, an immediate mode and a visual graph viewer.
 Also not yet:
 
-- per-pass GPU timings, which need RHI timestamp queries;
+- per-pass GPU timings the engine can read (for the bottleneck classifier of ADR-0028), which
+  need RHI timestamp queries; profiling builds show each pass's GPU time in the profiler only
+  (see [Passes](#passes));
 - the `Debug`-level log of unused transients and culled passes (ADR-0028 rule 20): the engine
   has no logging module yet, so the dump marks them (`unused`, `culled`) instead;
 - the pass, use and barrier tables are vectors in the graph rather than in its arena (names and

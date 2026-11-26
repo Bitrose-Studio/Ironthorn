@@ -311,7 +311,10 @@ void GraphData::recordGroup(std::uint32_t group, rhi::CommandList& list, const r
         const std::uint32_t p = alivePasses[i];
         const Pass& pass = passes[p];
         const PassRecording& recording = recordings[p];
+        // A marker for GPU debuggers and, in profiling builds, a GPU zone for the profiler, around
+        // everything the pass records, its barriers included.
         list.beginMarker(pass.name);
+        list.beginGpuZone(pass.name);
         if (recording.clobberResourceCount > 0) {
             recordClobber(recording, list);
         }
@@ -329,6 +332,7 @@ void GraphData::recordGroup(std::uint32_t group, rhi::CommandList& list, const r
         if (raster) {
             list.endRendering();
         }
+        list.endGpuZone();
         list.endMarker();
     }
     if (group + 1 == groupCount && !finalTextureBarriers.empty()) {

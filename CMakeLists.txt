@@ -25,6 +25,11 @@ option(IRONTHORN_ENABLE_TSAN "Build with ThreadSanitizer (Clang/GCC, not with IR
 # ADR-0007 rule 13: builds the Tracy profiler client in and turns the ITH_PROFILE_* macros on (it
 # defines ITH_ENABLE_PROFILING). The profile presets set it. Never on in a build that is distributed.
 option(IRONTHORN_PROFILING "Build with the Tracy profiler client (on demand, localhost only)" OFF)
+# With IRONTHORN_PROFILING: whether the client collects only while a viewer is connected
+# (TRACY_ON_DEMAND). OFF makes every zone active without a viewer, with the data queued in memory
+# until one connects: for CI and short test runs, so that the GPU zones' timestamps, query resets
+# and readbacks run under the validation layers (docs/development/logging.md).
+option(IRONTHORN_PROFILING_ON_DEMAND "With IRONTHORN_PROFILING, collect only while a viewer is connected" ON)
 
 # The shader compiler (Slang and DXC) is the one part of the tools that sanitizer builds leave
 # out: its prebuilt libraries are not instrumented, so only the thin wrapper around them would be
@@ -98,8 +103,9 @@ if(IRONTHORN_BUILD_TESTS)
             -P "${PROJECT_SOURCE_DIR}/cmake/CheckImGuiConfined.cmake")
     set_tests_properties(imgui_confined PROPERTIES LABELS "lint")
 
-    # Tracy stays behind ith/foundation/Profile.h: only it includes Tracy, and only foundation
-    # links it (ADR-0007 rules 10 to 12). tests/layering holds lint fixtures that exist to be refused.
+    # Tracy stays behind ith/foundation/Profile.h and the GPU-zone sources of the RHI backends: only
+    # they include Tracy, and only foundation links it (ADR-0007 rules 10 to 12). tests/layering
+    # holds lint fixtures that exist to be refused.
     add_test(NAME tracy_confined
         COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}" "-DSKIP=tests/layering"
             -P "${PROJECT_SOURCE_DIR}/cmake/CheckTracyConfined.cmake")

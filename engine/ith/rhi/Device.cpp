@@ -969,6 +969,7 @@ CommandList& DeviceState::openCommandList(std::string_view debugName) {
     list->m_indexBufferSet = false;
     list->m_pipeline = CommandList::BoundPipeline::None;
     list->m_markerDepth = 0;
+    list->m_gpuZoneDepth = 0;
     if (list->m_backend != nullptr) {
         if (Expected<void, Error> begun = list->m_backend->begin(slot, debugName); begun) {
             CommandList::State expected = CommandList::State::Failed;
@@ -1008,6 +1009,8 @@ Expected<void, Error> DeviceState::submit(std::span<CommandList* const> lists) {
         }
         ITH_ASSERT_MSG(!list->m_rendering, "submitting a command list inside beginRendering()");
         ITH_ASSERT_MSG(list->m_markerDepth == 0, "submitting a command list with an open marker");
+        // The backend closes a zone left open (Backend.h), so the profiler's timeline stays whole.
+        ITH_ASSERT_MSG(list->m_gpuZoneDepth == 0, "submitting a command list with an open GPU zone");
         if (state == CommandList::State::Failed && !failure) {
             failure = list->m_error;
         }
@@ -1032,6 +1035,14 @@ Expected<void, Error> DeviceState::submit(std::span<CommandList* const> lists) {
             failure = noteError(std::move(submitted).error());
         }
     }
+#ifdef ITH_ENABLE_PROFILING
+    // Nothing of a failed or skipped batch runs (Backend.h).
+    if (failure) {
+        for (CommandListBackend* list : backendLists) {
+            list->abandoned(false);
+        }
+    }
+#endif
     {
         const MutexLock lock(m_mutex);
         closeLists(closed);
@@ -1050,12 +1061,20 @@ void DeviceState::discard(CommandList& list) {
         ITH_ASSERT_MSG(false, "discarding a command list of another device");
         return;
     }
+    // A zone left open would be ended later by whichever thread reuses or destroys the list, and
+    // Direct3D 12's profiler then reports it ending on that thread (docs/development/rhi.md).
+    ITH_ASSERT_MSG(list.m_gpuZoneDepth == 0, "discarding a command list with an open GPU zone");
     const MutexLock lock(m_mutex);
     if (list.m_state.exchange(CommandList::State::Closed, std::memory_order_acq_rel) == CommandList::State::Closed) {
         ITH_ASSERT_MSG(false, "discarding a command list that is not open");
         return;
     }
     closeLists(1);
+#ifdef ITH_ENABLE_PROFILING
+    if (list.m_backend != nullptr) {
+        list.m_backend->abandoned(false);
+    }
+#endif
 }
 
 Expected<void, Error> DeviceState::endFrame() {
@@ -1076,6 +1095,11 @@ Expected<void, Error> DeviceState::endFrame() {
             if (list.m_state.exchange(CommandList::State::Closed, std::memory_order_acq_rel) !=
                 CommandList::State::Closed) {
                 ++open;
+#ifdef ITH_ENABLE_PROFILING
+                if (list.m_backend != nullptr) {
+                    list.m_backend->abandoned(true);
+                }
+#endif
             }
         }
         closeLists(open);

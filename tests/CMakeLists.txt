@@ -618,15 +618,15 @@ set_tests_properties(imgui_confined_refuses_imgui_outside_editor_ui PROPERTIES
     LABELS "lint"
     PASS_REGULAR_EXPRESSION "IncludesImGui.cpp includes imgui.h: only the editor_ui module.*IncludesImGui.cpp includes imgui_internal.h: only engine/ith/editor_ui/DockLayout.cpp.*links_imgui/CMakeLists.txt links ImGui: only")
 
-# The tracy_confined check must refuse Tracy outside ith/foundation/Profile.h (ADR-0007): an
-# include of <tracy/...> and of a Tracy*.hpp header, and a CMakeLists.txt that links it. The
-# fixtures are never built.
+# The tracy_confined check must refuse Tracy outside ith/foundation/Profile.h and the backends'
+# GPU-zone sources (ADR-0007): an include of <tracy/...>, of a Tracy*.hpp header and of a Tracy*.h
+# header (TracyC.h), and a CMakeLists.txt that links it. The fixtures are never built.
 add_test(NAME tracy_confined_refuses_tracy_outside_profile_h
     COMMAND ${CMAKE_COMMAND} "-DREPOSITORY_DIR=${PROJECT_SOURCE_DIR}" "-DDIRECTORIES=tests/layering"
         -P "${PROJECT_SOURCE_DIR}/cmake/CheckTracyConfined.cmake")
 set_tests_properties(tracy_confined_refuses_tracy_outside_profile_h PROPERTIES
     LABELS "lint"
-    PASS_REGULAR_EXPRESSION "IncludesTracy.cpp includes TracyVulkan.hpp: profile through.*IncludesTracy.cpp includes tracy/Tracy.hpp: profile through.*links_tracy/CMakeLists.txt links Tracy: only the foundation module")
+    PASS_REGULAR_EXPRESSION "IncludesTracy.cpp includes TracyVulkan.hpp: profile through.*IncludesTracy.cpp includes TracyC.h: profile through.*IncludesTracy.cpp includes tracy/Tracy.hpp: profile through.*links_tracy/CMakeLists.txt links Tracy: only the foundation module")
 
 ith_add_layering_failure_test(upward_layer
     MODULES "low:core:runtime=high|high:framework:runtime="

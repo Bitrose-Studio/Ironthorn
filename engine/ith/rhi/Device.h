@@ -203,10 +203,11 @@ public:
     // Submits command lists to the graphics queue in order (rule 13), and closes them. Fails
     // with the error of a list that could not start (nothing is then submitted), DeviceLost or
     // OutOfMemory. Preconditions (asserted): a frame is open; every list is open, came from this
-    // device in this frame, is not rendering and has no open marker.
+    // device in this frame, is not rendering and has no open marker or GPU zone.
     Expected<void, Error> submit(CommandList& list);
     Expected<void, Error> submit(std::span<CommandList* const> lists);
-    // Closes a list without submitting it. Precondition (asserted): the list is open.
+    // Closes a list without submitting it. Preconditions (asserted): the list is open and has no
+    // open GPU zone.
     void discard(CommandList& list);
 
     // Ends the frame: presents the swapchain image (if the frame has a swapchain) and marks the

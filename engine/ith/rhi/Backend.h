@@ -137,6 +137,20 @@ public:
     virtual void copyTextureToBuffer(const BufferTextureCopy& copy) = 0;
     virtual void beginMarker(std::string_view name) = 0;
     virtual void endMarker() = 0;
+    // GPU timing zones (CommandList::beginGpuZone()), called only in profiling builds
+    // (ITH_ENABLE_PROFILING), nested at most kMaxGpuZoneDepth deep. A backend without a profiler
+    // ignores them. Zones may be left open by a list that is submitted anyway or dropped: the
+    // backend closes them before it ends or resets the list's recording, and before it destroys
+    // the list.
+    virtual void beginGpuZone(std::string_view name) = 0;
+    virtual void endGpuZone() = 0;
+    // Profiling builds only: the list's current recording will never run (it was discarded,
+    // closed unsubmitted by endFrame(), in a batch that was skipped, or in a submit() that failed).
+    // A backend whose profiler can't account for queries that never run turns its GPU zones off.
+    // As for submit(), the thread recording the list has finished with it, except with
+    // `stillOpen`: endFrame() found the list still open (a broken rule), its recording may be
+    // unfinished, and the backend turns its GPU zones off whatever the list recorded.
+    virtual void abandoned(bool stillOpen) = 0;
 };
 
 // The device side of a backend.
@@ -194,7 +208,9 @@ public:
     virtual void beginFrame(std::uint32_t frameSlot) = 0;
     // Ends recording of the lists, submits them in order and signals `signalValue` after them.
     virtual Expected<void, Error> submit(std::span<CommandListBackend* const> lists, std::uint64_t signalValue) = 0;
-    // Presents the acquired image of `swapchainSlot` (if any) and signals `signalValue`.
+    // Presents the acquired image of `swapchainSlot` (if any) and signals `signalValue`. In
+    // profiling builds a backend with a GPU profiler also collects the finished GPU zones here,
+    // once per frame.
     virtual Expected<PresentStatus, Error> endFrame(std::uint32_t frameSlot, std::optional<std::uint32_t> swapchainSlot,
                                                     std::uint64_t signalValue) = 0;
     // The highest value the GPU has signaled so far.

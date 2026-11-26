@@ -22,7 +22,9 @@
 #include "ith/rhi/Device.h"
 #include "ith/rhi/Error.h"
 #include "ith/rhi_vulkan/VulkanApi.h"
+#include "ith/rhi_vulkan/VulkanDevice.h"
 #include "ith/rhi_vulkan/VulkanLoader.h"
+#include "ith/rhi_vulkan/VulkanProfiler.h"
 
 #include <vk_mem_alloc.h>
 
@@ -151,8 +153,12 @@ public:
     void copyTextureToBuffer(const BufferTextureCopy& copy) override;
     void beginMarker(std::string_view name) override;
     void endMarker() override;
+    void beginGpuZone(std::string_view name) override;
+    void endGpuZone() override;
+    void abandoned(bool stillOpen) override;
 
-    // Ends recording if the list is still recording; called by submit(). Returns the API's result.
+    // Ends recording if the list is still recording, closing GPU zones left open first; called by
+    // submit(). Returns the API's result.
     VkResult close();
 
     [[nodiscard]] VkCommandBuffer native() const { return m_commands; }
@@ -171,6 +177,9 @@ private:
     std::vector<VkBufferMemoryBarrier2> m_bufferBarriers;
     std::vector<VkImageMemoryBarrier2> m_imageBarriers;
     std::string m_markerName;
+#ifdef ITH_ENABLE_PROFILING
+    GpuZones m_gpuZones;
+#endif
 };
 
 // The device side. Created by createVulkanDevice() (VulkanDevice.h).
@@ -216,9 +225,9 @@ public:
     std::uint64_t completedValue() override;
     Expected<void, Error> waitForValue(std::uint64_t value) override;
 
-    // Makes the next queue submission fail with VK_ERROR_DEVICE_LOST
-    // (failNextVulkanSubmitForTesting()).
-    void failNextSubmit() { m_failNextSubmit.store(true, std::memory_order_release); }
+    // Makes the next queue submission fail with `result`, VK_ERROR_DEVICE_LOST or
+    // VK_ERROR_OUT_OF_DEVICE_MEMORY (failNextVulkanSubmitForTesting()).
+    void failNextSubmit(VkResult result) { m_failNextSubmit.store(result, std::memory_order_release); }
 
     // What command lists read. Slots are written by the thread that creates the object before
     // its handle is handed out, and stay unchanged while a list records with the handle.
@@ -241,6 +250,16 @@ public:
 
     // Gives an object a debug name, when VK_EXT_debug_utils is enabled.
     void setName(VkObjectType type, std::uint64_t handle, std::string_view name) const;
+
+#ifdef ITH_ENABLE_PROFILING
+    // The GPU zones' context (VulkanProfiler.h), which command lists open zones on.
+    [[nodiscard]] GpuProfiler& gpuProfiler() { return m_gpuProfiler; }
+
+    [[nodiscard]] const GpuProfiler& gpuProfiler() const { return m_gpuProfiler; }
+#endif
+
+    // How the device times GPU zones (vulkanGpuTimingForTesting()); Off without profiling.
+    [[nodiscard]] VulkanGpuTiming gpuTiming() const;
 
 private:
     // Creates the instance, picks the physical device and creates the device.
@@ -305,7 +324,8 @@ private:
     std::uint64_t m_acquireValue = 0;
     bool m_acquiredThisFrame = false;
     std::atomic<bool> m_lost{false};
-    std::atomic<bool> m_failNextSubmit{false};
+    // VK_SUCCESS when the next submission isn't made to fail.
+    std::atomic<VkResult> m_failNextSubmit{VK_SUCCESS};
     // Set when the loss came from failNextSubmit(): there is no driver report to read.
     std::atomic<bool> m_simulatedLoss{false};
     // The bindless set (see above).
@@ -329,6 +349,14 @@ private:
     std::vector<SwapchainRecord> m_swapchains;
     // Render-thread scratch space for submit().
     std::vector<VkCommandBufferSubmitInfo> m_submitLists;
+    // Chosen before the device is created, which enables what it needs; set once, then only read.
+    // Always Off without profiling.
+    VulkanGpuTiming m_gpuTiming = VulkanGpuTiming::Off;
+#ifdef ITH_ENABLE_PROFILING
+    // Started by initialize() and stopped by the destructor before the device is destroyed;
+    // collected in endFrame(). Command lists read it from any thread while the device exists.
+    GpuProfiler m_gpuProfiler;
+#endif
 };
 
 } // namespace ith::rhi::vulkan

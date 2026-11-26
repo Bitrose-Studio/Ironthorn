@@ -17,7 +17,7 @@ Every dependency is fetched at configure time as an archive pinned by URL and SH
 | [glm](https://github.com/g-truc/glm) | 1.0.3 | MIT (offered as "Happy Bunny" or MIT; used under MIT) | vectors, matrices and quaternions behind the `ith/math` aliases ([ADR-0006](../decisions/0006-math-and-coordinate-conventions.md)), header-only | yes (compiled in) |
 | [xxHash](https://github.com/Cyan4973/xxHash) | 0.8.4 | BSD-2-Clause (the library header; the archive's `xxhsum` tool, GPL-2.0, is not built) | XXH3-128 content hashes for derived-data cache keys, private to the `asset_database` tools module (`Hash128.cpp`) | no |
 | [SDL](https://github.com/libsdl-org/SDL) | 3.4.20 | zlib; its bundled HIDAPI is used under HIDAPI's BSD-style license (HIDAPI is offered under GPL-3, a BSD-style or its original license, at the user's choice) | windows, the event loop and the clipboard in the `platform` client module; later keyboard, mouse, gamepads, text input, cursors and file dialogs | yes |
-| [Tracy](https://github.com/wolfpld/tracy) (client) | 0.15.0 (viewer 0.15.0, network protocol 83) | BSD-3-Clause; bundled client code: libbacktrace (BSD-3-Clause), LZ4 (BSD-2-Clause), rpmalloc (public domain), moodycamel ConcurrentQueue (Simplified BSD), SPSCQueue (MIT) | CPU profiling behind `ith/foundation/Profile.h` ([ADR-0007](../decisions/0007-logging-and-profiling.md)), only in builds with `IRONTHORN_PROFILING`; GPU zones later | no (profiling builds are never distributed) |
+| [Tracy](https://github.com/wolfpld/tracy) (client) | 0.15.0 (viewer 0.15.0, network protocol 83) | BSD-3-Clause; bundled client code: libbacktrace (BSD-3-Clause), LZ4 (BSD-2-Clause), rpmalloc (public domain), moodycamel ConcurrentQueue (Simplified BSD), SPSCQueue (MIT) | CPU profiling behind `ith/foundation/Profile.h` and GPU zones in the RHI backends ([ADR-0007](../decisions/0007-logging-and-profiling.md)), only in builds with `IRONTHORN_PROFILING` | no (profiling builds are never distributed) |
 | [Slang](https://github.com/shader-slang/slang) | 2026.22.1 (prebuilt release) | Apache-2.0 WITH LLVM-exception | shader compilation in the `shader_compiler` tools module, and its `slangc` at build time for the shaders samples embed (`ith_embed_shaders()`) | no |
 | [DXC](https://github.com/microsoft/DirectXShaderCompiler) | 1.9.2609 (prebuilt release) | Windows archive: `dxcompiler.dll` under the LLVM release license (University of Illinois/NCSA, `LICENSE-LLVM.txt`) and the `dxil.dll` validator under Microsoft's DirectX Shader Compiler license terms (`LICENSE-MS.txt`, which allows use on Windows only); the archive has no table mapping files to its three license files. Linux archive: its release notes put every file, `libdxcompiler.so` and `libdxil.so` included, under `LICENSE-LLVM.txt` (NCSA); it also contains the same `LICENSE-MS.txt` without naming files it covers | DXIL code generation, validation and signing, loaded by Slang | no |
 | [DirectX-Headers](https://github.com/microsoft/DirectX-Headers) | 1.620.2 | MIT | Direct3D 12 API declarations and GUIDs in the `rhi_d3d12` client module (Windows) | yes (compiled in) |
@@ -49,7 +49,9 @@ translation unit sees the same configuration:
 
 System tracing and sampling stay compiled in; the [profiling guide](logging.md#profiling) says
 when they run. Only `foundation` links it and only
-`ith/foundation/Profile.h` includes it (the `tracy_confined` test). The viewer must be the same
+`ith/foundation/Profile.h` and the backends' GPU-zone sources (`VulkanProfiler.cpp` with
+`TracyVulkan.hpp`, `D3D12Profiler.cpp` with `TracyD3D12.hpp`) include it (the `tracy_confined`
+test). The viewer must be the same
 version (0.15.0, network protocol 83); upgrade the client and the documented viewer together, and
 check the release notes for API changes (0.15.0 changed lock instrumentation). How to build,
 connect and what a running profiling build exposes (a listener on localhost, `dlclose` disabled on

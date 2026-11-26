@@ -359,6 +359,140 @@ TEST_SUITE("rhi_d3d12.frames") {
         CHECK(device->frameNumber() == 20);
         REQUIRE(device->waitIdle().hasValue());
     }
+
+    // Without profiling the zones compile to nothing; with it they run Tracy's Direct3D 12
+    // context, which records no queries while no profiler viewer is connected. Either way the
+    // zones and the collection at each endFrame() must leave the commands and the debug layer
+    // alone.
+    TEST_CASE("GPU zones over frames leave the commands' results and the debug layer alone") {
+        std::optional<Device> device = makeDevice();
+        if (!device) {
+            return;
+        }
+        const TextureHandle target = makeTexture(*device, targetDesc());
+        const BufferHandle readback = makeBuffer(*device, BufferUsage::CopyDst, MemoryType::Readback, 1024);
+        constexpr int kFrames = 4;
+        for (int frame = 0; frame < kFrames; ++frame) {
+            if (!beginFrame(*device)) {
+                return;
+            }
+            // In the last frame: it turns the device's GPU zones off where they are active.
+            if (frame + 1 == kFrames) {
+                CommandList& discarded = device->openCommandList("Discarded");
+                discarded.beginGpuZone("Never runs");
+                discarded.endGpuZone();
+                device->discard(discarded);
+            }
+
+            CommandList& list = device->openCommandList("Zones");
+            list.beginGpuZone("Frame");
+            list.beginGpuZone("Clear");
+            TextureBarrier toTarget = toRenderTarget(target);
+            if (frame > 0) {
+                toTarget.stagesBefore = PipelineStage::ColorOutput;
+                toTarget.accessBefore = Access::RenderTargetWrite;
+            }
+            list.barrier(toTarget);
+            const std::array colors{ColorAttachment{.texture = target, .clearColor = {0.25f, 0.5f, 0.75f, 1.0f}}};
+            list.beginRendering({.colors = colors});
+            list.beginGpuZone("Inside rendering");
+            list.endGpuZone();
+            list.endRendering();
+            list.endGpuZone();
+            if (frame + 1 == kFrames) {
+                list.beginGpuZone("Read back");
+                readBack(list, target, readback);
+                list.endGpuZone();
+            }
+            list.endGpuZone();
+            REQUIRE(device->submit(list).hasValue());
+            REQUIRE(device->endFrame().hasValue());
+        }
+        REQUIRE(device->waitIdle().hasValue());
+        const std::span<const std::byte> pixels = device->mappedMemory(readback);
+        for (std::uint32_t y = 0; y < 4; ++y) {
+            for (std::uint32_t x = 0; x < 4; ++x) {
+                checkTexel(pixels, x, y, {64, 128, 191, 255});
+            }
+        }
+    }
+}
+
+namespace {
+
+// Whether GPU zones are compiled in.
+#ifdef ITH_ENABLE_PROFILING
+constexpr bool kProfiling = true;
+#else
+constexpr bool kProfiling = false;
+#endif
+
+// Whether GPU zones are active without a viewer (IRONTHORN_PROFILING_ON_DEMAND off).
+#if defined(ITH_ENABLE_PROFILING) && !defined(TRACY_ON_DEMAND)
+constexpr bool kZonesActive = true;
+#else
+constexpr bool kZonesActive = false;
+#endif
+
+} // namespace
+
+TEST_SUITE("rhi_d3d12.profiling") {
+    // A list that never runs leaves its queries unresolved, which Tracy's Direct3D 12 context
+    // would wait for, so the backend turns the device's GPU zones off (docs/development/rhi.md,
+    // "GPU zones"). Where zones are active this records 40,960 zones' worth of frames after
+    // discarded lists and checks that nothing hangs and the debug layer stays quiet; elsewhere it
+    // checks that nothing changes.
+    TEST_CASE("zones of a list that never runs neither hang collection nor trouble the debug layer") {
+        std::optional<Device> device = makeDevice();
+        if (!device) {
+            return;
+        }
+        MESSAGE("zones active without a viewer: " << std::string(kZonesActive ? "yes" : "no"));
+        constexpr int kFrames = 80;
+        constexpr int kZonesPerFrame = 512;
+        for (int frame = 0; frame < kFrames; ++frame) {
+            if (!beginFrame(*device)) {
+                return;
+            }
+            if (frame % 20 == 0) {
+                CommandList& discarded = device->openCommandList("Never runs");
+                discarded.beginGpuZone("Dropped");
+                discarded.endGpuZone();
+                device->discard(discarded);
+            }
+            CommandList& list = device->openCommandList("Many zones");
+            for (int zone = 0; zone < kZonesPerFrame; ++zone) {
+                list.beginGpuZone("Zone");
+                list.endGpuZone();
+            }
+            REQUIRE(device->submit(list).hasValue());
+            REQUIRE(device->endFrame().hasValue());
+            if (frame == 0) {
+                CHECK(d3d12GpuZonesDisabledForTesting(*device) == kZonesActive);
+            }
+        }
+        REQUIRE(device->waitIdle().hasValue());
+    }
+
+    // A list still open at endFrame() (asserted) may still be recording on another thread, so the
+    // backend turns GPU zones off without looking at what it recorded, viewer or not.
+    TEST_CASE("a list endFrame() finds still open turns the device's GPU zones off") {
+        std::optional<Device> device = makeDevice();
+        if (!device) {
+            return;
+        }
+        CHECK_FALSE(d3d12GpuZonesDisabledForTesting(*device));
+        if (!beginFrame(*device)) {
+            return;
+        }
+        static_cast<void>(device->openCommandList("Left open"));
+        {
+            const ith::test::AssertCapture capture;
+            REQUIRE(device->endFrame().hasValue());
+        }
+        CHECK(d3d12GpuZonesDisabledForTesting(*device) == kProfiling);
+        REQUIRE(device->waitIdle().hasValue());
+    }
 }
 
 TEST_SUITE("rhi_d3d12.commands") {

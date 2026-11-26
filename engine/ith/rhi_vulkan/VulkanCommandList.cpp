@@ -112,14 +112,26 @@ VulkanCommandList::VulkanCommandList(VulkanBackend& backend, VkCommandPool pool,
 
 VulkanCommandList::~VulkanCommandList() {
     // The device destroys its lists only when the GPU is done with them (Backend.h).
-
+#ifdef ITH_ENABLE_PROFILING
+    // Zones left open (after a failed assert) end into the list while it still exists.
+    if (m_recording) {
+        m_gpuZones.endAll();
+    }
+#endif
     VkDevice device = m_backend->device();
     m_vk->vkDestroyCommandPool(device, m_pool, nullptr);
 }
 
 Expected<void, Error> VulkanCommandList::begin(std::uint32_t /*frameSlot*/, std::string_view debugName) {
-    // Resetting the pool also resets a list left recording (discarded, or its batch failed).
-
+    // Resetting the pool also resets a list left recording (discarded, or its batch failed or was
+    // skipped; the device reported it abandoned()). Zones left open after a failed assert end into
+    // it first, while it still records.
+#ifdef ITH_ENABLE_PROFILING
+    if (m_recording) {
+        m_gpuZones.endAll();
+    }
+    m_gpuZones.restart();
+#endif
     VkDevice device = m_backend->device();
     m_recording = false;
     const VkCommandBufferBeginInfo info{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -145,6 +157,10 @@ VkResult VulkanCommandList::close() {
         return VK_SUCCESS;
     }
     m_recording = false;
+#ifdef ITH_ENABLE_PROFILING
+    // A zone left open (asserted by the device) still gets its end timestamp.
+    m_gpuZones.endAll();
+#endif
     // Makes the list's writes visible to the CPU: Device::mappedMemory() of a Readback buffer is
     // read once the timeline says the GPU is done, and a semaphore signal alone doesn't make
     // writes visible to host reads. One barrier at the end of every list is the simplest rule
@@ -403,6 +419,30 @@ void VulkanCommandList::endMarker() {
     if (m_backend->debugUtils()) {
         m_vk->vkCmdEndDebugUtilsLabelEXT(m_commands);
     }
+}
+
+// Profiling builds only call these (Backend.h).
+void VulkanCommandList::beginGpuZone([[maybe_unused]] std::string_view name) {
+#ifdef ITH_ENABLE_PROFILING
+    m_gpuZones.begin(m_backend->gpuProfiler(), m_commands, name);
+#endif
+}
+
+void VulkanCommandList::endGpuZone() {
+#ifdef ITH_ENABLE_PROFILING
+    m_gpuZones.end();
+#endif
+}
+
+void VulkanCommandList::abandoned([[maybe_unused]] bool stillOpen) {
+#ifdef ITH_ENABLE_PROFILING
+    if (stillOpen) {
+        // Its recording may be unfinished, so the zones aren't read.
+        m_backend->gpuProfiler().disable("endFrame() closed a command list that was still open");
+    } else {
+        m_gpuZones.abandoned(m_backend->gpuProfiler());
+    }
+#endif
 }
 
 } // namespace ith::rhi::vulkan

@@ -1,9 +1,9 @@
-# Enforces ADR-0007 rules 10 to 12: engine and game code profile through the ITH_PROFILE_* macros,
-# so replacing the backend means rewriting ith/foundation/Profile.h (and the GPU zones in the RHI
-# backends) only.
-# - Only the files in `allowed` include Tracy (<tracy/...>, "tracy/...", or a Tracy*.hpp header).
-#   Today that is engine/ith/foundation/Profile.h; the private GPU-zone sources of the Vulkan and
-#   Direct3D 12 backends join the list when they exist (rule 12).
+# Enforces ADR-0007 rules 10 to 12: engine and game code profile through the ITH_PROFILE_* macros
+# and rhi::CommandList's GPU zones, so replacing the backend means rewriting
+# ith/foundation/Profile.h and the GPU-zone sources of the RHI backends only.
+# - Only the files in `allowed` include Tracy (<tracy/...>, "tracy/...", or a Tracy*.hpp or
+#   Tracy*.h header such as TracyC.h): engine/ith/foundation/Profile.h, and the private GPU-zone
+#   sources of the Vulkan and Direct3D 12 backends (rule 12).
 # - Only engine/ith/foundation/CMakeLists.txt links Tracy (ith::tracy or ith_tracy) among the
 #   CMakeLists.txt files searched.
 #
@@ -27,9 +27,12 @@ endif()
 string(REPLACE "," ";" directories "${DIRECTORIES}")
 string(REPLACE "," ";" skipped "${SKIP}")
 
-set(allowed "engine/ith/foundation/Profile.h")
+set(allowed
+    "engine/ith/foundation/Profile.h"
+    "engine/ith/rhi_vulkan/VulkanProfiler.cpp"
+    "engine/ith/rhi_d3d12/D3D12Profiler.cpp")
 set(linker "engine/ith/foundation/CMakeLists.txt")
-set(include_pattern "^[ \t]*#[ \t]*include[ \t]*[<\"](tracy/[^>\"]*|([^>\"]*/)?Tracy[^/>\"]*\\.hpp)[>\"]")
+set(include_pattern "^[ \t]*#[ \t]*include[ \t]*[<\"](tracy/[^>\"]*|([^>\"]*/)?Tracy[^/>\"]*\\.(hpp|h))[>\"]")
 
 set(violations "")
 set(count 0)
@@ -67,7 +70,7 @@ foreach(directory IN LISTS directories)
         file(STRINGS "${REPOSITORY_DIR}/${source}" includes REGEX "${include_pattern}")
         foreach(line IN LISTS includes)
             if(line MATCHES "${include_pattern}")
-                list(APPEND violations "${source} includes ${CMAKE_MATCH_1}: profile through ith/foundation/Profile.h")
+                list(APPEND violations "${source} includes ${CMAKE_MATCH_1}: profile through ith/foundation/Profile.h and the GPU zones of rhi::CommandList")
             endif()
         endforeach()
     endforeach()
@@ -75,6 +78,6 @@ endforeach()
 
 if(violations)
     list(JOIN violations "\n  " text)
-    message(FATAL_ERROR "Tracy outside ith/foundation/Profile.h (ADR-0007):\n  ${text}")
+    message(FATAL_ERROR "Tracy outside ith/foundation/Profile.h and the RHI backends' GPU-zone sources (ADR-0007):\n  ${text}")
 endif()
 message(STATUS "Tracy confined: ${count} file(s) checked.")

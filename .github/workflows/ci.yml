@@ -47,11 +47,21 @@ jobs:
       - name: Verify (format, MSVC Debug/dev/Release, clang-cl, clang-tidy, GPU tests on WARP)
         shell: pwsh
         run: ./scripts/dev.ps1 verify
-      # ADR-0007: MSVC compiles the enabled ITH_PROFILE_* macros too. Build only; the Linux
-      # linux-clang-profile job runs the tests with profiling on.
-      - name: Build with the Tracy profiler (windows-profile, MSVC)
+      # ADR-0007: MSVC compiles the enabled profiling code too, and the GPU suites run with it on
+      # WARP and the debug layer. IRONTHORN_PROFILING_ON_DEMAND=OFF makes the GPU zones active
+      # without a viewer, so their queries and readbacks run under validation. (No Vulkan driver on
+      # the runner: the Vulkan suite reports itself skipped.)
+      - name: Build and test with the Tracy profiler (windows-profile, MSVC, zones active)
         shell: pwsh
-        run: ./scripts/dev.ps1 build -Preset windows-profile
+        run: |
+          ./scripts/dev.ps1 configure -Preset windows-profile -DIRONTHORN_PROFILING_ON_DEMAND=OFF
+          ./scripts/dev.ps1 build -Preset windows-profile
+          ./scripts/dev.ps1 test -Preset windows-profile -Filter "^(rhi|rhi_d3d12|rhi_vulkan|render_graph_gpu)$"
+      # clang-cl compiles the enabled profiling code too (the Direct3D 12 GPU zones are Windows
+      # only). Build only.
+      - name: Build with the Tracy profiler (windows-clang-profile, clang-cl)
+        shell: pwsh
+        run: ./scripts/dev.ps1 build -Preset windows-clang-profile
 
   linux:
     name: linux (${{ matrix.preset }})
@@ -73,7 +83,8 @@ jobs:
           # ADR-0007 rule 15: one configuration with the Tracy profiler built in, so the enabled
           # ITH_PROFILE_* macros keep compiling and the tests pass with them. Never combined with a
           # sanitizer (CMake refuses it): Tracy replaces dlclose for the whole process on Linux and
-          # adds threads and a network listener of its own.
+          # adds threads and a network listener of its own. A second build of the GPU suites makes
+          # the GPU zones active without a viewer (see the step after Test).
           - preset: linux-clang-profile
             configure: linux-clang-profile
     steps:
@@ -146,6 +157,20 @@ jobs:
           ITH_RHI_TEST_REQUIRE_VULKAN: "1"
           ITH_RHI_TEST_ADAPTER: software
         run: ctest --preset ${{ matrix.preset }}
+      # The GPU suites again with IRONTHORN_PROFILING_ON_DEMAND=OFF, so that the GPU zones write,
+      # read and reset their queries on lavapipe under the validation layer. Only these suites: the
+      # mode keeps all profiling data in memory and is for test executables.
+      - name: GPU suites with active GPU zones
+        if: matrix.preset == 'linux-clang-profile'
+        env:
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.json
+          VK_ADD_LAYER_PATH: ${{ runner.temp }}/vvl/share/vulkan/explicit_layer.d
+          ITH_RHI_TEST_REQUIRE_VULKAN: "1"
+          ITH_RHI_TEST_ADAPTER: software
+        run: |
+          cmake --preset linux-clang-profile -B build/linux-clang-profile-active -DIRONTHORN_PROFILING_ON_DEMAND=OFF
+          cmake --build build/linux-clang-profile-active --config RelWithDebInfo --target ith_rhi_tests ith_rhi_vulkan_tests ith_render_graph_gpu_tests
+          ctest --test-dir build/linux-clang-profile-active -C RelWithDebInfo -R "^(rhi|rhi_vulkan|render_graph_gpu)$" --output-on-failure
       # The Vulkan swapchain on a real X11 window (Xvfb) on lavapipe. window_player falls back to
       # running without rendering, so the step checks that it rendered with Vulkan.
       - name: Window player on Vulkan (X11)

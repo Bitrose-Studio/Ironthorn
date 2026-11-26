@@ -635,11 +635,18 @@ Expected<void, Error> D3D12Backend::initialize(const DeviceDesc& desc) {
     m_textures.resize(limits.textures);
     m_pipelines.resize(limits.pipelines);
     m_swapchains.resize(limits.swapchains);
+#ifdef ITH_ENABLE_PROFILING
+    m_gpuProfiler.start(m_device.Get(), m_queue.Get());
+#endif
     return {};
 }
 
 D3D12Backend::~D3D12Backend() {
     // The device has destroyed every object and waited for the GPU (Backend.h).
+#ifdef ITH_ENABLE_PROFILING
+    // Its query heap and readback buffer belong to the device, and it holds the queue.
+    m_gpuProfiler.stop();
+#endif
     if (m_infoQueue != nullptr && m_messageCallbackCookie != 0) {
         m_infoQueue->UnregisterMessageCallback(m_messageCallbackCookie);
     }
@@ -1239,6 +1246,10 @@ Expected<void, Error> D3D12Backend::submit(std::span<detail::CommandListBackend*
 Expected<detail::PresentStatus, Error> D3D12Backend::endFrame(std::uint32_t /*frameSlot*/,
                                                               std::optional<std::uint32_t> swapchainSlot,
                                                               std::uint64_t signalValue) {
+#ifdef ITH_ENABLE_PROFILING
+    // Once per frame: the zones of earlier frames the GPU has finished.
+    m_gpuProfiler.collect();
+#endif
     HRESULT presented = S_OK;
     const SwapchainRecord* presentedSwapchain = nullptr;
     if (swapchainSlot) {
@@ -1325,6 +1336,17 @@ void failNextD3D12SignalForTesting(Device& device) {
             d3d12Backend(device, "failNextD3D12SignalForTesting() needs a live Direct3D 12 device")) {
         backend->failNextSignal();
     }
+}
+
+bool d3d12GpuZonesDisabledForTesting(Device& device) {
+    const d3d12::D3D12Backend* backend =
+        d3d12Backend(device, "d3d12GpuZonesDisabledForTesting() needs a live Direct3D 12 device");
+#ifdef ITH_ENABLE_PROFILING
+    return backend != nullptr && backend->gpuProfiler().disabled();
+#else
+    static_cast<void>(backend);
+    return false;
+#endif
 }
 
 } // namespace ith::rhi
