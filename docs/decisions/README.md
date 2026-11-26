@@ -55,5 +55,6 @@ These decisions are still open. Each is needed by the [roadmap](../architecture.
 
 | Topic | Needed by |
 |---|---|
+| Asset streaming (async, budgeted loading of textures, geometry and audio on the jobs background lane, per-tier budgets) | P3, before texture work |
 | Material model (OpenPBR-based real-time subset, per-tier approximations) | P3 |
 | Animation retargeting (rigs, chain mapping, runtime and editor batch retarget) | P5 |
