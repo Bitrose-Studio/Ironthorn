@@ -1,6 +1,7 @@
 # ADR-0047: Editor viewport picking as built (amends 0042, 0045)
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0048](0048-editor-viewport-translate-gizmo-as-built.md)
 - **Date:** 2026-11-27
 - **Related:** amends [ADR-0042](0042-editor-viewport.md) rules 12, 13, 15 and 22, and
   [ADR-0045](0045-editor-viewport-amendments-after-the-viewport-panel.md) items 6 and 7;
