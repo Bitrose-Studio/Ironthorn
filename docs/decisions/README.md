@@ -19,7 +19,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0012](0012-windowing-and-event-loop.md) | Windowing and the platform event loop | Accepted, amended by [0025](0025-job-system.md), [0027](0027-input-rules-completed.md) |
 | [0013](0013-input.md) | Input: events, state, routing and consumption | Accepted, amended by [0027](0027-input-rules-completed.md) |
 | [0014](0014-ecs-storage-and-world.md) | ECS storage and the world | Accepted, amended by [0030](0030-ecs-hooks-registration-and-immutable-components.md), [0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md), [0032](0032-entity-references-stable-ids-and-world-copy.md) |
-| [0015](0015-asset-identity-and-reimport.md) | Asset identity and non-destructive reimport | Accepted, amended by [0024](0024-asset-document-envelope-and-extension.md), [0033](0033-reflection-property-paths-and-patches.md), [0034](0034-level-documents.md) |
+| [0015](0015-asset-identity-and-reimport.md) | Asset identity and non-destructive reimport | Accepted, amended by [0024](0024-asset-document-envelope-and-extension.md), [0033](0033-reflection-property-paths-and-patches.md), [0034](0034-level-documents.md), [0049](0049-editor-content-browser-v1.md) |
 | [0016](0016-gameplay-model-on-the-ecs.md) | Gameplay model on the ECS | Accepted |
 | [0017](0017-runtime-and-editor-separation.md) | Runtime and editor separation | Accepted |
 | [0018](0018-reflection.md) | Reflection | Accepted, amended by [0019](0019-reflection-rules-corrected.md), [0030](0030-ecs-hooks-registration-and-immutable-components.md), [0032](0032-entity-references-stable-ids-and-world-copy.md), [0033](0033-reflection-property-paths-and-patches.md) |
@@ -41,7 +41,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0034](0034-level-documents.md) | Level documents (amends 0015, 0024, 0031, 0032) | Accepted |
 | [0035](0035-file-system-configuration-and-main-thread-queue.md) | File system, layered configuration and the main-thread queue (amends 0025, 0027, 0029) | Accepted, amended by [0036](0036-file-system-windows-atomic-replace-corrected.md), [0041](0041-editor-amendments-after-outliner-and-details.md) |
 | [0036](0036-file-system-windows-atomic-replace-corrected.md) | File system: Windows atomic replace corrected after the first implementation (amends 0035) | Accepted, amended by [0038](0038-file-system-windows-read-retry-during-replace.md) |
-| [0037](0037-editor-commands-transactions-selection-and-automation.md) | Editor commands, transactions, selection and automation (amends 0008, 0032, 0033) | Accepted, amended by [0041](0041-editor-amendments-after-outliner-and-details.md), [0042](0042-editor-viewport.md), [0048](0048-editor-viewport-translate-gizmo-as-built.md) |
+| [0037](0037-editor-commands-transactions-selection-and-automation.md) | Editor commands, transactions, selection and automation (amends 0008, 0032, 0033) | Accepted, amended by [0041](0041-editor-amendments-after-outliner-and-details.md), [0042](0042-editor-viewport.md), [0048](0048-editor-viewport-translate-gizmo-as-built.md), [0049](0049-editor-content-browser-v1.md) |
 | [0038](0038-file-system-windows-read-retry-during-replace.md) | File system: Windows read retry while a replace is in flight (amends 0036) | Accepted, amended by [0039](0039-file-system-windows-read-retry-measured.md) |
 | [0039](0039-file-system-windows-read-retry-measured.md) | File system: Windows read retry after a replace, measured (amends 0038) | Accepted |
 | [0040](0040-editor-docking-panels-and-layouts.md) | Editor docking, panels and layouts (amends 0029) | Accepted |
@@ -53,6 +53,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0046](0046-editor-viewport-horizontal-field-of-view.md) | Editor viewport horizontal field of view (amends 0042, 0045) | Accepted |
 | [0047](0047-editor-viewport-picking-as-built.md) | Editor viewport picking as built (amends 0042, 0045) | Accepted, amended by [0048](0048-editor-viewport-translate-gizmo-as-built.md) |
 | [0048](0048-editor-viewport-translate-gizmo-as-built.md) | Editor viewport translate gizmo as built (amends 0037, 0042, 0047) | Accepted |
+| [0049](0049-editor-content-browser-v1.md) | Editor Content Browser v1 (amends 0015, 0037) | Accepted |
 
 ## Planned
 
