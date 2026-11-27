@@ -19,7 +19,9 @@
 //   every folder below it (ADR-0049 rule 18). Folders come first; names sort in natural order
 //   (naturalCompare);
 // - the content selection with its anchor and focus item, the view settings, the drawer's open
-//   state, the keyboard-focus flag editor_ui reports every frame, and the session state.
+//   state, the keyboard-focus flag editor_ui reports every frame, and the session state;
+// - the pending prompt of a file operation that waits for the user's answer (an inline rename, the
+//   delete confirmation, the import conflicts), and the problems the file operations fix or cause.
 //
 // Nothing is computed per frame: every change rebuilds what it affects at once and bumps
 // generation(), which panels poll (ADR-0037 rule 13). The items are rebuilt from the database by
@@ -41,6 +43,7 @@
 #include "ith/assets/AssetId.h"
 #include "ith/foundation/Expected.h"
 #include "ith/serialization/Document.h"
+#include "ith/serialization/Value.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -269,6 +272,52 @@ struct ContentScreenRect {
     }
 };
 
+// What a pending prompt asks (spec 3.19).
+enum class ContentPromptKind : std::uint8_t {
+    // The inline rename of `item` is open: ith.content.new_folder without a name, ith.content.rename
+    // without one.
+    Rename,
+    // The delete confirmation: ith.content.delete without "confirmed".
+    Delete,
+    // The import conflict dialog: ith.content.import with conflicts and no choice for them.
+    ImportConflicts,
+};
+
+// A question to the user that a content command started instead of acting: the UI shows it and
+// runs the command again with the answer; automation passes the answer at once.
+struct ContentPrompt {
+    ContentPromptKind kind = ContentPromptKind::Rename;
+    // Rename: the item renamed.
+    ContentKey item;
+    // What the prompt shows, as the command that started it returned it: Rename {path, name,
+    // extension}; Delete {deleted: false, preview}; ImportConflicts {done: false, files, folder,
+    // conflicts}.
+    serialization::Value details;
+};
+
+// The part of an item's file name that a rename edits, and the part it keeps (spec 3.8).
+struct ContentNameParts {
+    // A folder's whole name, a native asset's name without ".ithasset" or ".ithmap", any other
+    // file's name without its last extension.
+    std::string editable;
+    // What follows it: the extension with its dot, as the name has it; empty for folders and names
+    // without one.
+    std::string extension;
+};
+
+// The parts of the name of `item`.
+[[nodiscard]] ContentNameParts nameParts(const ContentItem& item);
+
+// Checks a file or folder name for the rename rule of spec 3.8 that needs no disk: not empty, no
+// '/' or '\', at most kMaxContentNameSize bytes, no '.' or ' ' at the end, not ending in ".meta",
+// and valid for isValidContentPath. Fails with "editor.content.invalid_name" and the reason, which
+// the UI shows under the rename field. Whether the name is taken is the commands' check.
+[[nodiscard]] Expected<void> checkContentName(std::string_view name);
+
+// The base of the duplicate naming scheme (spec 3.10): `editable` without a trailing "_<digits>"
+// ("Rock_2" gives "Rock"; "Rock_" and "_2" stay as they are).
+[[nodiscard]] std::string_view numberedNameBase(std::string_view editable) noexcept;
+
 class ContentBrowserModel {
 public:
     // `assets` is the project's database (null: no project, and every content command fails with
@@ -418,6 +467,44 @@ public:
 
     void setDrawerHeight(float height);
 
+    // The pending prompt (spec 3.19), or null. A content command that needs an answer sets it; running
+    // the command with the answer ends it, and so does ith.content.dismiss, which the UI's Cancel and
+    // Escape issue. A new prompt replaces the last. A rename's item follows movedPath, and refresh
+    // drops a rename whose item is gone. Valid until the next change: a caller that passes a prompt's
+    // details back as a command's arguments copies them first, since the command replaces the prompt.
+    [[nodiscard]] const ContentPrompt* prompt() const noexcept { return m_prompt ? &*m_prompt : nullptr; }
+
+    // For the content commands: they set the prompt of a question and end it once answered.
+    void setPrompt(ContentPrompt prompt);
+    void clearPrompt();
+
+    // The file operations' bookkeeping. Each changes what the model keeps by path, then the caller
+    // calls refresh() once the database has changed.
+
+    // The file or folder at the content path `from` is now at `to` (a rename or a move by the
+    // browser): the current folder, the expanded folders, the selection with its anchor and focus
+    // item (folders and problem entries are keyed by path), and the problems at or below `from`
+    // follow it. A case conflict between a path that moved and one that didn't is dropped, unless the
+    // move only changed the ASCII case (spec 3.8: a rename fixes the conflicts it ends).
+    void movedPath(std::string_view from, std::string_view to);
+
+    // The file or folder at `path` is gone or fixed: the problems at or below it are dropped (a
+    // deleted orphan sidecar, an imported "Not imported" file, an assigned duplicate).
+    void removedPath(std::string_view path);
+
+    // Adds problems a command caused (a sidecar left behind by a failed delete, a copy whose import
+    // failed), keeping the list sorted by path and without repeats.
+    void addProblems(std::span<const AssetProblem> problems);
+
+    // The selection, anchor and focus item name `to` where they named `from` (a problem entry that
+    // became an asset).
+    void rekey(const ContentKey& from, const ContentKey& to);
+
+    // Replaces the selection with the items of `keys` that are shown, in that order (the last
+    // becomes primary, anchor and focus); keys not shown are left out. Selecting the result of a
+    // command, which may not match the search.
+    void selectShown(std::span<const ContentKey> keys);
+
     // Changes whenever anything the browser shows changes; panels poll it.
     [[nodiscard]] std::uint64_t generation() const noexcept { return m_generation; }
 
@@ -431,6 +518,8 @@ private:
     void writeState();
     void rebuildTree();
     void rebuildView();
+    // Ends a pending rename whose item is gone.
+    void dropStalePrompt();
     // Takes keys that are not shown out of the selection, anchor and focus.
     void pruneSelection();
     void deselect(const ContentKey& key);
@@ -474,6 +563,7 @@ private:
     std::unordered_set<ContentKey, ContentKeyHash> m_selected;
     std::optional<ContentKey> m_anchor;
     std::optional<ContentKey> m_focus;
+    std::optional<ContentPrompt> m_prompt;
     bool m_drawerOpen = false;
     bool m_keyboardFocus = false;
     std::vector<ContentScreenRect> m_screenRects;

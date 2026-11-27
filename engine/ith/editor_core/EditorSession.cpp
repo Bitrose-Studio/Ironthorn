@@ -4,6 +4,7 @@
 #include "ith/asset_database/AssetHeader.h"
 #include "ith/assets/AssetId.h"
 #include "ith/ecs/StableId.h"
+#include "ith/editor_core/ContentPaths.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
 #include "ith/foundation/Assert.h"
@@ -63,15 +64,6 @@ Expected<std::optional<AssetId>> levelIdAt(const std::string& fullPath, std::str
         return std::optional<AssetId>();
     }
     return std::optional<AssetId>(header->id);
-}
-
-// `fullPath` relative to the database's Content folder, or nullopt when it is not inside it.
-std::optional<std::string> contentPathOf(const AssetDatabase& assets, const std::string& fullPath) {
-    const std::string content = assets.contentDirectory() + "/";
-    if (!fullPath.starts_with(content)) {
-        return std::nullopt;
-    }
-    return fullPath.substr(content.size());
 }
 
 } // namespace
@@ -311,7 +303,8 @@ void EditorSession::finish() {
 
 void EditorSession::showSavedLevel(const std::string& fullPath) {
     const AssetDatabase* assets = m_options.assets;
-    const std::optional<std::string> path = assets != nullptr ? contentPathOf(*assets, fullPath) : std::nullopt;
+    const std::optional<std::string> path =
+        assets != nullptr ? detail::contentFileOf(assets->contentDirectory(), fullPath) : std::nullopt;
     if (!path) {
         return;
     }
@@ -338,7 +331,7 @@ void EditorSession::syncLevelWithAssets() {
     const std::string full = resolvePath(m_document.path());
     // The database knows the level's own file: the level takes the id the file has now (the scan gave
     // a copy of a known level a new one) and stays on its file.
-    if (const std::optional<std::string> path = contentPathOf(*assets, full); path) {
+    if (const std::optional<std::string> path = detail::contentFileOf(assets->contentDirectory(), full); path) {
         if (const AssetRecord* own = assets->findByPath(*path); own != nullptr) {
             if (own->id != AssetId(m_document.levelId())) {
                 m_document.setLevelId(own->id.uuid());
@@ -359,6 +352,25 @@ void EditorSession::syncLevelWithAssets() {
     }
     ITH_LOG_WARNING(ContentBrowser, "the open level's file {} is gone; saving the level writes it again",
                     m_document.path());
+}
+
+std::optional<std::string> EditorSession::levelContentPath() const {
+    const AssetDatabase* assets = m_options.assets;
+    if (m_document.path().empty() || assets == nullptr) {
+        return std::nullopt;
+    }
+    return detail::contentFileOf(assets->contentDirectory(), resolvePath(m_document.path()));
+}
+
+void EditorSession::followContentMove(const std::optional<std::string>& levelPath, std::string_view from,
+                                      std::string_view to) {
+    if (!levelPath || from.empty() || from == to || !detail::isAtOrBelow(*levelPath, from)) {
+        return;
+    }
+    ITH_ASSERT_MSG(!m_document.saving(), "the Content Browser refuses file operations while a level is saved");
+    const std::string moved = std::string(to) + levelPath->substr(from.size());
+    m_document.setPath(fs::isAbsolutePath(m_document.path()) ? fs::joinPath(m_options.assets->contentDirectory(), moved)
+                                                             : std::string(kContentFolderName) + "/" + moved);
 }
 
 void EditorSession::waitIdle() {

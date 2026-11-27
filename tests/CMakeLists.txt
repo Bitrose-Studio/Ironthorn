@@ -855,6 +855,8 @@ if(TARGET ith_editor_core)
             editor_core/AddShapeTests.cpp
             editor_core/AutomationTests.cpp
             editor_core/ContentBrowserTests.cpp
+            editor_core/ContentFileOperationTests.cpp
+            editor_core/ContentTestSupport.h
             editor_core/EditCommandTests.cpp
             editor_core/EditorCameraTests.cpp
             editor_core/EditorCoreComponents.h

@@ -105,12 +105,12 @@ inline constexpr std::array<Chord, 13> kContentWidgetChords = {{
     {.key = Key::F, .modifiers = KeyModifiers::Control},
 }};
 
-// F2, Delete and Ctrl + D while the Content Browser has the keyboard focus: the keys of the content
-// commands that come with its file operations (rename, delete, duplicate). Until those are registered,
-// the keymap consumer consumes them without running anything, whatever the keymap binds, so a layer
-// that unbinds ith.content.delete can't let Delete reach ith.edit.delete. The file operations replace
-// this list with the real commands.
-inline constexpr std::array<Chord, 3> kContentReservedChords = {{
+// F2, Delete and Ctrl + D: the Content Browser's file keys (rename, delete, duplicate). While the
+// browser has the keyboard focus and the Content context binds nothing to one of them (a user layer
+// unbound or rebound the content command), the keymap consumer consumes it without running anything,
+// so it never falls through to the Editor context's entity commands (ith.edit.delete). A key the
+// browser uses must not act on the level (ADR-0050 item 1).
+inline constexpr std::array<Chord, 3> kContentOwnedChords = {{
     {.key = Key::F2},
     {.key = Key::Delete},
     {.key = Key::D, .modifiers = KeyModifiers::Control},
@@ -156,12 +156,12 @@ private:
 // the bound command, invoked as a user gesture (CommandRegistry::invoke, so a prompt can ask for its
 // input). While the Content Browser has the keyboard focus (ContentBrowserModel::keyboardFocus: the
 // UI's last frame, a press inside the browser since, or the drawer just toggled), the asset view's
-// widget keys (kContentWidgetChords) and the reserved keys of the file operations
-// (kContentReservedChords) are consumed without running anything, and other chords are
-// looked up in the Content context first, then in the Editor context; otherwise in the Editor
-// context only.
-// Letter keys follow the user's layout (Event::layoutKey), so Ctrl + Z is the
-// key that prints Z; other keys are physical keys. A press that matches a binding is consumed, also
+// widget keys (kContentWidgetChords) are consumed without running anything, and other chords are
+// looked up in the Content context first (F2, Delete and Ctrl + D are the content file operations
+// there), then, except for kContentOwnedChords, which are consumed when the Content context binds
+// them to nothing, in the Editor context; otherwise in the Editor context only. Letter keys follow the
+// user's layout (Event::layoutKey), so Ctrl + Z is the key that prints Z; other keys are physical
+// keys. A press that matches a binding is consumed, also
 // when the command refuses to run (its error is kept in lastResult()). While an interaction holds a
 // transaction open, Escape cancels it (Transactions::cancelOpen) and other chords are left to the
 // consumers below. Key repeats run nothing. The keymap must outlive the consumer.

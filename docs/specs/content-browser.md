@@ -1,10 +1,14 @@
 # Spec: Content Browser v1
 
 - **Status:** Settled by [ADR-0049](../decisions/0049-editor-content-browser-v1.md) (Accepted
-  2026-11-27); the browse slice (ADR-0049 rule 27) is implemented, file operations and import are
-  not yet, and the Content Drawer button in the status bar (3.16) comes with them (it changes the
-  shell's golden images). The ADR settles the open questions (section 6) and the spec follows it
-  where it differs from the first draft (its rules 3, 6, 10, 11 and 12)
+  2026-11-27); the browse slice (ADR-0049 rule 27) and the commands of the file operations and
+  import (`ith.content.*`, tested headless) are implemented; the panel's side of them is not yet:
+  the inline rename field, the delete and import-conflict dialogs, drag-and-drop moves, their menu
+  and toolbar entries, the handling of operating-system drops and of the open-file dialog (the
+  platform delivers both, ADR-0051), and the Content Drawer button in the status bar (3.16; it
+  changes the shell's golden images). The ADR settles the
+  open questions (section 6) and the spec follows it where it differs from the first draft (its
+  rules 3, 6, 10, 11 and 12)
 - **Date:** 2026-11-27
 - **Builds on:** [ADR-0003](../decisions/0003-clean-room.md) (clean room),
   [ADR-0004](../decisions/0004-modules-and-layering.md) (layers),
@@ -167,12 +171,12 @@ and that are not native assets (ADR-0024 rule 7), links to folders.
 | `OrphanSidecar`: a sidecar whose file is gone | Problem entry labelled with the sidecar's name (`Rock.png.meta`), badge "Source file missing" | Delete |
 | `DuplicateId` left unresolved by a first scan | Problem entry, badge "Duplicate id of <other path>" | Assign New Id |
 | `DuplicateId` that the scan resolved by giving the copy a new id | No badge; one info line in the log | none needed |
-| `InvalidFile` (unreadable asset or sidecar, folder that can't be listed, leftover temporary file, name that isn't valid Unicode) | Problem entry (or a badge on the folder), with the scan's message | Delete, Rename |
+| `InvalidFile` (unreadable asset or sidecar, folder that can't be listed, leftover temporary file, name that isn't valid Unicode) | Problem entry (or a badge on the folder), with the scan's message | Delete, Rename (not for a sidecar) |
 | `CaseConflict`: two paths that differ only in ASCII case | Badge on both items, naming the other | Rename |
 | `FormatMismatch`: the extension doesn't fit the format | Badge on the asset | Rename |
 
 An asset with a badge is still an asset and supports every asset operation. A problem entry
-supports only Delete, Rename (except orphan sidecars) and its fix; it can't be dragged, duplicated
+supports only Delete, Rename (except sidecars) and its fix; it can't be dragged, duplicated
 or reimported.
 
 **Type categories.** A table in `editor_core` maps each type to a display name and a category;
@@ -280,8 +284,10 @@ The last item added is the **primary item**.
 - **Enter** commits, **Escape** cancels, **clicking away** commits a valid name and cancels an
   invalid one. An unchanged name does nothing.
 - **Validation runs as the user types**; the reason shows under the field, and Enter with an
-  invalid name keeps the field open. The new name is invalid when:
-  - it is empty;
+  invalid name keeps the field open. A file's name is checked as the **full resulting name**, the
+  editable part with its extension, so `name.` typed for a `.gltf` gives `name..gltf`, which is
+  valid; a folder has no extension, so `name.` is refused for it. The new name is invalid when:
+  - the editable part is empty;
   - it contains `/` or `\`;
   - the resulting content path fails `isValidContentPath` (control characters, `< > : " | ? *`,
     a name ending in `.` or a space, a Windows device name such as `CON` or `com1.txt`, a name of
@@ -292,7 +298,12 @@ The last item added is the **primary item**.
   - **another entry in the same folder has the same name without ASCII case**: any file on disk,
     a hidden one or a sidecar included, or any folder (`editor.content.exists`).
 - **A case-only rename of the same item is allowed** (`rock.png` to `Rock.png`); it is a
-  rename on disk, not a conflict.
+  rename on disk, not a conflict. On Windows, a case-only rename that changes or involves letters
+  outside ASCII (`été` to `Été`) is refused with `editor.content.exists` (the database's
+  `asset.path_conflict`, reported as a taken name), because the file system treats the two names
+  as the same file while the content path rule does not.
+- **Sidecar entries (an orphan or an unreadable sidecar) can't be renamed**
+  (`editor.content.invalid_target`): a sidecar always takes its name from its file.
 - Renaming an asset keeps its id; its sidecar is renamed with it. Renaming a folder renames the
   folder on disk; every asset inside keeps its id and its database path changes.
 - Renaming the open level's file, or a folder that contains it, changes the open document's path
@@ -351,7 +362,9 @@ The last item added is the **primary item**.
   the tree has focus). It always asks first, because it can't be undone.
 - **What is deleted:**
   - an asset: its file and its sidecar;
-  - a problem entry: its file (an orphan sidecar: the sidecar; a file without a sidecar: the file);
+  - a problem entry: its file (an orphan sidecar: the sidecar; a file without a sidecar: the file;
+    a duplicate or another problem file that has a sidecar beside it: the file and that sidecar);
+    renaming such an entry moves its sidecar with it in the same way;
   - a folder: **the folder with everything in it**, including files the browser doesn't show
     (open question 3).
 - **Refused:** the content root (`editor.content.root`); the open level's file or a folder that
@@ -403,12 +416,25 @@ The last item added is the **primary item**.
   elsewhere are ignored, and dropped text is not delivered. The destination is the folder item,
   tree folder or path bar segment under the pointer, else the current folder.
 - **A dropped folder** is imported with its subfolders, which are created in the destination
-  with the same names (open question 9).
+  with the same names (open question 9). Folder names in one drop that differ only in ASCII case
+  merge into the first spelling, and a folder whose name exists in the destination in another
+  ASCII case merges into the existing folder on disk, under its existing name.
+- **What a folder walk skips**, each listed in the result with its reason: links inside a
+  dropped folder (links to folders and links to files), which are not followed; a name that
+  isn't valid Unicode, and on Linux a name holding `\`, because neither can become a content
+  path; folders more than 64 levels deep (`kMaxFolderDepth`); special files (devices, pipes,
+  sockets).
+- **A link given on its own** (in `files`, not found inside a folder) is followed: a link to a
+  folder is walked as that folder, and a link to a file is imported as that file.
+- **The walk of a dropped folder is bounded:** an import that would take more than 4096 entries
+  imports nothing and fails with `editor.content.too_many_files`.
 
 **Per file:**
 
 1. **A file already inside the content root** is not copied: it is imported in place (a file
-   without a sidecar gets one; a file with one is reimported). The destination doesn't apply.
+   without a sidecar gets one; a file with one is reimported). The destination doesn't apply. A
+   native asset already in the content root is skipped ("already an asset"); one the database
+   doesn't have is skipped with a hint to Rescan or to use its fix.
 2. **A file that no importer reads** and that is not a native asset is skipped, listed in the
    result as "no importer for `.<ext>`".
 3. **The destination name** is the file's name in the destination folder. When it is taken
@@ -424,15 +450,18 @@ The last item added is the **primary item**.
    importer says it reads (`Importer::dependencies`, such as a `.gltf`'s `.bin`), to the same
    paths relative to it, when they exist beside the original and are not there yet.
 5. **Import** through the database. Then the files the import reports as referenced (the images
-   of a glTF's materials), when they exist beside the original, are copied to the same relative
-   paths if missing, and imported themselves if an importer reads them.
+   of a glTF's materials) are copied to the same relative paths if missing, and imported
+   themselves if an importer reads them. Only referenced files at or below the copied file's
+   folder are copied, so a reference such as `../x.png` never writes outside the destination. A
+   referenced file that is missing beside the source is reported as skipped.
 6. **A native asset from outside** (`.ithasset`, `.ithmap`) is copied as it is; it keeps its id
    unless the database already has that id, in which case the copy gets a new one (the duplicate
    rule of ADR-0015 rule 6).
 
 **Conflicts in the UI:** before copying anything, the browser lists every conflict. A dialog asks,
 per file, Replace (when allowed) / Keep Both / Skip, with "Apply to all remaining" and Cancel
-(which imports nothing). Automation passes the choice (4.2).
+(which imports nothing). The dialog runs the import again with its per-file answers in
+`choices`; automation passes `conflict` for every file, `choices` per file, or both (3.19).
 
 **While it runs** (ADR-0049 rule 11): imports and reimports run synchronously on the main thread,
 inside the command. No frame is drawn during the import, so there is no live progress and no
@@ -449,7 +478,8 @@ counted (as the database enforces).
 
 - **Reimport** (context menu) reruns the importer with the saved settings for every selected
   imported asset (ADR-0015 rule 9). Native assets in the selection are skipped; with only native
-  assets selected, the command is disabled ("only imported files can be reimported").
+  assets given or selected, the command fails with `editor.content.not_imported` ("only imported
+  files can be reimported"), and the panel greys the menu entry, judging from the selection.
 - **Import** on a "Not imported" entry imports the file in place; the entry becomes an asset.
 - **Assign New Id** on an unresolved duplicate gives the file a new id (`assignNewId`); the entry
   becomes an asset.
@@ -509,10 +539,14 @@ counted (as the database enforces).
 - **On open**, the keyboard focus goes to the asset view; Ctrl + F moves it to the search box.
 - **It closes** on Ctrl + Space; on Escape when nothing in the drawer uses that Escape (an inline
   rename, an open menu or dialog and a focused text field take it first; then
-  `ith.content.dismiss` clears a non-empty selection, and closes the drawer only when nothing is
-  selected); when the user
+  `ith.content.dismiss` clears a pending prompt first, then a non-empty selection, and closes the
+  drawer only when neither is left); when the user
   clicks anywhere outside it; after a level opens from it. A dialog it opened (delete, import
   conflicts) doesn't close it.
+- **Escape and the dialogs' Cancel** (delete confirmation, import conflicts), in the panel and in
+  the drawer, both issue `ith.content.dismiss`. It clears one thing per call, in this order: a
+  pending prompt (3.19), else the selection, else it closes the drawer when it is open. So
+  cancelling a dialog keeps the selection and the drawer, and a later Escape goes on from there.
 - **Shared state:** the drawer and the panel show the same browser: current folder, selection,
   search, filter and view mode.
 - It starts closed in every run.
@@ -540,11 +574,12 @@ section. Every `ith.content.*` command is in the Content context except
 - While the browser has the focus, the widget keys of the asset view (below) are consumed by the
   keymap without running anything, so End never also runs its Editor binding (Snap to Floor) and
   an arrow never reaches the level.
-- Until the file operations register `ith.content.rename`, `ith.content.delete` and
-  `ith.content.duplicate`, F2, Delete and Ctrl + D are consumed the same way while the browser has
-  the focus, whatever the keymap binds (`kContentReservedChords`), so unbinding a content command in
-  a user layer can't let Delete reach the level's `ith.edit.delete`. The file operations replace
-  this with their real commands.
+- **F2, Delete and Ctrl + D are owned by the browser** while it has the focus, permanently. A
+  user keymap may rebind or unbind `ith.content.rename`, `ith.content.delete` and
+  `ith.content.duplicate`, but while the browser has the focus those three chords never fall
+  through to an Editor-context command: if no Content command is bound to one of them, the keymap
+  consumes it without running anything. So Delete in the browser never reaches the level's
+  `ith.edit.delete`, whatever a user layer binds.
 - While an ImGui popup is open (a menu, the unsaved-changes question, later dialogs), it keeps
   every key, as a text field does: Escape closes the menu and runs no shortcut.
 - A text field (search, inline rename) keeps every key, as today. No other panel has a context
@@ -562,7 +597,7 @@ Shortcuts run their command without arguments. The bindings in `engine/config/Ke
 | Enter, Keypad Enter | Open the primary item (level: open it; folder: go into it) | `ith.content.open` | Content |
 | Alt + Up | Parent folder | `ith.content.navigate_up` | Content |
 | Ctrl + A | Select every shown item | `ith.content.select_all` | Content |
-| Escape | Clear the selection; with nothing selected, close the drawer when it is open | `ith.content.dismiss` | Content |
+| Escape | Clear a pending prompt, else the selection; with neither, close the drawer when it is open | `ith.content.dismiss` | Content |
 
 **Widget keys of the asset view**, not keymap bindings and not remappable in v1:
 
@@ -612,38 +647,57 @@ This follows the unsaved-changes pattern of `ith.file.open_level`.
 | `ith.content.navigate_up` | `{}` | `{folder}`: the parent folder; nothing changes at the root |
 | `ith.content.select` | `{items, mode?}` with `mode` `replace` (the default), `add`, `toggle`, `remove`, `range` (Shift + click: from the anchor to the one item) or `add_range` (Ctrl + Shift + click); `replace` with no items clears the selection | `{selection, primary}` |
 | `ith.content.select_all` | `{}` | `{selection, primary}`: every shown item |
-| `ith.content.dismiss` | `{}` | `{selection, primary, drawerOpen}`: clears the selection; with nothing selected, closes the drawer when it is open |
+| `ith.content.dismiss` | `{}` | `{selection, primary, drawerOpen}`: clears a pending prompt; with none, clears the selection; with nothing selected, closes the drawer when it is open (3.16) |
 | `ith.content.set_view` | `{mode?, sortBy?: "name" \| "type", descending?}` | the view settings |
 | `ith.content.set_filter` | `{search?, categories?}` | `{shown}`: the number of items shown |
-| `ith.content.new_folder` | `{parent?, name?}` | `{path}`; without `name`, also starts its inline rename |
-| `ith.content.rename` | `{item?, name?}` | `{path}`; without `name`, starts the inline rename |
-| `ith.content.move` | `{items?, folder}` | `{moved, failed}` |
-| `ith.content.duplicate` | `{items?}` | `{created, skipped}` |
+| `ith.content.new_folder` | `{parent?, name?}` | `{path}`; without `name`, also starts its inline rename and returns `{path, prompt: "rename"}` |
+| `ith.content.rename` | `{item?, name?}` | `{path}`; without `name`, starts the inline rename and returns `{path, name, extension}` |
+| `ith.content.move` | `{items?, folder}` | `{moved, failed, skipped}` |
+| `ith.content.duplicate` | `{items?}` | `{created, skipped, failed}` |
 | `ith.content.delete` | `{items?, confirmed?: false}` | without `confirmed`: `{deleted: false, preview}`; with it: `{deleted, failed}` |
-| `ith.content.import` | `{files, folder?, conflict?: "replace" \| "keep_both" \| "skip"}` | `{imported, skipped, failed}`, or `{done: false, conflicts}` when conflicts exist and `conflict` is absent |
+| `ith.content.import` | `{files, folder?, conflict?: "replace" \| "keep_both" \| "skip", choices?: {<file>: "replace" \| "keep_both" \| "skip"}}` | `{imported, skipped, failed}`, or `{done: false, files, folder, conflicts: [{file, target, replace}]}` when a conflict is answered neither by `choices` nor by `conflict` |
 | `ith.content.reimport` | `{items?}` | `{reimported, skipped, failed}` |
 | `ith.content.fix` | `{item}` | `{path, id}`: Import for a "Not imported" entry, Assign New Id for a duplicate |
 | `ith.content.rescan` | `{}` | `{assets, problems}` |
 | `ith.content.open` | `{item?, unsaved?}` | as `ith.file.open_level` for a level; `{folder}` for a folder |
 | `ith.content.toggle_drawer` | `{open?}` | `{open, target}`: `target` is `drawer` or `panel` (3.16); `open: false` always closes the drawer |
 
-- `files` in `ith.content.import` are absolute paths, UTF-8, from the file dialog or the drop;
-  `folder` is a content path (the current folder by default). Automation calls it with paths, so
-  importing is tested headless without the dialog. The command runs the imports synchronously
-  (3.12).
-- `preview` lists the items, the files and folders to remove, the counts of 3.11 and the users
-  per asset. `moved`, `created`, `deleted`, `imported` and the others list item references with
-  their content paths; `failed` adds each error's code and message.
+- `files` in `ith.content.import` are paths in UTF-8, from the file dialog or the drop, either
+  absolute or relative to the project folder; `folder` is a content path (the current folder by
+  default). Automation calls it with paths, so importing is tested headless without the dialog.
+  The command runs the imports synchronously (3.12).
+- `choices` holds the conflict dialog's per-file answers, keyed by a conflict's `file` as
+  `{done: false, conflicts}` reports it: the path resolved as `files` are (absolute and
+  normalized; relative to the project folder), and for a file found in a dropped folder, that
+  file's own path, not the folder's. Keys match by bytes after that resolution, and a key that
+  names no conflict is ignored. An answer in `choices` comes before `conflict`, which answers
+  every other file.
+- **With no `items` and nothing selected**, `move`, `duplicate`, `delete` and `reimport` change
+  nothing and return null.
+- `preview` is `{items, count, assets, otherFiles, uses, unreadable}`: the items to delete (for a
+  folder, with its counts of assets and of other files), their number, the number of assets and
+  of files not shown in the browser that would go, the users per used asset (`uses`), and the
+  files that couldn't be read while looking for users, each with its error (3.11). `moved`,
+  `created`, `deleted`, `imported` and the others list item references with their content paths;
+  `failed` adds each error's code and message, and `skipped` each item's reason.
+- `imported` entries are `{id, path, file}`, plus `fromCache`, `newId` or `replaced` where they
+  apply; import's `skipped` and `failed` entries carry `file` instead of an item reference.
 - Error codes: `editor.content.not_found`, `editor.content.invalid_name` (the reason in the
   message), `editor.content.exists`, `editor.content.invalid_target` (not a folder, a folder into
-  itself or below itself, a problem entry dragged), `editor.content.root`,
-  `editor.content.level_open`, `editor.content.not_imported`, `editor.content.no_importer`,
-  `editor.command.invalid_args`, `editor.document.no_asset_database`, and the database's and file
-  system's codes (`asset.*`, `fs.*`) inside `failed`.
+  itself or below itself, a problem entry dragged, a sidecar entry renamed, `fix` on an item
+  without a fix), `editor.content.root`, `editor.content.level_open`,
+  `editor.content.not_imported`, `editor.content.too_many_files` (an import whose walk of the given files and folders exceeds
+  4096 entries; nothing is imported), `editor.command.invalid_args`,
+  `editor.document.no_asset_database`, `editor.document.save_in_progress` (3.20), and the
+  database's and file system's codes (`asset.*`, `fs.*`) inside `failed`. The database's
+  `asset.path_conflict` and `asset.invalid_target` are reported as `editor.content.exists` and
+  `editor.content.invalid_target`. A file no importer reads is listed in `skipped`, not failed.
 - **Queries:** `ith.query.content` → `{folder, search, categories, view, items: [{kind, path, id?,
   label, type, category, problems: [{kind, message, otherPath?}]}], problems, selection, primary,
   anchor, focus, prompt, drawerOpen}` (items in display order, `problems` the number of shown items
-  with a problem, `focus` the focus item, `prompt` a pending rename or dialog, null when none);
+  with a problem, `focus` the focus item, `prompt` the pending prompt, null when none: an object
+  whose `kind` is `rename` (with `item`, the item being renamed), `delete` or `import_conflicts`,
+  plus the details the prompt shows, such as the delete preview or the conflicts);
   `ith.query.content_tree` → `{current, folders: [{path, name, depth, hasChildren, expanded}]}`, the
   rows of the folder tree as shown (the root first; folders below a collapsed one left out);
   `ith.query.content_problems` → `{problems: [{kind, path, otherPath?, message}]}`, every
@@ -660,8 +714,14 @@ This follows the unsaved-changes pattern of `ith.file.open_level`.
 - A move whose file moved but whose sidecar could neither follow nor be moved back fails with the
   database's `asset.io` error naming both places; the item then shows at its new path, and the
   message suggests Rescan.
-- Operations touching the open level's file are refused while it is being saved
-  (`editor.document.save_in_progress`).
+- **While any save is in flight**, every content file operation (new folder, rename, move,
+  duplicate, delete, import, reimport and fix) is refused with `editor.document.save_in_progress`
+  and changes nothing, so no file moves under a save that is writing into the content root.
+- **On Windows, files held open by another program:** Replace on import, and renaming, moving or
+  deleting a file or a folder holding one, fail while another program holds the file open; the
+  failure is reported
+  per item in `failed`, and the operation goes on or stops as the second rule of this section
+  says.
 - Nothing in the browser asserts on what it finds on disk; every surprise is a problem entry, a
   badge or an error.
 
@@ -719,9 +779,13 @@ commands and queries through `Automation::run`, and the disk checked with `file_
 
 16. New Folder twice in one folder creates `New Folder` and `New Folder_2`, each selected with the
     inline rename pending (`prompt`).
-17. Rename refuses, with `editor.content.invalid_name` and nothing changed on disk: an empty name,
-    `a/b`, `a\b`, `a:b`, `name.`, `name `, `CON`, `com1.txt`, a name of 210 bytes, a folder named
-    `x.meta`.
+17. Rename refuses, with `editor.content.invalid_name` and nothing changed on disk: an empty
+    editable part, `a/b`, `a\b`, `a:b`, `name.` for a folder, `name `, `CON`, `com1.txt`, a name
+    of 210 bytes, a folder named `x.meta`. The name is checked with its extension: `name.` for a
+    `.gltf` file gives `name..gltf` and succeeds. A sidecar entry (orphan or unreadable) is
+    refused with `editor.content.invalid_target`. On Windows, a case-only rename involving letters
+    outside ASCII (`été` to `Été`) is refused with `editor.content.exists`. In every case nothing
+    changes on disk.
 18. Rename refuses with `editor.content.exists` a name taken in the folder by a file, a folder,
     a hidden file (`notes.txt`) or a sidecar, in any ASCII case.
 19. A case-only rename of the same asset (`rock.png` to `Rock.png`) succeeds on Windows and
@@ -791,7 +855,8 @@ commands and queries through `Automation::run`, and the disk checked with `file_
     keeps it.
 47. A failed import leaves the copy as a "Not imported" entry and reports the importer's error.
 48. Reimport skips native assets, reports unchanged sources as from the cache and lists missing
-    sub-assets; with only native assets selected the command is disabled with its reason.
+    sub-assets; with only native assets given or selected the command fails with
+    `editor.content.not_imported`, and the panel greys its menu entry from the selection.
 49. `ith.content.fix` on a "Not imported" entry imports it in place; on an unresolved duplicate it
     assigns a new id; both entries become assets.
 50. Rescan after files are added, renamed and deleted outside the editor shows the new state, keeps
@@ -864,6 +929,7 @@ The module work is fixed by ADR-0049 rules 22 to 26:
   - `duplicate(id, newPath)`: a copy with a new id in its envelope or sidecar;
   - `copyIn(externalPath, targetPath, replace)`: an outside file with the files its importer
     reads; it doesn't import;
+  - `importers()`: the importer registry, so the browser can tell which files an importer reads;
   - `findUsers(ids)` and the free function `collectAssetReferences(value)`, which returns the
     asset ids referenced in a JSON value (3.11); a test pins that `AssetRef` and `SoftAssetRef`
     write the shape it looks for;
@@ -877,8 +943,9 @@ The module work is fixed by ADR-0049 rules 22 to 26:
     thread, one dialog at a time (a second fails with `platform.dialog_busy`); the chosen paths
     arrive as `FileDialogFile` events, then `FileDialogClosed` (with the error, if any). Save and
     folder dialogs come when a feature needs them.
-- **`file_system`** gains nothing in v1: copies read the file and write it with
-  `writeFileAtomic`, and folder deletes are done by `asset_database` file by file.
+- **`file_system`** gains `pathInside` and `hasUnusableName` (ADR-0052 item 5); copies read the
+  file and write it with `writeFileAtomic`, and folder deletes are done by `asset_database` file
+  by file.
 
 ### Mapping onto the ECS
 

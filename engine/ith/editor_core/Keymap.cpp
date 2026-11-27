@@ -219,13 +219,15 @@ InputReply KeymapConsumer::onInputEvent(const Event& event) {
     }
     const std::string* command = nullptr;
     if (m_session->content().keyboardFocus()) {
-        // The asset view's own keys, and the keys of the file operations still to come: nothing runs, not
-        // even an Editor binding of the same chord.
-        if (std::ranges::find(kContentWidgetChords, chord) != kContentWidgetChords.end() ||
-            std::ranges::find(kContentReservedChords, chord) != kContentReservedChords.end()) {
+        // The asset view's own keys: nothing runs, not even an Editor binding of the same chord.
+        if (std::ranges::find(kContentWidgetChords, chord) != kContentWidgetChords.end()) {
             return InputReply::Consumed;
         }
         command = m_keymap->commandFor(chord, KeymapContext::Content);
+        // The browser's file keys never reach the level, even when a layer unbound them here.
+        if (command == nullptr && std::ranges::find(kContentOwnedChords, chord) != kContentOwnedChords.end()) {
+            return InputReply::Consumed;
+        }
     }
     if (command == nullptr) {
         command = m_keymap->commandFor(chord);

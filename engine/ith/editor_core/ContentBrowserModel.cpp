@@ -1,7 +1,9 @@
 #include "ith/editor_core/ContentBrowserModel.h"
 
 #include "ith/asset_database/AssetHeader.h"
+#include "ith/editor_core/ContentPaths.h"
 #include "ith/file_system/FileSystem.h"
+#include "ith/file_system/Path.h"
 #include "ith/foundation/Assert.h"
 #include "ith/foundation/Log.h"
 #include "ith/foundation/StringUtils.h"
@@ -11,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <string>
 #include <utility>
 
 namespace ith {
@@ -81,28 +84,17 @@ int compareDigitRuns(std::string_view a, std::size_t i, std::size_t endA, std::s
     return 0;
 }
 
-// The folder that holds `path`: "" at the top.
-std::string parentOf(std::string_view path) {
-    const std::size_t slash = path.rfind('/');
-    return slash == std::string_view::npos ? std::string() : std::string(path.substr(0, slash));
-}
-
-std::string_view nameOf(std::string_view path) {
-    const std::size_t slash = path.rfind('/');
-    return slash == std::string_view::npos ? path : path.substr(slash + 1);
-}
-
-// Whether `folder` is `ancestor` or below it.
-bool isInFolder(std::string_view folder, std::string_view ancestor) {
-    if (ancestor.empty() || folder == ancestor) {
-        return true;
+// `path` with `from` (a file or folder) replaced by `to` when `path` is `from` or below it.
+std::optional<std::string> remapped(std::string_view path, std::string_view from, std::string_view to) {
+    if (from.empty() || !detail::isInContentFolder(path, from)) {
+        return std::nullopt;
     }
-    return folder.size() > ancestor.size() && folder.starts_with(ancestor) && folder[ancestor.size()] == '/';
+    return std::string(to) + std::string(path.substr(from.size()));
 }
 
 // A native asset's label: its file name without the native extension.
 std::string assetLabel(const AssetRecord& record) {
-    std::string_view name = nameOf(record.path);
+    std::string_view name = detail::contentName(record.path);
     if (!record.imported) {
         for (const std::string_view extension : {kNativeAssetExtension, kLevelExtension}) {
             if (name.size() > extension.size() && endsWithIgnoreCaseAscii(name, extension)) {
@@ -259,6 +251,57 @@ ContentKey keyOf(const ContentItem& item) {
     return ContentKey{.id = AssetId(), .path = item.path};
 }
 
+ContentNameParts nameParts(const ContentItem& item) {
+    const std::string_view name = detail::contentName(item.path);
+    if (item.kind == ContentItemKind::Folder) {
+        return ContentNameParts{.editable = std::string(name), .extension = {}};
+    }
+    if (item.kind == ContentItemKind::Asset && item.label.size() < name.size() && name.starts_with(item.label) &&
+        isNativeAssetPath(name)) {
+        return ContentNameParts{.editable = item.label, .extension = std::string(name.substr(item.label.size()))};
+    }
+    const std::string_view extension = fs::extension(name);
+    return ContentNameParts{.editable = std::string(name.substr(0, name.size() - extension.size())),
+                            .extension = std::string(extension)};
+}
+
+Expected<void> checkContentName(std::string_view name) {
+    const auto invalid = [name](std::string_view reason) {
+        return makeError("editor.content.invalid_name", "'" + std::string(name) + "' " + std::string(reason));
+    };
+    if (name.empty()) {
+        return makeError("editor.content.invalid_name", "a name can't be empty");
+    }
+    if (name.find_first_of("/\\") != std::string_view::npos) {
+        return invalid("holds / or \\, which separate folders");
+    }
+    if (name.size() > kMaxContentNameSize) {
+        return invalid("is longer than " + std::to_string(kMaxContentNameSize) + " bytes");
+    }
+    if (name.back() == '.' || name.back() == ' ') {
+        return invalid("ends in '.' or a space, which Windows drops");
+    }
+    if (endsWithIgnoreCaseAscii(name, kSidecarSuffix)) {
+        return invalid("ends in .meta, which names sidecars");
+    }
+    if (!isValidContentPath(name)) {
+        return invalid("holds one of < > : \" | ? * or a control character, isn't valid UTF-8, or is a device "
+                       "name such as CON or COM1");
+    }
+    return {};
+}
+
+std::string_view numberedNameBase(std::string_view editable) noexcept {
+    std::size_t digits = editable.size();
+    while (digits > 0 && isDigit(editable[digits - 1])) {
+        --digits;
+    }
+    if (digits == editable.size() || digits < 2 || editable[digits - 1] != '_') {
+        return editable;
+    }
+    return editable.substr(0, digits - 1);
+}
+
 ContentBrowserModel::ContentBrowserModel(AssetDatabase* assets, std::string stateFile)
     : m_assets(assets), m_stateFile(std::move(stateFile)) {
     load();
@@ -301,14 +344,14 @@ void ContentBrowserModel::refresh() {
             m_folders.insert(folder);
             add(ContentItem{.kind = ContentItemKind::Folder,
                             .path = folder,
-                            .folder = parentOf(folder),
-                            .label = std::string(nameOf(folder))});
+                            .folder = detail::contentParent(folder),
+                            .label = std::string(detail::contentName(folder))});
         }
         for (const AssetRecord* record : m_assets->records()) {
             const ContentType type = contentTypeOf(record->type);
             add(ContentItem{.kind = ContentItemKind::Asset,
                             .path = record->path,
-                            .folder = parentOf(record->path),
+                            .folder = detail::contentParent(record->path),
                             .id = record->id,
                             .label = assetLabel(*record),
                             .type = record->type,
@@ -343,8 +386,8 @@ void ContentBrowserModel::refresh() {
         } else if (problem.kind != AssetProblemKind::FormatMismatch) {
             add(ContentItem{.kind = ContentItemKind::Problem,
                             .path = problem.path,
-                            .folder = parentOf(problem.path),
-                            .label = std::string(nameOf(problem.path)),
+                            .folder = detail::contentParent(problem.path),
+                            .label = std::string(detail::contentName(problem.path)),
                             .problems = {badge}});
         }
     }
@@ -395,12 +438,13 @@ void ContentBrowserModel::refresh() {
     }
 
     while (!folderExists(m_folder)) {
-        m_folder = parentOf(m_folder);
+        m_folder = detail::contentParent(m_folder);
     }
     std::erase_if(m_expanded, [this](const std::string& folder) { return !folderExists(folder); });
     rebuildTree();
     rebuildView();
     pruneSelection();
+    dropStalePrompt();
     writeState();
 }
 
@@ -427,7 +471,8 @@ Expected<void> ContentBrowserModel::navigate(std::string_view folder) {
         return makeError("editor.content.not_found", "'" + std::string(folder) + "' is not a folder in Content");
     }
     m_folder = std::string(folder);
-    for (std::string ancestor = parentOf(folder); !ancestor.empty(); ancestor = parentOf(ancestor)) {
+    for (std::string ancestor = detail::contentParent(folder); !ancestor.empty();
+         ancestor = detail::contentParent(ancestor)) {
         m_expanded.insert(ancestor);
     }
     m_search.clear();
@@ -442,7 +487,7 @@ bool ContentBrowserModel::navigateUp() {
     if (m_folder.empty()) {
         return false;
     }
-    return navigate(parentOf(m_folder)).hasValue();
+    return navigate(detail::contentParent(m_folder)).hasValue();
 }
 
 bool ContentBrowserModel::isExpanded(std::string_view folder) const {
@@ -650,17 +695,129 @@ void ContentBrowserModel::setDrawerHeight(float height) {
     }
 }
 
+void ContentBrowserModel::setPrompt(ContentPrompt prompt) {
+    m_prompt = std::move(prompt);
+    changed();
+}
+
+void ContentBrowserModel::dropStalePrompt() {
+    // A rename whose item is gone (deleted, or gone after a Rescan) has nothing left to rename.
+    if (m_prompt.has_value() && m_prompt->kind == ContentPromptKind::Rename && find(m_prompt->item) == nullptr) {
+        m_prompt.reset();
+    }
+}
+
+void ContentBrowserModel::clearPrompt() {
+    if (m_prompt.has_value()) {
+        m_prompt.reset();
+        changed();
+    }
+}
+
+void ContentBrowserModel::movedPath(std::string_view from, std::string_view to) {
+    if (from.empty() || from == to) {
+        return;
+    }
+    const bool caseOnly = equalsIgnoreCaseAscii(from, to);
+    if (std::optional<std::string> folder = remapped(m_folder, from, to)) {
+        m_folder = std::move(*folder);
+    }
+    std::unordered_set<std::string> expanded;
+    for (const std::string& folder : m_expanded) {
+        expanded.insert(remapped(folder, from, to).value_or(folder));
+    }
+    m_expanded = std::move(expanded);
+    const auto remapKey = [from, to](ContentKey& key) {
+        if (key.id.isNil()) {
+            key.path = remapped(key.path, from, to).value_or(key.path);
+        }
+    };
+    for (ContentKey& key : m_selection) {
+        remapKey(key);
+    }
+    m_selected = {m_selection.begin(), m_selection.end()};
+    for (std::optional<ContentKey>* key : {&m_anchor, &m_focus}) {
+        if (key->has_value()) {
+            remapKey(**key);
+        }
+    }
+    if (m_prompt.has_value() && m_prompt->kind == ContentPromptKind::Rename) {
+        remapKey(m_prompt->item);
+        if (Value* path = m_prompt->details.kind() == Value::Kind::Object ? m_prompt->details.find("path") : nullptr;
+            path != nullptr && path->kind() == Value::Kind::String) {
+            *path = Value::string(remapped(path->asString(), from, to).value_or(path->asString()));
+        }
+    }
+    std::erase_if(m_problems, [from, caseOnly](const AssetProblem& problem) {
+        const bool moved = detail::isInContentFolder(problem.path, from);
+        const bool otherMoved = !problem.otherPath.empty() && detail::isInContentFolder(problem.otherPath, from);
+        return problem.kind == AssetProblemKind::CaseConflict && moved != otherMoved && !caseOnly;
+    });
+    for (AssetProblem& problem : m_problems) {
+        problem.path = remapped(problem.path, from, to).value_or(problem.path);
+        if (!problem.otherPath.empty()) {
+            problem.otherPath = remapped(problem.otherPath, from, to).value_or(problem.otherPath);
+        }
+    }
+    std::ranges::stable_sort(m_problems, [](const AssetProblem& a, const AssetProblem& b) { return a.path < b.path; });
+    changed();
+}
+
+void ContentBrowserModel::removedPath(std::string_view path) {
+    if (path.empty()) {
+        return;
+    }
+    std::erase_if(m_problems,
+                  [path](const AssetProblem& problem) { return detail::isInContentFolder(problem.path, path); });
+    changed();
+}
+
+void ContentBrowserModel::addProblems(std::span<const AssetProblem> problems) {
+    for (const AssetProblem& problem : problems) {
+        if (std::ranges::find(m_problems, problem) == m_problems.end()) {
+            m_problems.push_back(problem);
+        }
+    }
+    std::ranges::stable_sort(m_problems, [](const AssetProblem& a, const AssetProblem& b) { return a.path < b.path; });
+    changed();
+}
+
+void ContentBrowserModel::rekey(const ContentKey& from, const ContentKey& to) {
+    for (ContentKey& key : m_selection) {
+        if (key == from) {
+            key = to;
+        }
+    }
+    m_selected = {m_selection.begin(), m_selection.end()};
+    for (std::optional<ContentKey>* key : {&m_anchor, &m_focus}) {
+        if (*key == from) {
+            *key = to;
+        }
+    }
+    changed();
+}
+
+void ContentBrowserModel::selectShown(std::span<const ContentKey> keys) {
+    std::vector<ContentKey> shown;
+    for (const ContentKey& key : keys) {
+        if (shownIndexOf(key).has_value()) {
+            shown.push_back(key);
+        }
+    }
+    static_cast<void>(select(shown, ContentSelect::Replace));
+}
+
 void ContentBrowserModel::rebuildTree() {
     // The subfolders of each folder in natural order, then a depth-first walk.
     std::unordered_map<std::string, std::vector<const std::string*>> subfolders;
     for (const std::string& folder : m_folders) {
         if (!folder.empty()) {
-            subfolders[parentOf(folder)].push_back(&folder);
+            subfolders[detail::contentParent(folder)].push_back(&folder);
         }
     }
     for (auto& [parent, list] : subfolders) {
         std::ranges::sort(list, [](const std::string* a, const std::string* b) {
-            const int order = naturalCompare(nameOf(*a), nameOf(*b));
+            const int order = naturalCompare(detail::contentName(*a), detail::contentName(*b));
             return order != 0 ? order < 0 : *a < *b;
         });
     }
@@ -671,7 +828,7 @@ void ContentBrowserModel::rebuildTree() {
         const bool expanded = isExpanded(folder);
         m_treeRows.push_back(
             ContentFolderRow{.path = folder,
-                             .name = folder.empty() ? std::string("Content") : std::string(nameOf(folder)),
+                             .name = folder.empty() ? std::string("Content") : std::string(detail::contentName(folder)),
                              .depth = depth,
                              .hasChildren = hasChildren,
                              .expanded = expanded});
@@ -713,7 +870,8 @@ void ContentBrowserModel::rebuildView() {
             }
         }
         for (const ContentItem& item : m_items) {
-            if (item.kind != ContentItemKind::Folder && isInFolder(item.folder, m_folder) && matches(item, words)) {
+            if (item.kind != ContentItemKind::Folder && detail::isInContentFolder(item.folder, m_folder) &&
+                matches(item, words)) {
                 m_shown.push_back(&item);
             }
         }

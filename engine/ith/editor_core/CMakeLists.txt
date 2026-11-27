@@ -19,7 +19,11 @@ ith_add_module(editor_core
         CommandRegistry.cpp
         ContentBrowserModel.h
         ContentBrowserModel.cpp
+        ContentCommandSupport.h
         ContentCommands.cpp
+        ContentFileCommands.cpp
+        ContentImportCommands.cpp
+        ContentPaths.h
         DetailsModel.h
         DetailsModel.cpp
         EditCommands.cpp

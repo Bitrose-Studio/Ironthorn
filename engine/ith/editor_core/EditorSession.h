@@ -168,6 +168,22 @@ public:
     // without one, a warning says that saving writes the file again.
     void syncLevelWithAssets();
 
+    // The open level's file as a content path (relative to the asset database's Content folder),
+    // or nullopt: an untitled level, a file outside Content, or no database. Compared as the
+    // operating system sees paths (fs::pathInside), so another spelling of the level's path (another
+    // case or a short name on Windows, a link) is recognised, and the result is spelled as on disk.
+    // Costs a path resolution on disk.
+    [[nodiscard]] std::optional<std::string> levelContentPath() const;
+
+    // After the Content Browser moved the file or folder at the content path `from` to `to`:
+    // `levelPath` is levelContentPath() as it was before the move (spelled as on disk, so a document
+    // opened under another spelling follows too); when it is `from` or below it, the document's path
+    // follows (as "Content/<path>" for a relative path, the absolute file otherwise), never as a
+    // dirty change (ADR-0049 rule 23). The level id and the viewport cameras stay. Precondition
+    // (asserted when it applies): no save is in flight; the content commands refuse every file
+    // operation then, since a save's completion sets the path it wrote.
+    void followContentMove(const std::optional<std::string>& levelPath, std::string_view from, std::string_view to);
+
     // Starts opening the level file at `path`: read on the background lane, then loaded all or
     // nothing. Until it finishes the document is busy (opening()). Fails with
     // "editor.document.save_in_progress" and "editor.document.busy"; a failed read or load is

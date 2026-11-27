@@ -15,6 +15,7 @@
 #include "ith/jobs/JobSystem.h"
 #include "ith/platform_events/Event.h"
 
+#include "ContentTestSupport.h"
 #include "EditorCoreComponents.h"
 #include "EditorTestSupport.h"
 
@@ -37,143 +38,15 @@ using ith::AssetId;
 using ith::ContentKey;
 using ith::EditorSession;
 using ith::serialization::Value;
+using ith::test::editor::badgeOf;
+using ith::test::editor::exists;
 using ith::test::editor::fails;
 using ith::test::editor::json;
+using ith::test::editor::keyDown;
+using ith::test::editor::Project;
 using ith::test::editor::run;
 using ith::test::editor::TempProject;
 using ith::test::editor::types;
-
-// Reads ".gltf" and ".glb" files as one mesh each: enough for the browser, which never looks inside.
-class FakeGltfImporter final : public ith::Importer {
-public:
-    [[nodiscard]] std::string_view id() const override { return "gltf"; }
-
-    [[nodiscard]] std::uint32_t version() const override { return 1; }
-
-    [[nodiscard]] std::span<const std::string_view> extensions() const override { return kExtensions; }
-
-    [[nodiscard]] Value defaultSettings() const override { return Value::object(); }
-
-    [[nodiscard]] ith::Expected<ith::ImportOutput> import(std::span<const std::byte> /*source*/,
-                                                          std::span<const ith::ImportFile> /*files*/,
-                                                          const Value& /*settings*/) const override {
-        return ith::ImportOutput{.objects = {ith::ImportedObject{.type = "mesh", .name = "Body", .payload = {}}}};
-    }
-
-private:
-    static constexpr std::array<std::string_view, 2> kExtensions = {".gltf", ".glb"};
-};
-
-std::string nativeAsset(AssetId id, std::string_view format) {
-    return R"({"format": ")" + std::string(format) + R"(", "version": 1, "id": ")" + id.toString() +
-           R"(", "data": {}})";
-}
-
-// A project with an asset database and a session over it; no job system, so files are read and
-// written at once.
-struct Project {
-    TempProject project;
-    ith::ImporterRegistry importers;
-    std::unique_ptr<ith::AssetDatabase> assets;
-    std::unique_ptr<EditorSession> session;
-
-    Project() {
-        importers.add(std::make_unique<FakeGltfImporter>());
-        assets = std::make_unique<ith::AssetDatabase>(project.root(), importers);
-        reopen();
-    }
-
-    // A new session over the same project, as the next run of the editor.
-    void reopen() {
-        session.reset();
-        session = std::make_unique<EditorSession>(
-            types(), ith::EditorSessionOptions{.projectDirectory = project.root(), .assets = assets.get()});
-    }
-
-    [[nodiscard]] std::string file(std::string_view path) const {
-        return ith::fs::joinPath(project.root(), "Content/" + std::string(path));
-    }
-
-    void write(std::string_view path, std::string_view text) const {
-        REQUIRE(ith::fs::writeFileAtomic(file(path), text).hasValue());
-    }
-
-    void folder(std::string_view path) const { REQUIRE(ith::fs::createDirectories(file(path)).hasValue()); }
-
-    AssetId native(std::string_view path, std::string_view format = "ith.material",
-                   AssetId id = AssetId::generate()) const {
-        write(path, nativeAsset(id, format));
-        return id;
-    }
-
-    AssetId imported(std::string_view path) const {
-        write(path, "glTF");
-        const auto report = assets->import(path);
-        REQUIRE_MESSAGE(report.hasValue(), (report ? std::string() : report.error().message));
-        return report->id;
-    }
-
-    Value execute(std::string_view id, std::string_view args = "{}") const { return run(*session, id, args); }
-
-    void rescan() const { execute("ith.content.rescan"); }
-
-    void navigate(std::string_view folder) const {
-        execute("ith.content.navigate", R"({"folder": ")" + std::string(folder) + "\"}");
-    }
-
-    [[nodiscard]] ith::ContentBrowserModel& model() const { return session->content(); }
-
-    // The labels of the shown items, in display order.
-    [[nodiscard]] std::vector<std::string> labels() const {
-        std::vector<std::string> result;
-        for (const ith::ContentItem* item : model().shown()) {
-            result.push_back(item->label);
-        }
-        return result;
-    }
-
-    [[nodiscard]] const ith::ContentItem& item(std::string_view path) const {
-        const ith::ContentItem* found = model().findByPath(path);
-        REQUIRE_MESSAGE(found != nullptr, std::string(path));
-        return *found;
-    }
-
-    // The selection as content paths.
-    [[nodiscard]] std::vector<std::string> selected() const {
-        std::vector<std::string> paths;
-        for (const ContentKey& key : model().selection()) {
-            const ith::ContentItem* found = model().find(key);
-            paths.push_back(found != nullptr ? found->path : std::string("?"));
-        }
-        return paths;
-    }
-
-    Value select(std::initializer_list<std::string_view> paths, std::string_view mode) const {
-        std::string items = "[";
-        for (const std::string_view path : paths) {
-            items += (items.size() > 1 ? ", " : "") + std::string(R"({"path": ")") + std::string(path) + "\"}";
-        }
-        return execute("ith.content.select", R"({"items": )" + items + R"(], "mode": ")" + std::string(mode) + "\"}");
-    }
-};
-
-const ith::ContentBadge* badgeOf(const ith::ContentItem& item, ith::AssetProblemKind kind) {
-    for (const ith::ContentBadge& badge : item.problems) {
-        if (badge.kind == kind) {
-            return &badge;
-        }
-    }
-    return nullptr;
-}
-
-bool exists(const std::string& path) {
-    const auto info = ith::fs::fileInfo(path);
-    return info && info->has_value();
-}
-
-ith::Event keyDown(ith::Key key, char32_t layoutKey = 0, ith::KeyModifiers modifiers = ith::KeyModifiers::None) {
-    return ith::Event{.type = ith::EventType::KeyDown, .key = key, .layoutKey = layoutKey, .modifiers = modifiers};
-}
 
 } // namespace
 
@@ -302,16 +175,12 @@ TEST_SUITE("editor_core.content_browser") {
         p.native("A/Rock.ithasset");
         p.native("a/Rock.ithasset");
         const auto entries = ith::fs::listDirectory(ith::fs::joinPath(p.project.root(), "Content"));
-#ifdef _WIN32
+        // Both folders must exist, or the test would pass without testing anything: a file system or a
+        // folder that folds case (Windows, macOS, a case-folding Linux folder) is skipped.
         if (!entries || entries->size() < 2) {
             MESSAGE("the file system ignores case; skipped");
             return;
         }
-#else
-        // Linux keeps case: both folders must exist, or this test would pass without testing anything.
-        REQUIRE(entries.hasValue());
-        REQUIRE(entries->size() == 2);
-#endif
         p.rescan();
         const ith::ContentBadge* upper = badgeOf(p.item("A"), ith::AssetProblemKind::CaseConflict);
         const ith::ContentBadge* lower = badgeOf(p.item("a"), ith::AssetProblemKind::CaseConflict);
@@ -727,15 +596,27 @@ TEST_SUITE("editor_core.content_browser") {
         CHECK(p.session->document().selection().entities().empty());
         shortcuts.onInputEvent(keyDown(ith::Key::Escape));
         CHECK(p.model().selection().empty());
-        // F2, Delete and Ctrl + D are the browser's (their commands come with file operations): they don't
-        // reach the entity commands.
+        // F2, Delete and Ctrl + D run the content file operations, never the entity commands: Delete asks
+        // first, F2 starts the inline rename, Ctrl + D duplicates.
         run(*p.session, "ith.edit.select_all");
-        for (const ith::Event& event : {keyDown(ith::Key::Delete), keyDown(ith::Key::F2),
-                                        keyDown(ith::Key::D, U'd', ith::KeyModifiers::Control)}) {
-            CHECK(shortcuts.onInputEvent(event) == ith::InputReply::Consumed);
-        }
+        p.select({"S/A.ithasset"}, "replace");
+        const std::size_t entries = p.session->document().history().entries().size();
+        CHECK(shortcuts.onInputEvent(keyDown(ith::Key::Delete)) == ith::InputReply::Consumed);
+        REQUIRE(p.model().prompt() != nullptr);
+        CHECK(p.model().prompt()->kind == ith::ContentPromptKind::Delete);
+        CHECK(exists(p.file("S/A.ithasset")));
+        CHECK(shortcuts.onInputEvent(keyDown(ith::Key::F2)) == ith::InputReply::Consumed);
+        REQUIRE(p.model().prompt() != nullptr);
+        CHECK(p.model().prompt()->kind == ith::ContentPromptKind::Rename);
+        CHECK(shortcuts.onInputEvent(keyDown(ith::Key::D, U'd', ith::KeyModifiers::Control)) ==
+              ith::InputReply::Consumed);
+        CHECK(exists(p.file("S/A_2.ithasset")));
         CHECK(p.session->document().world().entityCount() == 1);
-        // Also with the content commands unbound in a higher layer: the keys stay the browser's.
+        CHECK(p.session->document().history().entries().size() == entries);
+        run(*p.session, "ith.content.dismiss"); // ends the rename prompt
+        CHECK(p.model().prompt() == nullptr);
+        // With the content commands unbound in a higher layer, the keys stay the browser's: they never
+        // fall through to the entity commands (kContentOwnedChords).
         std::vector<ith::Error> unboundWarnings;
         const ith::serialization::Value engine = json(R"({"ith.edit.delete": ["Keyboard.Delete"],
             "ith.edit.duplicate": ["Ctrl+Keyboard.D"], "ith.edit.rename": ["Keyboard.F2"]})");
@@ -744,11 +625,25 @@ TEST_SUITE("editor_core.content_browser") {
         const std::array<const ith::serialization::Value*, 2> layers = {&engine, &user};
         const ith::Keymap unbound = ith::Keymap::fromLayers(layers, p.session->commands(), unboundWarnings);
         ith::KeymapConsumer unboundShortcuts(*p.session, unbound);
+        run(*p.session, "ith.edit.select_all");
         for (const ith::Event& event : {keyDown(ith::Key::Delete), keyDown(ith::Key::F2),
                                         keyDown(ith::Key::D, U'd', ith::KeyModifiers::Control)}) {
             CHECK(unboundShortcuts.onInputEvent(event) == ith::InputReply::Consumed);
         }
         CHECK(p.session->document().world().entityCount() == 1);
+        CHECK(p.model().prompt() == nullptr);
+        // Rebinding still works: a content command on another chord runs, and the owned chord stays inert.
+        const ith::serialization::Value rebound = json(R"({"ith.content.delete": ["Keyboard.Backspace"]})");
+        const std::array<const ith::serialization::Value*, 2> reboundLayers = {&engine, &rebound};
+        const ith::Keymap moved = ith::Keymap::fromLayers(reboundLayers, p.session->commands(), unboundWarnings);
+        ith::KeymapConsumer movedShortcuts(*p.session, moved);
+        CHECK(movedShortcuts.onInputEvent(keyDown(ith::Key::Delete)) == ith::InputReply::Consumed);
+        CHECK(p.session->document().world().entityCount() == 1);
+        CHECK(movedShortcuts.onInputEvent(keyDown(ith::Key::Backspace)) == ith::InputReply::Consumed);
+        REQUIRE(p.model().prompt() != nullptr);
+        CHECK(p.model().prompt()->kind == ith::ContentPromptKind::Delete);
+        run(*p.session, "ith.content.dismiss");
+        run(*p.session, "ith.edit.select_none");
         // Enter opens the primary item; Alt + Up goes to the parent folder.
         shortcuts.onInputEvent(keyDown(ith::Key::Up, 0, ith::KeyModifiers::Alt));
         CHECK(p.model().currentFolder().empty());

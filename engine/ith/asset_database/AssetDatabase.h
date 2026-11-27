@@ -210,6 +210,9 @@ public:
     // The project's derived-data cache.
     [[nodiscard]] const DerivedDataCache& derivedDataCache() const noexcept { return m_cache; }
 
+    // The importers it imports with: findForPath tells which files an import can read.
+    [[nodiscard]] const ImporterRegistry& importers() const noexcept { return m_importers; }
+
     // Rebuilds the database from the Content folder and returns the problems found, sorted by
     // path. Of files that share an id, the one at the path the database knew for the id keeps it
     // and the others get new ids written to their files; when the database didn't know the id, the

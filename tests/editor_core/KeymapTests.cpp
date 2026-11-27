@@ -33,11 +33,9 @@ using ith::test::editor::json;
 using ith::test::editor::run;
 using ith::test::editor::types;
 
-// Commands of Keymap.json that later editor work registers: the Content Browser's file operations
-// (step 12, slice 2) and Play In Editor (step 13).
+// Commands of Keymap.json that later editor work registers: Play In Editor (step 13).
 constexpr std::string_view kLaterCommands[] = {
-    "ith.content.rename", "ith.content.delete", "ith.content.duplicate", "ith.play.play",
-    "ith.play.simulate",  "ith.play.stop",      "ith.play.free_mouse",   "ith.play.possess_or_eject",
+    "ith.play.play", "ith.play.simulate", "ith.play.stop", "ith.play.free_mouse", "ith.play.possess_or_eject",
 };
 
 Keymap keymapOf(const EditorSession& session, const std::vector<std::string_view>& layers,

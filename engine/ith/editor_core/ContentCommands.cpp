@@ -1,6 +1,7 @@
 // The Content Browser's commands and queries of the browse slice (ADR-0049 rules 2, 5, 6 and 27):
 // navigate, navigate_up, select, select_all, dismiss, set_view, set_filter, rescan, open and
-// toggle_drawer, and ith.query.content, ith.query.content_tree and ith.query.content_problems.
+// toggle_drawer, and ith.query.content, ith.query.content_tree and ith.query.content_problems; the
+// file operations are in ContentFileCommands.cpp.
 //
 // They are Actions: no undo entry and never a dirty level (a path change of the open level after a
 // Rescan is not a dirty change). Without an asset database every ith.content command fails with
@@ -10,6 +11,7 @@
 #include "ith/asset_database/AssetDatabase.h"
 #include "ith/editor_core/CommandArgs.h"
 #include "ith/editor_core/ContentBrowserModel.h"
+#include "ith/editor_core/ContentCommandSupport.h"
 #include "ith/editor_core/EditorLayout.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/foundation/Log.h"
@@ -23,19 +25,17 @@
 
 namespace ith {
 
-namespace {
+namespace detail {
 
-ITH_LOG_CATEGORY(ContentBrowser);
-
-using detail::idValue;
-using detail::invalidArgs;
-using detail::optionalString;
-using detail::parseId;
-using detail::requiredString;
 using serialization::Value;
 
-// The Content Browser panel's id (ADR-0040 rule 3).
-constexpr std::string_view kContentBrowserPanel = "ith.content_browser";
+namespace {
+
+Value optionalKeyRef(const ContentBrowserModel& model, const ContentKey* key) {
+    return key != nullptr ? keyRef(model, *key) : Value();
+}
+
+} // namespace
 
 Expected<ContentBrowserModel*> browserOf(EditorSession& session) {
     if (session.content().assets() == nullptr) {
@@ -44,7 +44,6 @@ Expected<ContentBrowserModel*> browserOf(EditorSession& session) {
     return &session.content();
 }
 
-// {"id", "path"} of an asset, {"path"} of any other item.
 Value itemRef(const ContentItem& item) {
     Value ref = Value::object();
     if (item.kind == ContentItemKind::Asset) {
@@ -67,11 +66,6 @@ Value keyRef(const ContentBrowserModel& model, const ContentKey& key) {
     return ref;
 }
 
-Value optionalKeyRef(const ContentBrowserModel& model, const ContentKey* key) {
-    return key != nullptr ? keyRef(model, *key) : Value();
-}
-
-// The item an item reference names.
 Expected<ContentKey> parseItem(std::string_view command, const ContentBrowserModel& model, const Value& ref) {
     if (ref.kind() != Value::Kind::Object) {
         return invalidArgs(command, R"(an item is {"id": <uuid>} or {"path": <content path>})");
@@ -112,6 +106,25 @@ Value selectionResult(const ContentBrowserModel& model) {
     result.set("primary", optionalKeyRef(model, model.primary()));
     return result;
 }
+
+} // namespace detail
+
+namespace {
+
+ITH_LOG_CATEGORY(ContentBrowser);
+
+using detail::browserOf;
+using detail::idValue;
+using detail::invalidArgs;
+using detail::keyRef;
+using detail::optionalString;
+using detail::parseItem;
+using detail::requiredString;
+using detail::selectionResult;
+using serialization::Value;
+
+// The Content Browser panel's id (ADR-0040 rule 3).
+constexpr std::string_view kContentBrowserPanel = "ith.content_browser";
 
 Value folderResult(const ContentBrowserModel& model) {
     Value result = Value::object();
@@ -264,7 +277,11 @@ Expected<Value> dismiss(EditorSession& session, const Value& /*args*/) {
     if (!model) {
         return makeUnexpected(std::move(model).error());
     }
-    if (!(*model)->selection().empty()) {
+    // Escape's order (spec 3.16): a pending prompt first (a rename, a dialog), then the selection,
+    // then the drawer.
+    if ((*model)->prompt() != nullptr) {
+        (*model)->clearPrompt();
+    } else if (!(*model)->selection().empty()) {
         (*model)->clearSelection();
     } else if ((*model)->drawerOpen()) {
         // The drawer closes, and the keys that follow go to the level again.
@@ -485,6 +502,28 @@ Value itemValue(const ContentItem& item) {
     return value;
 }
 
+// The pending prompt as ith.query.content reports it: {kind, item?, ...details}; null without one.
+Value promptValue(const ContentBrowserModel& model) {
+    const ContentPrompt* prompt = model.prompt();
+    if (prompt == nullptr) {
+        return Value();
+    }
+    Value value = prompt->details.kind() == Value::Kind::Object ? prompt->details : Value::object();
+    switch (prompt->kind) {
+        case ContentPromptKind::Rename:
+            value.set("kind", Value::string("rename"));
+            value.set("item", keyRef(model, prompt->item));
+            break;
+        case ContentPromptKind::Delete:
+            value.set("kind", Value::string("delete"));
+            break;
+        case ContentPromptKind::ImportConflicts:
+            value.set("kind", Value::string("import_conflicts"));
+            break;
+    }
+    return value;
+}
+
 Expected<Value> contentQuery(EditorSession& session, const Value& /*args*/) {
     const ContentBrowserModel& model = session.content();
     Value items = Value::array();
@@ -503,8 +542,7 @@ Expected<Value> contentQuery(EditorSession& session, const Value& /*args*/) {
     result.set("primary", std::move(*selection.find("primary")));
     result.set("anchor", model.anchor() ? keyRef(model, *model.anchor()) : Value());
     result.set("focus", model.focusItem() ? keyRef(model, *model.focusItem()) : Value());
-    // No content command waits for an answer in the browse slice (renames and dialogs come later).
-    result.set("prompt", Value());
+    result.set("prompt", promptValue(model));
     result.set("drawerOpen", Value::boolean(model.drawerOpen()));
     return result;
 }
@@ -544,16 +582,6 @@ Expected<Value> contentProblemsQuery(EditorSession& session, const Value& /*args
     return result;
 }
 
-void addAction(CommandRegistry& registry, std::string id, std::string displayName, std::string tooltip,
-               Expected<Value> (*execute)(EditorSession&, const Value&)) {
-    registry.add({.id = std::move(id),
-                  .displayName = std::move(displayName),
-                  .tooltip = std::move(tooltip),
-                  .category = "Content",
-                  .kind = CommandKind::Action,
-                  .execute = execute});
-}
-
 void addQuery(CommandRegistry& registry, std::string id, std::string displayName, std::string tooltip,
               Expected<Value> (*execute)(EditorSession&, const Value&)) {
     registry.add({.id = std::move(id),
@@ -567,19 +595,27 @@ void addQuery(CommandRegistry& registry, std::string id, std::string displayName
 } // namespace
 
 void registerContentCommands(CommandRegistry& registry) {
-    addAction(registry, "ith.content.navigate", "Go to Folder", "Show a folder's contents", &navigate);
-    addAction(registry, "ith.content.navigate_up", "Parent Folder", "Show the parent folder", &navigateUp);
-    addAction(registry, "ith.content.select", "Select", "Change the Content Browser selection", &select);
-    addAction(registry, "ith.content.select_all", "Select All", "Select every item shown", &selectAll);
-    addAction(registry, "ith.content.dismiss", "Clear Selection",
-              "Clear the Content Browser selection; with nothing selected, close the content drawer", &dismiss);
-    addAction(registry, "ith.content.set_view", "View Options", "Show items as a grid or a list, and sort them",
-              &setView);
-    addAction(registry, "ith.content.set_filter", "Search", "Find items by name and type", &setFilter);
-    addAction(registry, "ith.content.rescan", "Rescan", "Read the Content folder from disk again", &rescan);
-    addAction(registry, "ith.content.open", "Open", "Open a level, or go into a folder", &open);
-    addAction(registry, "ith.content.toggle_drawer", "Content Drawer",
-              "Open or close the content drawer, or bring the Content Browser to the front", &toggleDrawer);
+    detail::registerContentFileCommands(registry);
+    detail::registerContentImportCommands(registry);
+    detail::addContentAction(registry, "ith.content.navigate", "Go to Folder", "Show a folder's contents", &navigate);
+    detail::addContentAction(registry, "ith.content.navigate_up", "Parent Folder", "Show the parent folder",
+                             &navigateUp);
+    detail::addContentAction(registry, "ith.content.select", "Select", "Change the Content Browser selection", &select);
+    detail::addContentAction(registry, "ith.content.select_all", "Select All", "Select every item shown", &selectAll);
+    detail::addContentAction(
+        registry, "ith.content.dismiss", "Clear Selection",
+        "Cancel a pending rename or dialog, else clear the Content Browser selection, else close the "
+        "content drawer",
+        &dismiss);
+    detail::addContentAction(registry, "ith.content.set_view", "View Options",
+                             "Show items as a grid or a list, and sort them", &setView);
+    detail::addContentAction(registry, "ith.content.set_filter", "Search", "Find items by name and type", &setFilter);
+    detail::addContentAction(registry, "ith.content.rescan", "Rescan", "Read the Content folder from disk again",
+                             &rescan);
+    detail::addContentAction(registry, "ith.content.open", "Open", "Open a level, or go into a folder", &open);
+    detail::addContentAction(registry, "ith.content.toggle_drawer", "Content Drawer",
+                             "Open or close the content drawer, or bring the Content Browser to the front",
+                             &toggleDrawer);
     addQuery(registry, "ith.query.content", "Content", "The Content Browser's folder, items and selection",
              &contentQuery);
     addQuery(registry, "ith.query.content_tree", "Content Tree", "The Content Browser's folder tree",
