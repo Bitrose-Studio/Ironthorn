@@ -1,6 +1,7 @@
 # ADR-0050: Editor Content Browser browse slice as built (amends 0015, 0029, 0034, 0049)
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0052](0052-editor-content-browser-file-operations-as-built.md)
 - **Date:** 2026-11-27
 - **Related:** amends [ADR-0049](0049-editor-content-browser-v1.md) rules 2, 3, 4, 6, 7, 22 and 27,
   [ADR-0029](0029-editor-ui-toolkit.md) rule 7 (what the ImGui consumer consumes),

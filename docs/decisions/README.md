@@ -53,9 +53,10 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0046](0046-editor-viewport-horizontal-field-of-view.md) | Editor viewport horizontal field of view (amends 0042, 0045) | Accepted |
 | [0047](0047-editor-viewport-picking-as-built.md) | Editor viewport picking as built (amends 0042, 0045) | Accepted, amended by [0048](0048-editor-viewport-translate-gizmo-as-built.md) |
 | [0048](0048-editor-viewport-translate-gizmo-as-built.md) | Editor viewport translate gizmo as built (amends 0037, 0042, 0047) | Accepted |
-| [0049](0049-editor-content-browser-v1.md) | Editor Content Browser v1 (amends 0015, 0037) | Accepted, amended by [0050](0050-editor-content-browser-browse-slice-as-built.md), [0051](0051-platform-open-file-dialog-as-built.md) |
-| [0050](0050-editor-content-browser-browse-slice-as-built.md) | Editor Content Browser browse slice as built (amends 0015, 0029, 0034, 0049) | Accepted |
+| [0049](0049-editor-content-browser-v1.md) | Editor Content Browser v1 (amends 0015, 0037) | Accepted, amended by [0050](0050-editor-content-browser-browse-slice-as-built.md), [0051](0051-platform-open-file-dialog-as-built.md), [0052](0052-editor-content-browser-file-operations-as-built.md) |
+| [0050](0050-editor-content-browser-browse-slice-as-built.md) | Editor Content Browser browse slice as built (amends 0015, 0029, 0034, 0049) | Accepted, amended by [0052](0052-editor-content-browser-file-operations-as-built.md) |
 | [0051](0051-platform-open-file-dialog-as-built.md) | Platform open-file dialog as built (amends 0049) | Accepted |
+| [0052](0052-editor-content-browser-file-operations-as-built.md) | Editor Content Browser file operations as built (amends 0049, 0050) | Accepted |
 
 ## Planned
 
