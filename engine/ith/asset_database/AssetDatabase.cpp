@@ -167,14 +167,18 @@ struct Candidate {
 struct ContentListing {
     std::vector<std::string> paths; // files and folders
     std::vector<std::string> files;
+    std::vector<std::string> folders; // links to folders left out
     std::vector<AssetProblem> problems;
 };
 
 // Adds the folder `directory` (`relative` to Content, empty for Content itself) to `listing`,
 // with its sub-folders. A sub-folder that can't be listed and a name that isn't valid Unicode are
-// problems; only Content itself failing to list is an error. Symbolic links to files count as
-// files; links to folders are not followed and dangling links are skipped.
-Expected<void> listFolder(const std::string& directory, const std::string& relative, ContentListing& listing) {
+// problems; only Content itself failing to list is an error. `depth` is the level of `directory`
+// (0 for Content): a folder deeper than kMaxFolderDepth is a problem, neither entered nor listed.
+// Symbolic links to files count as files; links to folders are not followed and dangling links are
+// skipped.
+Expected<void> listFolder(const std::string& directory, const std::string& relative, std::size_t depth,
+                          ContentListing& listing) {
     Expected<std::vector<fs::DirectoryEntry>> entries = fs::listDirectory(directory);
     if (!entries) {
         return fromFileSystem(std::move(entries).error());
@@ -189,8 +193,14 @@ Expected<void> listFolder(const std::string& directory, const std::string& relat
         if (entry.kind == fs::FileKind::File || entry.kind == fs::FileKind::FileLink) {
             listing.files.push_back(path);
         }
-        if (entry.kind == fs::FileKind::Directory) {
-            if (Expected<void> listed = listFolder(fs::joinPath(directory, entry.name), path, listing); !listed) {
+        if (entry.kind == fs::FileKind::Directory && depth + 1 > kMaxFolderDepth) {
+            listing.problems.push_back(invalidFile(path, "a folder nested more than " +
+                                                             std::to_string(kMaxFolderDepth) +
+                                                             " levels deep; it is not scanned"));
+        } else if (entry.kind == fs::FileKind::Directory) {
+            listing.folders.push_back(path);
+            if (Expected<void> listed = listFolder(fs::joinPath(directory, entry.name), path, depth + 1, listing);
+                !listed) {
                 listing.problems.push_back(invalidFile(path, listed.error().message));
             }
         }
@@ -200,11 +210,12 @@ Expected<void> listFolder(const std::string& directory, const std::string& relat
 
 Expected<ContentListing> listContent(const std::string& content) {
     ContentListing listing;
-    if (Expected<void> listed = listFolder(content, {}, listing); !listed) {
+    if (Expected<void> listed = listFolder(content, {}, 0, listing); !listed) {
         return makeUnexpected(std::move(listed).error());
     }
     std::ranges::sort(listing.paths);
     std::ranges::sort(listing.files);
+    std::ranges::sort(listing.folders);
     return listing;
 }
 
@@ -524,7 +535,7 @@ std::vector<std::pair<std::string, std::string>> findCaseConflicts(const std::ve
 }
 
 AssetDatabase::AssetDatabase(std::string_view projectDirectory, const ImporterRegistry& importers)
-    : m_contentDirectory(fs::joinPath(projectDirectory, "Content")),
+    : m_contentDirectory(fs::joinPath(projectDirectory, kContentFolderName)),
       m_cache(DerivedDataCache::projectDirectory(projectDirectory)),
       m_importers(importers) {}
 
@@ -553,8 +564,20 @@ void AssetDatabase::insert(AssetRecord record) {
         m_records.erase(atPath->second);
         m_byPath.erase(atPath);
     }
+    addFolders(record.path); // an import or a new id may be the first record of a folder made outside
     m_byPath.emplace(record.path, record.id);
     m_records.emplace(record.id, std::move(record));
+}
+
+void AssetDatabase::addFolders(std::string_view path) {
+    // Every folder along the path, from the top: "A/B/c.png" adds "A" and "A/B".
+    for (std::size_t slash = path.find('/'); slash != std::string_view::npos; slash = path.find('/', slash + 1)) {
+        const std::string_view folder = path.substr(0, slash);
+        const auto at = std::ranges::lower_bound(m_folders, folder);
+        if (at == m_folders.end() || *at != folder) {
+            m_folders.insert(at, std::string(folder));
+        }
+    }
 }
 
 void AssetDatabase::erase(AssetId id) {
@@ -627,6 +650,7 @@ Expected<std::vector<AssetProblem>> AssetDatabase::scan() {
         accepted.push_back(std::move(candidate.record));
     }
 
+    m_folders = std::move(listing->folders);
     m_records.clear();
     m_byPath.clear();
     for (AssetRecord& record : accepted) {
@@ -843,6 +867,8 @@ Expected<void> AssetDatabase::move(AssetId id, std::string_view newPath) {
     if (Expected<void> created = fs::createDirectories(fs::parentPath(newFile)); !created) {
         return fromFileSystem(std::move(created).error());
     }
+    // The folders exist on disk from here on, whether the move below works or not.
+    addFolders(target);
     if (Expected<void> renamed = fs::move(oldFile, newFile); !renamed) {
         return fromFileSystem(std::move(renamed).error());
     }

@@ -1,8 +1,10 @@
 # Spec: Content Browser v1
 
 - **Status:** Settled by [ADR-0049](../decisions/0049-editor-content-browser-v1.md) (Accepted
-  2026-11-27); not implemented yet. The ADR settles the open questions (section 6) and the spec
-  follows it where it differs from the first draft (its rules 3, 6, 10, 11 and 12)
+  2026-11-27); the browse slice (ADR-0049 rule 27) is implemented, file operations and import are
+  not yet, and the Content Drawer button in the status bar (3.16) comes with them (it changes the
+  shell's golden images). The ADR settles the open questions (section 6) and the spec follows it
+  where it differs from the first draft (its rules 3, 6, 10, 11 and 12)
 - **Date:** 2026-11-27
 - **Builds on:** [ADR-0003](../decisions/0003-clean-room.md) (clean room),
   [ADR-0004](../decisions/0004-modules-and-layering.md) (layers),
@@ -173,8 +175,8 @@ An asset with a badge is still an asset and supports every asset operation. A pr
 supports only Delete, Rename (except orphan sidecars) and its fix; it can't be dragged, duplicated
 or reimported.
 
-**Type categories.** A table in `editor_core` maps each type to a display name, a category and an
-icon:
+**Type categories.** A table in `editor_core` maps each type to a display name and a category;
+`editor_ui` chooses the icon by category (folders and problem entries have icons of their own):
 
 | Category | Types in P2 |
 |---|---|
@@ -185,8 +187,7 @@ icon:
 | Data | every other native format (`ith.input_action`, `ith.input_context`, …) |
 | Other | any type the table doesn't know; its display name is the raw type |
 
-The module that brings a format or an importer adds its row. Folders and problem entries have
-their own icons.
+The module that brings a format or an importer adds its row.
 
 **Grid mode** shows a tile per item: the type icon, the label below it on at most two lines,
 ending in "…" when longer (the tooltip shows the full label, the type's display name and the
@@ -221,8 +222,9 @@ a search or filter is active.
   word is a substring of its label, compared without ASCII case (letters outside ASCII compare
   exactly, as content paths do, ADR-0015).
 - **Type filter**: a set of categories, plus **Problems** (items with a badge or problem
-  entries). An empty set means all. Categories in the set combine with OR; search and filter
-  combine with AND.
+  entries). An empty set means all. Categories match assets only; problem entries match only
+  Problems (they have no category: `ith.query.content` gives `category` for assets only).
+  Categories in the set combine with OR; search and filter combine with AND.
 - **While a search or a filter is active**, the asset view shows the matching items of the
   current folder **and all its subfolders**, without folder items, with each item's folder in its
   tooltip and in list mode's Folder column (open question 13). Clearing both returns to the
@@ -466,6 +468,10 @@ counted (as the database enforces).
   and the document's path changes to match; when the file is gone, the level stays open with its
   path, and a warning says that saving will write it again.
 - The log reports the number of assets and problems found.
+- Rescan is refused while the open level is being saved (`editor.document.save_in_progress`).
+- A level saved into the content root under a path and an id the database doesn't have yet (a new
+  level's first save) shows at once: the save rescans. A Save As of a level the database already
+  knows waits for a Rescan, which decides which file is the copy.
 
 ### 3.15 Opening a level
 
@@ -518,7 +524,21 @@ section. Every `ith.content.*` command is in the Content context except
   Delete, Ctrl + D, Ctrl + A and Escape are also the level's entity commands (`ith.edit.*`); with
   the focus in the browser they reach the content commands, elsewhere the entity commands.
 - `editor_ui` reports the browser's focus to the model every frame; the keymap reads the last
-  frame's value (ADR-0049 rule 4).
+  frame's value (ADR-0049 rule 4). Between frames the focus follows at once: a mouse press inside
+  the browser's last-frame rectangles (panel or drawer) gives it the focus and one outside takes
+  it, and `ith.content.toggle_drawer` gives it to the drawer or the panel it opens (and takes it
+  when it closes the drawer), so a key later in the same batch of events reaches the right
+  context.
+- While the browser has the focus, the widget keys of the asset view (below) are consumed by the
+  keymap without running anything, so End never also runs its Editor binding (Snap to Floor) and
+  an arrow never reaches the level.
+- Until the file operations register `ith.content.rename`, `ith.content.delete` and
+  `ith.content.duplicate`, F2, Delete and Ctrl + D are consumed the same way while the browser has
+  the focus, whatever the keymap binds (`kContentReservedChords`), so unbinding a content command in
+  a user layer can't let Delete reach the level's `ith.edit.delete`. The file operations replace
+  this with their real commands.
+- While an ImGui popup is open (a menu, the unsaved-changes question, later dialogs), it keeps
+  every key, as a text field does: Escape closes the menu and runs no shortcut.
 - A text field (search, inline rename) keeps every key, as today. No other panel has a context
   in P2.
 
@@ -531,7 +551,7 @@ Shortcuts run their command without arguments. The bindings in `engine/config/Ke
 | F2 | Rename the primary item | `ith.content.rename` | Content |
 | Delete | Delete the selection (asks) | `ith.content.delete` | Content |
 | Ctrl + D | Duplicate the selection | `ith.content.duplicate` | Content |
-| Enter | Open the primary item (level: open it; folder: go into it) | `ith.content.open` | Content |
+| Enter, Keypad Enter | Open the primary item (level: open it; folder: go into it) | `ith.content.open` | Content |
 | Alt + Up | Parent folder | `ith.content.navigate_up` | Content |
 | Ctrl + A | Select every shown item | `ith.content.select_all` | Content |
 | Escape | Clear the selection; with nothing selected, close the drawer when it is open | `ith.content.dismiss` | Content |
@@ -542,6 +562,8 @@ Shortcuts run their command without arguments. The bindings in `engine/config/Ke
 |---|---|
 | Arrows, Home, End, with or without Shift | Move the focus item and select (3.6), through `ith.content.select` with arguments |
 | Ctrl + F | Focus the search box (UI only) |
+
+The keymap consumer holds this list as `kContentWidgetChords` (`Keymap.h`).
 
 ### 3.18 Session state
 
@@ -567,7 +589,8 @@ allowed during Play In Editor (except opening a level). They never make the leve
 change of the open level is not a dirty change (ADR-0049 rule 2). Commands that take `items` act
 on the content selection when `items` is absent, so the keymap binds them without arguments.
 `navigate_up`, `select_all` and `dismiss` exist because shortcuts run commands without arguments
-(ADR-0049 rule 6).
+(ADR-0049 rule 6); they are the only way to go up, select everything or clear: `navigate` always
+takes a folder and `select` always takes items and a mode.
 
 **A command that needs a user's answer** (a rename without a name, a delete without
 confirmation, an import with unresolved conflicts) changes nothing on disk, starts the matching
@@ -577,11 +600,11 @@ This follows the unsaved-changes pattern of `ith.file.open_level`.
 
 | Id | Args | Result |
 |---|---|---|
-| `ith.content.navigate` | `{folder}` or `{up: true}` | `{folder}` |
+| `ith.content.navigate` | `{folder}` | `{folder}` |
 | `ith.content.navigate_up` | `{}` | `{folder}`: the parent folder; nothing changes at the root |
-| `ith.content.select` | `{items, mode}` with `mode` `replace`, `add`, `toggle`, `remove`, or `{all: true}`, or `{none: true}` | `{selection, primary}` |
+| `ith.content.select` | `{items, mode?}` with `mode` `replace` (the default), `add`, `toggle`, `remove`, `range` (Shift + click: from the anchor to the one item) or `add_range` (Ctrl + Shift + click); `replace` with no items clears the selection | `{selection, primary}` |
 | `ith.content.select_all` | `{}` | `{selection, primary}`: every shown item |
-| `ith.content.dismiss` | `{}` | clears the selection; with nothing selected, closes the drawer when it is open |
+| `ith.content.dismiss` | `{}` | `{selection, primary, drawerOpen}`: clears the selection; with nothing selected, closes the drawer when it is open |
 | `ith.content.set_view` | `{mode?, sortBy?: "name" \| "type", descending?}` | the view settings |
 | `ith.content.set_filter` | `{search?, categories?}` | `{shown}`: the number of items shown |
 | `ith.content.new_folder` | `{parent?, name?}` | `{path}`; without `name`, also starts its inline rename |
@@ -594,7 +617,7 @@ This follows the unsaved-changes pattern of `ith.file.open_level`.
 | `ith.content.fix` | `{item}` | `{path, id}`: Import for a "Not imported" entry, Assign New Id for a duplicate |
 | `ith.content.rescan` | `{}` | `{assets, problems}` |
 | `ith.content.open` | `{item?, unsaved?}` | as `ith.file.open_level` for a level; `{folder}` for a folder |
-| `ith.content.toggle_drawer` | `{open?}` | `{open, target}`: `target` is `drawer` or `panel` (3.16) |
+| `ith.content.toggle_drawer` | `{open?}` | `{open, target}`: `target` is `drawer` or `panel` (3.16); `open: false` always closes the drawer |
 
 - `files` in `ith.content.import` are absolute paths, UTF-8, from the file dialog or the drop;
   `folder` is a content path (the current folder by default). Automation calls it with paths, so
@@ -610,12 +633,15 @@ This follows the unsaved-changes pattern of `ith.file.open_level`.
   `editor.command.invalid_args`, `editor.document.no_asset_database`, and the database's and file
   system's codes (`asset.*`, `fs.*`) inside `failed`.
 - **Queries:** `ith.query.content` → `{folder, search, categories, view, items: [{kind, path, id?,
-  label, type, category, problems: [{kind, message, otherPath?}]}], selection, primary, anchor,
-  prompt}` (items in display order, `prompt` describes a pending rename or dialog);
-  `ith.query.content_tree` → the folder tree with expansion; `ith.query.content_problems` → every
+  label, type, category, problems: [{kind, message, otherPath?}]}], problems, selection, primary,
+  anchor, focus, prompt, drawerOpen}` (items in display order, `problems` the number of shown items
+  with a problem, `focus` the focus item, `prompt` a pending rename or dialog, null when none);
+  `ith.query.content_tree` → `{current, folders: [{path, name, depth, hasChildren, expanded}]}`, the
+  rows of the folder tree as shown (the root first; folders below a collapsed one left out);
+  `ith.query.content_problems` → `{problems: [{kind, path, otherPath?, message}]}`, every
   current problem.
-- The provisional keymap id `ith.content_browser.open_drawer` in `engine/config/Keymap.json`
-  becomes `ith.content.toggle_drawer`.
+- The provisional keymap id `ith.content_browser.open_drawer` in `engine/config/Keymap.json` has
+  become `ith.content.toggle_drawer`.
 
 ### 3.20 Failure behaviour
 

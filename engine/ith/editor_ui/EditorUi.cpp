@@ -143,7 +143,8 @@ Expected<std::unique_ptr<EditorUi>> EditorUi::create(const EditorUiDesc& desc) {
         return makeUnexpected(renderer.error());
     }
     ui->m_renderer = std::move(*renderer);
-    ui->m_platform = std::make_unique<UiPlatformBackend>(*desc.input, desc.window, desc.host, desc.viewports);
+    ui->m_platform =
+        std::make_unique<UiPlatformBackend>(*desc.input, desc.window, desc.host, desc.viewports, desc.content);
     return ui;
 }
 

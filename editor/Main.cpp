@@ -1,7 +1,8 @@
-// ironthorn_editor: the Ironthorn editor (ADR-0008, ADR-0029, ADR-0040). It opens a window with the
-// editor shell - the main menu with the File, Edit and Window commands and their shortcuts, the dock
-// space with the panels (Viewport, Outliner, Details, Output Log) in the last session's layout,
-// and the status bar - over one editor session of a project.
+// ironthorn_editor: the Ironthorn editor (ADR-0008, ADR-0029, ADR-0040, ADR-0049). It opens a window
+// with the editor shell - the main menu with the File, Edit and Window commands and their shortcuts,
+// the dock space with the panels (Viewport, Outliner, Details, Content Browser, Output Log) in the
+// last session's layout, the content drawer on Ctrl + Space, and the status bar - over one editor
+// session of a project, whose Content folder is scanned when it opens.
 //
 //   ironthorn_editor --project <dir>            edits the project in <dir>
 //   ironthorn_editor ... --user-dir <dir>       the user configuration layer (default: the user's
@@ -19,12 +20,16 @@
 // headless "offscreen" driver, which CTest uses) the UI renders into an offscreen texture; where no
 // GPU device can be created it renders on the null device, so automation always runs.
 
+#include "ith/asset_database/AssetDatabase.h"
+#include "ith/asset_database/Importer.h"
+#include "ith/asset_importers/GltfImporter.h"
 #include "ith/config/Config.h"
 #include "ith/editor_core/Automation.h"
 #include "ith/editor_core/EditorPreferences.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/Keymap.h"
 #include "ith/editor_core/ViewportInput.h"
+#include "ith/editor_ui/ContentBrowserPanel.h"
 #include "ith/editor_ui/DetailsPanel.h"
 #include "ith/editor_ui/DockLayout.h"
 #include "ith/editor_ui/EditorShell.h"
@@ -425,6 +430,14 @@ void finishSession(ith::EditorSession& session, ith::DockLayout& dock) {
     }
 }
 
+// Scans the project's Content folder, so the Content Browser shows the disk as it is when the project
+// opens (spec 3.14); a failure is a warning, and the browser stays empty until a Rescan works.
+void scanContent(ith::EditorSession& session) {
+    if (const ith::Expected<ith::serialization::Value> scanned = session.execute("ith.content.rescan"); !scanned) {
+        warn(scanned.error());
+    }
+}
+
 // Runs the automation script at `path` and waits for its file operations; false when it failed.
 bool runAutomation(ith::EditorSession& session, const std::string& path) {
     ith::Automation automation(session);
@@ -438,10 +451,12 @@ bool runAutomation(ith::EditorSession& session, const std::string& path) {
     return true;
 }
 
-// What the idle policy watches besides events and jobs: the document, the layout and the log.
+// What the idle policy watches besides events and jobs: the document, the layout, the Content
+// Browser and the log.
 struct StateWatch {
     std::uint64_t document = 0;
     std::uint64_t layout = 0;
+    std::uint64_t content = 0;
     std::uint64_t log = 0;
 
     // True when any of them changed since the last call.
@@ -450,9 +465,11 @@ struct StateWatch {
         const std::uint64_t nextLog = history.read(log, records);
         const std::uint64_t nextDocument = session.document().changes().any();
         const std::uint64_t nextLayout = session.layouts().changes();
-        const bool any = nextDocument != document || nextLayout != layout || nextLog != log;
+        const std::uint64_t nextContent = session.content().generation();
+        const bool any = nextDocument != document || nextLayout != layout || nextContent != content || nextLog != log;
         document = nextDocument;
         layout = nextLayout;
+        content = nextContent;
         log = nextLog;
         return any;
     }
@@ -517,12 +534,18 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     ith::generated::registerReflection_ecs(types);
     ith::generated::registerReflection_editor_core(types);
     ith::generated::registerReflection_shapes(types);
-    ith::EditorSession session(types, {.projectDirectory = options.project, .jobs = &jobs, .config = &config});
+    // The project's assets (ADR-0015): the importers, then the database the Content Browser scans.
+    ith::ImporterRegistry importers;
+    importers.add(std::make_unique<ith::GltfImporter>());
+    ith::AssetDatabase assets(options.project, importers);
+    ith::EditorSession session(
+        types, {.projectDirectory = options.project, .jobs = &jobs, .assets = &assets, .config = &config});
     std::vector<ith::Error> warnings;
     const ith::Keymap keymap = ith::Keymap::load(config, session.commands(), warnings);
     warnings.insert(warnings.end(), config.warnings().begin(), config.warnings().end());
     for (const ith::Error& warning : warnings) {
-        // Commands of later editor steps (the content drawer, Play In Editor) are bound before they exist.
+        // Commands of later editor work (the content file operations, Play In Editor) are bound before
+        // they exist.
         if (warning.code == "editor.keymap.unknown_command") {
             continue;
         }
@@ -564,6 +587,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
                                .window = window.id(),
                                .host = &host,
                                .viewports = &viewportInput,
+                               .content = &session.content(),
                                .displayScale = window.displayScale()});
     if (!created) {
         input.removeConsumer(viewportConsumer);
@@ -597,10 +621,13 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     ith::registerOutliner(session, outliner);
     ith::DetailsPanel details(session);
     ith::registerDetails(session.panels(), details);
+    ith::ContentBrowserPanel contentBrowser(session);
+    ith::registerContentBrowser(session, contentBrowser);
     ith::OutputLog outputLog(logHistory, ui.theme());
     ith::registerOutputLog(session.panels(), outputLog);
     ith::DockLayout dock(session);
     static_cast<void>(session.layouts().restore());
+    scanContent(session);
 
     ith::IdlePolicy idle(
         {.focused = preferences.idleFramesPerSecond, .unfocused = preferences.idleFramesPerSecondUnfocused});
@@ -647,6 +674,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
                      .focused = input.focusedWindow() == window.id()});
         (*viewportPanel)->newFrame();
         ith::drawEditorShell(session, keymap, shell, dock);
+        contentBrowser.drawDrawer();
         ui.endFrame();
         if (!render(device, target, graph, pool, ui, **viewportPanel)) {
             status = 1;

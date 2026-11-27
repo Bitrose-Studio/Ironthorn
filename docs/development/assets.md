@@ -133,6 +133,12 @@ const auto moved = database.move(report->id, "Vehicles/Ship.gltf");
   but one file on Windows and macOS; avoid names that differ only in non-ASCII case.
 - Symbolic links: a link to a file is read as that file (a sidecar that is a link becomes a plain
   file when it is rewritten); links to folders are not followed; dangling links are left out.
+- `folders()` lists every folder below `Content` (not `Content` itself), sorted, empty ones
+  included and links to folders left out, as the last `scan()` found them; `move()` adds the
+  folders it creates, and every asset added (`import()`, `assignNewId()`, `move()`) the folders
+  along its path. The Content Browser's folder tree is built from it.
+- `scan()` goes at most `kMaxFolderDepth` (64) folders deep below `Content`: a deeper folder is an
+  `InvalidFile` problem, neither entered nor listed, so every walk of the folders is bounded.
 - Files are read only up to a limit, checked before anything is allocated: 64 MiB for sidecars,
   256 MiB for native assets, 4 GiB for source files.
 - `scan()` reports problems and never fails on them; only a `Content` folder that can't be listed

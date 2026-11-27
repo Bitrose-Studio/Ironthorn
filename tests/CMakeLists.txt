@@ -848,6 +848,7 @@ if(TARGET ith_editor_core)
         SOURCES
             editor_core/AddShapeTests.cpp
             editor_core/AutomationTests.cpp
+            editor_core/ContentBrowserTests.cpp
             editor_core/EditCommandTests.cpp
             editor_core/EditorCameraTests.cpp
             editor_core/EditorCoreComponents.h
@@ -864,19 +865,50 @@ if(TARGET ith_editor_core)
             editor_core/ViewportTests.cpp
             editor_core/ViewModelTests.cpp
         LIBRARIES ith::editor_core ith_test_editor_core_components)
+
+    # The Content Browser benchmark (docs/specs/content-browser.md, requirement 59): the view model of
+    # a 1 000-item folder and a search over 10 000 items. Like ecs_benchmark it only prints numbers.
+    add_executable(ith_content_browser_benchmark editor_core/ContentBrowserBenchmark.cpp)
+    target_link_libraries(ith_content_browser_benchmark PRIVATE ith::editor_core)
+    set_target_properties(ith_content_browser_benchmark PROPERTIES
+        FOLDER "Ironthorn/Benchmarks"
+        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    add_test(NAME content_browser_benchmark COMMAND ith_content_browser_benchmark)
+    set_tests_properties(content_browser_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
+
+    # A libFuzzer target for the Content Browser's session state reader, which reads a file from the
+    # project's Saved folder, in Clang sanitizer builds only, with a short smoke run like the others.
+    if(IRONTHORN_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+            AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+        add_executable(ith_content_state_fuzz editor_core/ContentBrowserStateFuzz.cpp)
+        target_link_libraries(ith_content_state_fuzz PRIVATE ith::editor_core)
+        target_compile_options(ith_content_state_fuzz PRIVATE -fsanitize=fuzzer)
+        target_link_options(ith_content_state_fuzz PRIVATE -fsanitize=fuzzer)
+        set_target_properties(ith_content_state_fuzz PROPERTIES
+            FOLDER "Ironthorn/Tests"
+            COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+        set(corpus "${CMAKE_CURRENT_BINARY_DIR}/content_state_fuzz_corpus")
+        file(MAKE_DIRECTORY "${corpus}")
+        add_test(NAME content_state_fuzz
+            COMMAND ith_content_state_fuzz -runs=20000 -max_len=4096 -malloc_limit_mb=512
+                -dict=${CMAKE_CURRENT_SOURCE_DIR}/serialization/fuzz_seeds/json.dict
+                "${corpus}" "${CMAKE_CURRENT_SOURCE_DIR}/editor_core/fuzz_seeds/content_browser_state")
+        set_tests_properties(content_state_fuzz PROPERTIES LABELS "fuzz" TIMEOUT 300)
+    endif()
 endif()
 
 # The editor UI (ADR-0029 rule 18), headless: ImGui on our platform backend with injected events
 # (routing, text, IME, clipboard, cursor, focus), on our renderer backend on the RHI's null device
-# (texture create, update and destroy, upload growth, scissors, recorded commands), the Outliner and
-# Details panels driven by mouse and keys, the theme, the fonts, the icons against the pinned
-# codepoints.json, the shell and the idle policy. The fonts come from the fonts/ folder the build
-# fills next to the executable. Built wherever the editor modules are, sanitizer builds included
-# (ADR-0029 rule 19).
+# (texture create, update and destroy, upload growth, scissors, recorded commands), the Outliner,
+# Details and Content Browser panels and the content drawer driven by mouse and keys, the theme, the
+# fonts, the icons against the pinned codepoints.json, the shell and the idle policy. The fonts come
+# from the fonts/ folder the build fills next to the executable. Built wherever the editor modules
+# are, sanitizer builds included (ADR-0029 rule 19).
 if(TARGET ith_editor_ui)
     ith_add_test_suite(editor_ui
         SOURCES
             editor_ui/EditorUiTestSupport.h
+            editor_ui/ContentBrowserPanelTests.cpp
             editor_ui/DockLayoutTests.cpp
             editor_ui/EditorUiTests.cpp
             editor_ui/OutputLogTests.cpp

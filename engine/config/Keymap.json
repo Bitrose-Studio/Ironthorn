@@ -4,8 +4,11 @@
 // eject are the Play In Editor keys, which work only while a game runs (ADR-0029 rule 7), so Escape
 // stops play there and clears the selection in the editor. The viewport navigation of ADR-0008
 // rule 4 (fly, orbit, dolly, pan, fly speed, Alt + drag to duplicate) is held input, not commands,
-// and comes with the viewport. The viewport, content drawer and Play In Editor commands are
-// registered by the editor modules that bring them.
+// and comes with the viewport. The "ith.content." commands other than toggle_drawer are the Content
+// context (ADR-0049 rules 3 and 5): they fire only while the Content Browser has the keyboard focus,
+// and win over the same chord's Editor binding there. Content commands of later steps (rename,
+// delete, duplicate) and the Play In Editor commands are registered by the editor work that brings
+// them.
 {
   "format": "ith.config",
   "version": 1,
@@ -30,7 +33,14 @@
       "ith.viewport.snap_to_floor": ["Keyboard.End"],
       "ith.viewport.game_view": ["Keyboard.G"],
       "ith.viewport.immersive": ["Keyboard.F11"],
-      "ith.content_browser.open_drawer": ["Ctrl+Keyboard.Space"],
+      "ith.content.toggle_drawer": ["Ctrl+Keyboard.Space"],
+      "ith.content.rename": ["Keyboard.F2"],
+      "ith.content.delete": ["Keyboard.Delete"],
+      "ith.content.duplicate": ["Ctrl+Keyboard.D"],
+      "ith.content.open": ["Keyboard.Enter", "Keyboard.KeypadEnter"],
+      "ith.content.navigate_up": ["Alt+Keyboard.Up"],
+      "ith.content.select_all": ["Ctrl+Keyboard.A"],
+      "ith.content.dismiss": ["Keyboard.Escape"],
       "ith.play.play": ["Alt+Keyboard.P"],
       "ith.play.simulate": ["Alt+Keyboard.S"],
       "ith.play.stop": ["Keyboard.Escape"],

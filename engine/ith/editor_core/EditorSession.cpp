@@ -1,8 +1,12 @@
 #include "ith/editor_core/EditorSession.h"
 
+#include "ith/asset_database/AssetDatabase.h"
+#include "ith/assets/AssetId.h"
 #include "ith/ecs/StableId.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
+#include "ith/foundation/Assert.h"
+#include "ith/foundation/Log.h"
 #include "ith/jobs/JobSystem.h"
 #include "ith/level/Level.h"
 
@@ -11,6 +15,8 @@
 namespace ith {
 
 namespace {
+
+ITH_LOG_CATEGORY(ContentBrowser);
 
 // NOLINTNEXTLINE(misc-const-correctness): the signature EntityMapping::toId has
 Uuid toStableId(void* context, Entity entity) {
@@ -64,12 +70,16 @@ EditorSession::EditorSession(const TypeRegistry& types, EditorSessionOptions opt
                                                    : fs::joinPath(m_options.projectDirectory, kSessionLayoutFile)),
       m_viewports(m_options.projectDirectory.empty() ? std::string()
                                                      : fs::joinPath(m_options.projectDirectory, kViewportsFile)),
+      m_content(m_options.assets, m_options.projectDirectory.empty()
+                                      ? std::string()
+                                      : fs::joinPath(m_options.projectDirectory, kContentBrowserStateFile)),
       m_mapping{.toId = &toStableId, .toEntity = &fromStableId, .context = &m_document} {
     registerEditCommands(m_commands);
     registerFileCommands(m_commands);
     registerQueryCommands(m_commands);
     registerLayoutCommands(m_commands);
     registerViewportCommands(m_commands);
+    registerContentCommands(m_commands);
 }
 
 void EditorSession::saveViewports() {
@@ -198,8 +208,11 @@ void EditorSession::finish() {
             if (m_document.history().savedPosition() == operation->saved) {
                 m_document.history().setSavedPosition(operation->previousSaved);
             }
-        } else if (operation->path != m_document.path()) {
-            m_document.setPath(operation->path);
+        } else {
+            if (operation->path != m_document.path()) {
+                m_document.setPath(operation->path);
+            }
+            showSavedLevel(operation->fullPath);
         }
         m_document.changes().bumpDocument();
         return;
@@ -222,6 +235,25 @@ void EditorSession::finish() {
     saveViewports();
     m_document.adopt(loaded->id, operation->path);
     m_viewports.restoreLevel(loaded->id);
+}
+
+void EditorSession::showSavedLevel(const std::string& fullPath) {
+    const AssetDatabase* assets = m_options.assets;
+    const std::string content = assets != nullptr ? assets->contentDirectory() + "/" : std::string();
+    if (assets == nullptr || !fullPath.starts_with(content)) {
+        return;
+    }
+    // A level the database knows needs nothing. One whose id another file has (a Save As of a known
+    // level) waits for a Rescan, which decides which file is the copy.
+    if (assets->findByPath(fullPath.substr(content.size())) != nullptr ||
+        assets->find(AssetId(m_document.levelId())) != nullptr) {
+        return;
+    }
+    ITH_ASSERT_MSG(!m_document.saving(), "the Content Browser rescans only after the save has finished");
+    if (Expected<void> scanned = m_content.rescan(); !scanned) {
+        ITH_LOG_WARNING(ContentBrowser, "the Content Browser can't show the saved level: {}", scanned.error().message);
+        m_warnings.push_back(scanned.error());
+    }
 }
 
 void EditorSession::waitIdle() {

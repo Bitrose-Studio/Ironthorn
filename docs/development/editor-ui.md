@@ -95,16 +95,23 @@ the UI, the viewports, the keymap ([ADR-0029](../decisions/0029-editor-ui-toolki
 amended by [ADR-0042](../decisions/0042-editor-viewport.md) rule 8). It hands every event that
 reaches it to ImGui, and consumes:
 
-- **key presses only while a text field is active**, so W in a text field types W instead of
-  reaching the keymap. The UI's consumer is then also the window's focused consumer with
-  `acceptsText`, so `Input::textInputWanted()` turns on and the application starts the platform's
-  text input; it gives the focus back when the field closes. ImGui reports an active field at the
-  end of the frame that activates it, so the focus follows at once;
+- **key presses only while a text field is active or an ImGui popup is open** (a menu, a context
+  menu, a dialog), so Escape and Enter in a menu or a dialog never also run a shortcut, and W in a
+  text field types W instead of reaching the keymap. While a text field is active, the UI's consumer
+  is also the window's focused consumer with `acceptsText`, so `Input::textInputWanted()` turns on
+  and the application starts the platform's text input; it gives the focus back when the field
+  closes. ImGui reports an active field at the end of the frame that activates it, so the focus
+  follows at once;
 - **mouse presses, motion and the wheel while ImGui wants the mouse** (the pointer is over an ImGui
   window, or a drag started in one). Over the empty dock space the events go on to the consumers
   below. So do the mouse events over a hovered viewport image, by the rectangles and hover the
   panels reported last frame ([Viewport](#viewport)), while no ImGui popup is open: ImGui sees them
   but leaves them to the viewport consumer (`EditorUiDesc::viewports`, ADR-0042 rule 9).
+
+A mouse press is also handed to the Content Browser's model (`EditorUiDesc::content`), which
+hit-tests it against the browser's rectangles of the last frame and sets its keyboard-focus flag at
+once, so a click into the browser followed by Delete in the same batch of events reaches the
+Content context, not the level (ADR-0049 rule 4).
 
 While the viewport consumer holds a drag, its presses, motion and wheel are the viewport's alone:
 ImGui neither sees nor takes them and is told the mouse is gone, so a camera drag that leaves the
@@ -283,10 +290,13 @@ ith::registerDetails(session.panels(), details); // "ith.details"
 ith::OutputLog log(history, ui.theme());
 ith::registerOutputLog(session.panels(), log);   // "ith.output_log"
 ith::registerViewport(session.panels(), **viewport); // "ith.viewport", instances 1 to 4
+ith::ContentBrowserPanel content(session);
+ith::registerContentBrowser(session, content);  // "ith.content_browser", and the Enter prompt
+// every frame, after drawEditorShell: content.drawDrawer();
 ```
 
 A change a panel can't make (a refused command) goes to the log, in the category `Outliner`,
-`Details` or `Viewport`.
+`Details`, `Viewport` or `ContentBrowser`.
 
 ### Outliner
 
@@ -345,7 +355,7 @@ Editors are found by the value's type id, then by its kind:
 2. Every frame of the drag previews the value in the world.
 3. Releasing the field commits it as one Set Property undo entry.
 
-Esc during a drag reaches the keymap, because the UI takes keys only while a text field is active.
+Esc during a drag reaches the keymap, because the UI takes keys only while a text field is active or a popup is open.
 It cancels the edit and the value goes back; the rest of the drag does nothing. Check boxes, combo
 boxes, pickers and text fields set their value with one command each.
 
@@ -553,6 +563,56 @@ text (`ViewportShaders.h`: `viewportShapesShaderSource()`, `viewportGridShaderSo
 points and the push-constant sizes) and compiled by the application at start-up. They have no
 variants.
 
+### Content Browser
+
+`ith::ContentBrowserPanel` draws the `ContentBrowserModel` of
+[editor core](editor-core.md#content-browser) twice over: as the `ith.content_browser` panel
+(Content Browser, docked at the bottom, one instance) and as the **content drawer**
+([ADR-0049](../decisions/0049-editor-content-browser-v1.md) rules 4, 7 and 26). Both show the same
+state; the drawer is never in a layout.
+
+- **The browser.** A toolbar in the order of spec 3.1 (the search box, the type filter menu with
+  Problems, grid or list, the sort menu, Rescan), the folder tree and the asset view side by side
+  with a splitter, the path bar (`Content › Meshes › Rocks`, a click on a segment goes there) and a
+  status line (`<n> items`, `<m> selected`, and `<p> problems`, which shows the Problems filter).
+  The tree and the asset view draw only their visible rows through list clippers; grid tiles show
+  the type icon (chosen by category; folders and problem entries have their own), the label on two
+  lines at most ending in "…", and a warning icon on items with problems; the tooltip names the
+  type, the path, the folder while searching and each problem. The list sorts by a click on its
+  Name or Type header (the Folder column doesn't sort), through `ith.content.set_view`; the table
+  is made per sort, so its headers always show the model's sort. Names are drawn whole, also with
+  a `##` in them.
+- **Input.** Clicks issue `ith.content.select` (Ctrl toggles, Shift selects the range from the
+  anchor, Ctrl + Shift adds it, a click on empty space clears, a right click selects an unselected
+  item alone); a double-click opens (a folder becomes current, a level opens). The arrow keys,
+  Home and End move the focus item and select (Shift: the range; Left and Right in the grid only,
+  Up and Down by a row), and Ctrl + F goes to the search box: widget keys of the asset view, not
+  keymap bindings. Changes asked for while the rows are drawn run once the browser is drawn, so no
+  command rebuilds what is being iterated.
+- **Unsaved changes.** Opening a level (double-click, or Enter as the prompt of `ith.content.open`)
+  while the open one is dirty asks Save / Don't Save / Cancel first, then runs the command with
+  `unsaved`; Escape cancels.
+- **The drawer.** `drawDrawer()`, called every frame after the shell, draws it while it is open:
+  over the bottom of the main window, the dock space's width, above the docked panels and the status
+  bar, not dockable and without saved settings. It starts at 40 % of the window, its top edge
+  resizes it (150 pixels at display scale 1 to 80 % of the window, kept as session state when the
+  drag ends), and it takes the keyboard focus when it opens. A click outside it closes it unless one
+  of its popups is open; Escape with nothing selected closes it (`ith.content.dismiss`), and so does
+  opening a level from it.
+- **Focus.** `drawDrawer()` also reports whether the panel or the drawer (child windows included)
+  had the keyboard focus this frame (`ContentBrowserModel::setKeyboardFocus`), which the keymap
+  reads to choose the Content context, and where each was drawn (`setScreenRects`). Between frames
+  a mouse press, which the platform backend hands to the model (`EditorUiDesc::content`), and
+  `ith.content.toggle_drawer` update the flag at once. A text field and an open popup keep every
+  key, so the shortcuts never fire while the search box is edited or a menu is open. When the panel
+  is in the layout the drawer closes: one browser on screen at a time.
+- **Ctrl + Space and input methods.** Some input methods take Ctrl + Space for themselves (fcitx5 and
+  IBus on Linux, the Chinese IMEs on Windows), so the editor never sees it. Rebind
+  `ith.content.toggle_drawer` in the user's `Keymap.json` then.
+- **Lifetime.** The panel removes its Enter prompt when it is destroyed; the panel registry has no
+  removal, so the session's panels must not be drawn after the panel is gone (the editor draws them
+  only inside its frame loop).
+
 ## Tests of the panels
 
 `tests/editor_ui/PanelTests.cpp` draws the Outliner and Details in fixed windows on the null
@@ -569,6 +629,20 @@ keymap's consumer:
 - a drag whose edit is refused while playing changes nothing and logs one warning;
 - one drag edits two selected entities whose values differed.
 
+`tests/editor_ui/ContentBrowserPanelTests.cpp` draws the Content Browser in a fixed window over a
+temporary project with an asset database, with the engine keymap's consumer under the UI: its
+registration and the bare panel without a project; clicks with Ctrl, Shift and both, empty space,
+and the keyboard focus following clicks; the arrow keys, Home and End in a four-column grid and in
+the list, with Ctrl + A and Escape through the Content context; typing in the search box keeping
+Ctrl + A from the shortcuts, and Ctrl + F; double-clicks into a folder and onto a level, and the
+unsaved-changes question from a double-click and from Enter; the drawer's size and focus on open,
+Escape, clicks inside and outside, staying open under its question, closing when a level opens
+from it, its height clamped and the layout unchanged; and 2 000 items drawn by their visible tiles
+and rows only, with idle frames rebuilding nothing; a click on a tile and Delete in one batch of
+events sparing the level; Escape closing the filter menu or the unsaved-changes question without
+running a shortcut; the list sorting by its Name and Type headers with a `##` in a name; and the
+drawer closing when the panel is opened.
+
 ## The editor application
 
 ```
@@ -580,7 +654,9 @@ It creates the platform window, the job system (whose main-thread wake ends the 
 RHI device and the window's swapchain, the configuration layers (engine `<exe>/Config` and its
 platform folder, project `<project>/Config` and its platform folder, and the user layer:
 `--user-dir`, else `Ironthorn/Editor` in the user's configuration folder), an `EditorSession`
-of the project, the keymap, the UI and the Viewport, Outliner, Details and Output Log panels (the
+of the project with its asset database (the glTF importer registered; `Content/` scanned with
+`ith.content.rescan` once the panels exist), the keymap, the UI and the Viewport, Outliner,
+Details, Content Browser and Output Log panels and the content drawer (the
 UI and viewport shaders compiled from Slang for the device at start-up), then runs the
 loop of ADR-0035 rule 22: events (waiting while idle), main-thread jobs, input routing, the UI
 frame, rendering. Where the window has no native handle (SDL's `offscreen` driver) it draws into an offscreen texture; where no GPU device
@@ -625,7 +701,9 @@ passed and 1 when it failed.
 - `editor_automation_null` and `editor_automation_gpu` (label `sample`, the second also `gpu`):
   `ironthorn_editor` on SDL's offscreen driver runs `tests/editor/open_edit_save_reopen.json` in a
   fresh project - create, rename, attach, undo, redo, save, new level, open, query - on the null
-  device and on the software GPU (WARP; lavapipe on Linux, else the null device), and exits 0.
+  device and on the software GPU (WARP; lavapipe on Linux, else the null device), and exits 0; the
+  `_layouts`, `_viewport` and `_content` runs then play `layouts.json`, `viewport.json` and
+  `content_browser.json` of `tests/editor_core/scripts` in the same project.
   Never on a desktop. Not in Release, where the editor isn't built.
 - `editor_ui_gpu` (label `gpu`, built with the shader compiler): a golden screenshot of the
   shell in the Default layout (menu bar; the Outliner above Details on the right and the Output Log
@@ -657,7 +735,9 @@ passed and 1 when it failed.
 
 ## Not here yet
 
-- The Content Browser and the main toolbar (later P2 steps); asset pickers in Details.
+- The Content Browser's file operations, import, drops and dialogs, and the Content Drawer button in
+  the status bar, which changes the shell's golden images (step 12, slice 2); and the main
+  toolbar (a later P2 step); asset pickers in Details.
 - In the viewport: the rotate and scale gizmos and the gizmo's centre handle, the selection
   outline, and marquee selection; the active viewport for Add Shape is always `ith.viewport.1`.
 - A shader cache for the UI and viewport shaders (with the shader cache of ADR-0011 rule 8).

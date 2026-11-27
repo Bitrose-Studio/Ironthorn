@@ -58,6 +58,14 @@ inline constexpr std::size_t kMaxSourceFileSize = std::size_t{4} << 30;
 // towards kMaxSourceFileSize together with the source.
 inline constexpr std::size_t kMaxImportDependencies = 256;
 
+// The name of the project folder that holds the assets; project-relative asset paths start with it.
+inline constexpr std::string_view kContentFolderName = "Content";
+
+// How deep scan() goes below the Content folder: a folder at a deeper level is reported as an
+// InvalidFile problem and neither entered nor listed in folders(), so everything that walks the
+// folders is bounded.
+inline constexpr std::size_t kMaxFolderDepth = 64;
+
 // One asset in the database.
 struct AssetRecord {
     AssetId id;
@@ -163,6 +171,14 @@ public:
     // Every asset, sorted by path. Valid until the database changes.
     [[nodiscard]] std::vector<const AssetRecord*> records() const;
 
+    // Every folder below the Content folder (not Content itself), as paths relative to it, sorted in
+    // byte order: empty folders included, links to folders left out (they are not followed), and no
+    // folder deeper than kMaxFolderDepth. Built by scan() and kept current by the operations: move()
+    // adds the folders it creates, and every asset added (import, assignNewId, move) adds the folders
+    // along its path. Folders made or deleted outside the database otherwise appear or go at the next
+    // scan(). Empty at first.
+    [[nodiscard]] const std::vector<std::string>& folders() const noexcept { return m_folders; }
+
     // Imports or reimports the source file at `path` (rule 9). A file without a sidecar gets a new
     // id, the importer for its extension and that importer's default settings; a file with one
     // is imported again with the importer and settings it names. When the sidecar's id belongs to
@@ -212,6 +228,8 @@ public:
 private:
     void insert(AssetRecord record);
     void erase(AssetId id);
+    // Adds the folders of the file `path` (relative to Content) that folders() doesn't list yet.
+    void addFolders(std::string_view path);
     [[nodiscard]] Expected<void> checkTarget(const AssetRecord& record, const std::string& newPath) const;
 
     std::string m_contentDirectory;
@@ -219,6 +237,7 @@ private:
     const ImporterRegistry& m_importers;
     std::unordered_map<AssetId, AssetRecord> m_records;
     std::map<std::string, AssetId, std::less<>> m_byPath;
+    std::vector<std::string> m_folders;
 };
 
 // True when `path` can name an asset on every platform: valid UTF-8, relative, '/'-separated,

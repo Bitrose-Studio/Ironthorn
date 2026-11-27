@@ -1,5 +1,6 @@
 #include "ith/editor_ui/ImGuiPlatform.h"
 
+#include "ith/editor_core/ContentBrowserModel.h"
 #include "ith/editor_core/ViewportInput.h"
 #include "ith/editor_ui/EditorUi.h"
 #include "ith/foundation/Assert.h"
@@ -190,6 +191,13 @@ void addModifiers(ImGuiIO& io, KeyModifiers modifiers) {
     io.AddKeyEvent(ImGuiMod_Super, hasModifiers(modifiers, KeyModifiers::Super));
 }
 
+// Whether any ImGui popup is open: a menu, a context menu or a modal. Safe between frames: asking
+// about any popup needs no current window.
+bool anyPopupOpen() {
+    // NOLINTNEXTLINE(bugprone-signed-bitwise): ImGui's flags are int enums
+    return ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+}
+
 std::optional<ImGuiMouseButton> mouseButtonFor(MouseButton button) {
     switch (button) {
         case MouseButton::Left:
@@ -239,8 +247,9 @@ std::optional<CursorShape> cursorShapeFor(ImGuiMouseCursor cursor) {
 
 } // namespace
 
-UiPlatformBackend::UiPlatformBackend(Input& input, WindowId window, UiHost* host, const ViewportConsumer* viewports)
-    : m_input(&input), m_window(window), m_host(host), m_viewports(viewports) {
+UiPlatformBackend::UiPlatformBackend(Input& input, WindowId window, UiHost* host, const ViewportConsumer* viewports,
+                                     ContentBrowserModel* content)
+    : m_input(&input), m_window(window), m_host(host), m_viewports(viewports), m_content(content) {
     ITH_ASSERT_MSG(ImGui::GetCurrentContext() != nullptr, "the platform backend needs the UI's ImGui context");
     ImGuiIO& io = ImGui::GetIO();
     io.BackendPlatformName = "ironthorn_platform";
@@ -304,7 +313,8 @@ InputReply UiPlatformBackend::onInputEvent(const Event& event) {
                     io.AddKeyEvent(key, down);
                 }
             }
-            return consumedIf(down && m_textInput);
+            // A text field and an open popup (a menu, a dialog) keep their keys from the shortcuts below.
+            return consumedIf(down && (m_textInput || anyPopupOpen()));
         }
         case EventType::TextInput: {
             const std::string text(event.text);
@@ -323,6 +333,11 @@ InputReply UiPlatformBackend::onInputEvent(const Event& event) {
         case EventType::MouseButtonUp: {
             const bool down = event.type == EventType::MouseButtonDown;
             m_lastMouse = Vec2{event.x, event.y};
+            // The Content Browser's focus follows the press at once, for the keys later in this batch.
+            // A press while a popup is open belongs to the popup (or closes it), not to a panel below.
+            if (down && m_content != nullptr && !anyPopupOpen()) {
+                m_content->pointerPressed(event.x / m_pixelsPerUnitX, event.y / m_pixelsPerUnitY);
+            }
             // Presses during a held viewport drag are the viewport's; every release still reaches
             // ImGui, which saw the drag's own press before the drag began.
             if (down && viewportDragHeld()) {
@@ -423,8 +438,7 @@ bool UiPlatformBackend::overViewportImage(const Event& event) const {
     }
     // Any open popup (a menu, a context menu, a modal) sits on top: ImGui keeps its clicks, so a
     // click outside it closes it.
-    // NOLINTNEXTLINE(bugprone-signed-bitwise): ImGui's flags are int enums
-    const bool popupOpen = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    const bool popupOpen = anyPopupOpen();
     return !popupOpen && m_viewports->viewportAt(event.x, event.y).has_value();
 }
 

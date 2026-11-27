@@ -58,6 +58,7 @@ namespace ith {
 
 class UiPlatformBackend;
 class UiRenderer;
+class ContentBrowserModel;
 class ViewportConsumer;
 
 // What the platform backend needs from the window it runs in: the clipboard, the IME's place and
@@ -151,6 +152,11 @@ struct EditorUiDesc {
     // event while it holds a drag; and the UI puts the window in relative mouse mode while it flies.
     // Null: no viewports. Must outlive the EditorUi.
     const ViewportConsumer* viewports = nullptr;
+    // The Content Browser's model (session.content()): a mouse press updates its keyboard-focus flag
+    // from the browser's rectangles of the last frame before the events after it are routed, so a
+    // click into the browser and a key in the same batch of events reach the Content context
+    // (ADR-0049 rule 4). Null: no Content Browser. Must outlive the EditorUi.
+    ContentBrowserModel* content = nullptr;
     ThemeTokens theme = defaultDarkTheme();
     float displayScale = 1.0f;
     // Off draws the text cursor without blinking, for reproducible images.

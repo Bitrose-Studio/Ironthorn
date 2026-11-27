@@ -36,10 +36,27 @@ inline constexpr Icon kPlus{"plus", 0xE13D};
 inline constexpr Icon kReset{"rotate-ccw", 0xE148};
 inline constexpr Icon kSearch{"search", 0xE151};
 inline constexpr Icon kClose{"x", 0xE1B2};
+inline constexpr Icon kFolder{"folder", 0xE0D7};
+inline constexpr Icon kFile{"file", 0xE0C0};
+inline constexpr Icon kFileQuestion{"file-question", 0xE322};
+inline constexpr Icon kFileText{"file-text", 0xE0CC};
+inline constexpr Icon kMap{"map", 0xE110};
+inline constexpr Icon kBox{"box", 0xE061};
+inline constexpr Icon kImage{"image", 0xE0F6};
+inline constexpr Icon kMusic{"music", 0xE122};
+inline constexpr Icon kWarning{"triangle-alert", 0xE193};
+inline constexpr Icon kRefresh{"refresh-cw", 0xE145};
+inline constexpr Icon kGrid{"layout-grid", 0xE0FF};
+inline constexpr Icon kList{"list", 0xE106};
+inline constexpr Icon kFilter{"filter", 0xE0DC};
+inline constexpr Icon kSort{"arrow-down-up", 0xE046};
+inline constexpr Icon kChevronRight{"chevron-right", 0xE06F};
 
 // Every icon above, for the codepoint check.
-inline constexpr std::array kAll{kFilePlus, kFolderOpen, kSave,    kSaveAll, kUndo,  kRedo,   kTrash, kCopy,
-                                 kPencil,   kSelectAll,  kCircleX, kPlus,    kReset, kSearch, kClose};
+inline constexpr std::array kAll{kFilePlus, kFolderOpen,   kSave,     kSaveAll, kUndo,  kRedo,        kTrash, kCopy,
+                                 kPencil,   kSelectAll,    kCircleX,  kPlus,    kReset, kSearch,      kClose, kFolder,
+                                 kFile,     kFileQuestion, kFileText, kMap,     kBox,   kImage,       kMusic, kWarning,
+                                 kRefresh,  kGrid,         kList,     kFilter,  kSort,  kChevronRight};
 
 } // namespace icons
 

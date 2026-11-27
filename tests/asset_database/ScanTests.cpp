@@ -150,6 +150,68 @@ TEST_SUITE("asset_database.scan") {
         if (!problems) {
             CHECK(problems.error().code == "asset.io");
         }
+        CHECK(database.folders().empty());
+    }
+
+    TEST_CASE("a scan lists every folder below Content, empty ones included, sorted") {
+        Fixture fixture;
+        CHECK(fixture.database->folders().empty()); // until the first scan
+        fixture.import("Meshes/Ship.objects");
+        fixture.project.write("Levels/Main.ithmap", nativeAsset(ith::AssetId::generate(), ith::kLevelFormat));
+        fixture.project.write("Docs/notes.txt", "not an asset");
+        REQUIRE(ith::fs::createDirectories(fixture.project.contentPath("Meshes/Rocks/Small")).hasValue());
+        REQUIRE(ith::fs::createDirectories(fixture.project.contentPath("Empty")).hasValue());
+        CHECK(fixture.scan().empty());
+        CHECK(fixture.database->folders() ==
+              std::vector<std::string>{"Docs", "Empty", "Levels", "Meshes", "Meshes/Rocks", "Meshes/Rocks/Small"});
+
+        // A folder deleted outside the database goes at the next scan.
+        REQUIRE(ith::fs::remove(fixture.project.contentPath("Empty")).hasValue());
+        CHECK(fixture.scan().empty());
+        CHECK(fixture.database->folders() ==
+              std::vector<std::string>{"Docs", "Levels", "Meshes", "Meshes/Rocks", "Meshes/Rocks/Small"});
+    }
+
+    TEST_CASE("an import and a new id add the folders of their file") {
+        Fixture fixture;
+        fixture.import("New/Deep/Ship.objects"); // no scan yet
+        CHECK(fixture.database->folders() == std::vector<std::string>{"New", "New/Deep"});
+        // A folder made outside the database after the scan comes with the file given a new id there.
+        CHECK(fixture.scan().empty());
+        fixture.project.write("Later/Steel.ithasset", nativeAsset(ith::AssetId::generate()));
+        REQUIRE(fixture.database->assignNewId("Later/Steel.ithasset").hasValue());
+        CHECK(fixture.database->folders() == std::vector<std::string>{"Later", "New", "New/Deep"});
+    }
+
+    TEST_CASE("folders deeper than kMaxFolderDepth are reported, not entered") {
+        Fixture fixture;
+        std::string path;
+        for (std::size_t level = 0; level < ith::kMaxFolderDepth + 1; ++level) {
+            path += (path.empty() ? "d" : "/d");
+        }
+        // A file at the deepest allowed level is found; the folder below it is a problem.
+        std::string allowed = path.substr(0, path.size() - 2);
+        fixture.project.write(allowed + "/Steel.ithasset", nativeAsset(ith::AssetId::generate()));
+        REQUIRE(ith::fs::createDirectories(fixture.project.contentPath(path + "/e")).hasValue());
+        const std::vector<ith::AssetProblem> problems = fixture.scan();
+        REQUIRE(problems.size() == 1);
+        CHECK(problems[0].kind == AssetProblemKind::InvalidFile);
+        CHECK(problems[0].path == path);
+        CHECK(fixture.database->folders().size() == ith::kMaxFolderDepth);
+        CHECK(fixture.database->findByPath(allowed + "/Steel.ithasset") != nullptr);
+    }
+
+    TEST_CASE("a move adds the folders it creates to the list") {
+        Fixture fixture;
+        const ith::AssetId id = fixture.import("Ship.objects");
+        CHECK(fixture.scan().empty());
+        CHECK(fixture.database->folders().empty());
+        REQUIRE(fixture.database->move(id, "Vehicles/Sea/Ship.objects").hasValue());
+        CHECK(fixture.database->folders() == std::vector<std::string>{"Vehicles", "Vehicles/Sea"});
+        REQUIRE(fixture.database->move(id, "Vehicles/Air/Ship.objects").hasValue());
+        // The emptied folder stays: it is still on disk.
+        CHECK(fixture.database->folders() == std::vector<std::string>{"Vehicles", "Vehicles/Air", "Vehicles/Sea"});
+        CHECK(fixture.rescanned().folders() == fixture.database->folders());
     }
 
     TEST_CASE("a file copied with its sidecar gets a new id when the database knows the original") {
@@ -382,6 +444,7 @@ TEST_SUITE("asset_database.links") {
         const std::vector<const ith::AssetRecord*> records = fixture.database->records();
         REQUIRE(records.size() == 1);
         CHECK(records[0]->path == "Real/Rock.objects");
+        CHECK(fixture.database->folders() == std::vector<std::string>{"Real"});
     }
 }
 

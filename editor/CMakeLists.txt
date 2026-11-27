@@ -22,6 +22,8 @@ ith_add_application(ironthorn_editor
         config
         ecs
         shapes
+        asset_database
+        asset_importers
         editor_core
         editor_ui)
 ith_copy_shader_compiler_runtime(ironthorn_editor)
@@ -29,8 +31,9 @@ add_dependencies(ironthorn_editor ith_engine_config ith_editor_fonts)
 
 # The editor started by CTest on SDL's offscreen driver, never on a desktop (ADR-0029 rule 18): it
 # draws the shell, runs tests/editor/open_edit_save_reopen.json in a fresh project and exits 0, then
-# runs the layout script tests/editor_core/scripts/layouts.json and the viewport script
-# tests/editor_core/scripts/viewport.json in the same project.
+# runs the layout script tests/editor_core/scripts/layouts.json, the viewport script
+# tests/editor_core/scripts/viewport.json and the Content Browser script
+# tests/editor_core/scripts/content_browser.json in the same project.
 # Once on the null device, and once on the software GPU (WARP, lavapipe; label gpu), which
 # compiles and draws the UI shader for real; without a Vulkan driver the latter falls back to the
 # null device. Not in Release: editor applications aren't built there.
@@ -70,8 +73,13 @@ if(IRONTHORN_BUILD_TESTS)
             COMMAND ironthorn_editor --project "${directory}/Project" --user-dir "${directory}/User"
                 --automation "${PROJECT_SOURCE_DIR}/tests/editor_core/scripts/viewport.json" ${arguments}
             CONFIGURATIONS Debug RelWithDebInfo)
+        # The Content Browser commands and queries (ADR-0049 rule 27) over the editor's asset database.
+        add_test(NAME editor_automation_${backend}_content
+            COMMAND ironthorn_editor --project "${directory}/Project" --user-dir "${directory}/User"
+                --automation "${PROJECT_SOURCE_DIR}/tests/editor_core/scripts/content_browser.json" ${arguments}
+            CONFIGURATIONS Debug RelWithDebInfo)
         set_tests_properties(editor_automation_${backend} editor_automation_${backend}_layouts
-            editor_automation_${backend}_viewport PROPERTIES
+            editor_automation_${backend}_viewport editor_automation_${backend}_content PROPERTIES
             LABELS "${labels}"
             FIXTURES_REQUIRED editor_project_${backend}
             ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
@@ -79,5 +87,7 @@ if(IRONTHORN_BUILD_TESTS)
         set_tests_properties(editor_automation_${backend}_layouts PROPERTIES DEPENDS editor_automation_${backend})
         set_tests_properties(editor_automation_${backend}_viewport PROPERTIES
             DEPENDS editor_automation_${backend}_layouts)
+        set_tests_properties(editor_automation_${backend}_content PROPERTIES
+            DEPENDS editor_automation_${backend}_viewport)
     endforeach()
 endif()

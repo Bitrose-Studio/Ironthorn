@@ -75,7 +75,7 @@ Expected<Value> newLevel(EditorSession& session, const Value& args) {
     return Value();
 }
 
-// The path of a level asset: "Content/" and its path in the asset database.
+// The path of a level asset: the Content folder and its path in the asset database.
 Expected<std::string> levelPathOf(const EditorSession& session, const Uuid& id) {
     const AssetDatabase* assets = session.options().assets;
     if (assets == nullptr) {
@@ -88,7 +88,7 @@ Expected<std::string> levelPathOf(const EditorSession& session, const Uuid& id) 
     if (record->type != kLevelFormat) {
         return invalidArgs("ith.file.open_level", record->path + " is not a level");
     }
-    return "Content/" + record->path;
+    return std::string(kContentFolderName) + "/" + record->path;
 }
 
 Expected<Value> openLevel(EditorSession& session, const Value& args) {

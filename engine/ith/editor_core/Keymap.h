@@ -21,10 +21,15 @@
 // - "editor.keymap.conflict": a chord bound to two commands of one context. The command bound in
 //   the higher layer wins; within one layer, the lower id.
 //
-// Two contexts: the Play In Editor keys of ADR-0008 rule 4 (kPlayInEditorCommands: stop, free the
-// mouse, possess or eject), which the Play In Editor consumer handles while a game runs (ADR-0029
-// rule 7), and every other command, which the keymap consumer handles. So Escape can stop play
-// and, in the editor, clear the selection.
+// Three contexts, each command in one, chosen by its id (ADR-0049 rule 3, amending ADR-0037 rule 4):
+// - Play In Editor: the keys of ADR-0008 rule 4 (kPlayInEditorCommands: stop, free the mouse,
+//   possess or eject), which the Play In Editor consumer handles while a game runs (ADR-0029 rule 7);
+// - Content: every "ith.content." command except ith.content.toggle_drawer; the keymap consumer
+//   looks a chord up here first while the Content Browser has the keyboard focus
+//   (ContentBrowserModel::keyboardFocus), and never otherwise;
+// - Editor: every other command, which the keymap consumer handles.
+// Conflicts are checked per context. So Escape can stop play, clear the content selection with the
+// focus in the Content Browser, and clear the entity selection elsewhere.
 
 #include "ith/foundation/Expected.h"
 #include "ith/input/Input.h"
@@ -57,7 +62,11 @@ inline constexpr std::array<std::string_view, 3> kPlayInEditorCommands = {"ith.p
 enum class KeymapContext : std::uint8_t {
     Editor,
     PlayInEditor,
+    Content,
 };
+
+inline constexpr std::size_t kKeymapContextCount = 3;
+static_assert(static_cast<std::size_t>(KeymapContext::Content) + 1 == kKeymapContextCount);
 
 // The context of the command `id`.
 [[nodiscard]] KeymapContext contextOf(std::string_view id) noexcept;
@@ -70,6 +79,42 @@ struct Chord {
     friend bool operator==(const Chord&, const Chord&) = default;
     friend auto operator<=>(const Chord&, const Chord&) = default;
 };
+
+// The command in the Editor context although its id starts with "ith.content.": Ctrl + Space works
+// with the focus anywhere (ADR-0049 rule 3).
+inline constexpr std::string_view kContentDrawerCommand = "ith.content.toggle_drawer";
+
+// The widget keys of the Content Browser's asset view (spec 3.17): the arrows, Home and End, each
+// alone and with Shift, and Ctrl + F. The browser handles them itself; while it has the keyboard
+// focus the keymap consumer consumes them without running anything, so End doesn't also run its
+// Editor binding (Snap to Floor) and an arrow never reaches the level. ContentBrowserPanel::keyboardInput
+// (editor_ui) handles these keys; keep the two in step.
+inline constexpr std::array<Chord, 13> kContentWidgetChords = {{
+    {.key = Key::Up},
+    {.key = Key::Down},
+    {.key = Key::Left},
+    {.key = Key::Right},
+    {.key = Key::Home},
+    {.key = Key::End},
+    {.key = Key::Up, .modifiers = KeyModifiers::Shift},
+    {.key = Key::Down, .modifiers = KeyModifiers::Shift},
+    {.key = Key::Left, .modifiers = KeyModifiers::Shift},
+    {.key = Key::Right, .modifiers = KeyModifiers::Shift},
+    {.key = Key::Home, .modifiers = KeyModifiers::Shift},
+    {.key = Key::End, .modifiers = KeyModifiers::Shift},
+    {.key = Key::F, .modifiers = KeyModifiers::Control},
+}};
+
+// F2, Delete and Ctrl + D while the Content Browser has the keyboard focus: the keys of the content
+// commands that come with its file operations (rename, delete, duplicate). Until those are registered,
+// the keymap consumer consumes them without running anything, whatever the keymap binds, so a layer
+// that unbinds ith.content.delete can't let Delete reach ith.edit.delete. The file operations replace
+// this list with the real commands.
+inline constexpr std::array<Chord, 3> kContentReservedChords = {{
+    {.key = Key::F2},
+    {.key = Key::Delete},
+    {.key = Key::D, .modifiers = KeyModifiers::Control},
+}};
 
 // Parses "Ctrl+Shift+Keyboard.S". Fails with "editor.keymap.invalid_chord": an unknown or repeated
 // modifier, or a control that is not a key.
@@ -103,13 +148,19 @@ public:
     }
 
 private:
-    std::array<std::map<Chord, std::string>, 2> m_bindings;
+    std::array<std::map<Chord, std::string>, kKeymapContextCount> m_bindings;
     std::map<std::string, std::vector<Chord>, std::less<>> m_chords;
 };
 
 // The keymap consumer of editor_core (ADR-0029 rule 7): turns a key press with its modifiers into
 // the bound command, invoked as a user gesture (CommandRegistry::invoke, so a prompt can ask for its
-// input). Letter keys follow the user's layout (Event::layoutKey), so Ctrl + Z is the
+// input). While the Content Browser has the keyboard focus (ContentBrowserModel::keyboardFocus: the
+// UI's last frame, a press inside the browser since, or the drawer just toggled), the asset view's
+// widget keys (kContentWidgetChords) and the reserved keys of the file operations
+// (kContentReservedChords) are consumed without running anything, and other chords are
+// looked up in the Content context first, then in the Editor context; otherwise in the Editor
+// context only.
+// Letter keys follow the user's layout (Event::layoutKey), so Ctrl + Z is the
 // key that prints Z; other keys are physical keys. A press that matches a binding is consumed, also
 // when the command refuses to run (its error is kept in lastResult()). While an interaction holds a
 // transaction open, Escape cancels it (Transactions::cancelOpen) and other chords are left to the

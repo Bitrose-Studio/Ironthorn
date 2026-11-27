@@ -1,0 +1,832 @@
+#include "ith/editor_core/ContentBrowserModel.h"
+
+#include "ith/asset_database/AssetHeader.h"
+#include "ith/file_system/FileSystem.h"
+#include "ith/foundation/Log.h"
+#include "ith/foundation/StringUtils.h"
+#include "ith/level/LevelFormat.h"
+#include "ith/serialization/TextArchive.h"
+#include "ith/serialization/Value.h"
+
+#include <algorithm>
+#include <array>
+#include <utility>
+
+namespace ith {
+
+namespace {
+
+ITH_LOG_CATEGORY(ContentBrowser);
+
+using serialization::Value;
+
+constexpr std::array<std::string_view, kContentCategoryCount> kCategoryNames = {"Level", "Model", "Texture",
+                                                                                "Audio", "Data",  "Other"};
+constexpr std::array<std::string_view, kContentCategoryCount> kCategoryIds = {"level", "model", "texture",
+                                                                              "audio", "data",  "other"};
+
+// The type category table (spec 3.2). Texture and Audio get their rows with their importers.
+struct TypeRow {
+    std::string_view type;
+    ContentType info;
+};
+
+constexpr std::array kTypeTable = {
+    TypeRow{kLevelFormat, {.displayName = "Level", .category = ContentCategory::Level}},
+    TypeRow{"gltf", {.displayName = "glTF Model", .category = ContentCategory::Model}},
+    TypeRow{"ith.input_action", {.displayName = "Input Action", .category = ContentCategory::Data}},
+    TypeRow{"ith.input_context", {.displayName = "Input Context", .category = ContentCategory::Data}},
+};
+
+bool isDigit(char c) noexcept {
+    return c >= '0' && c <= '9';
+}
+
+char lowerAscii(char c) noexcept {
+    return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
+// The end of the run of digits that starts at `at`.
+std::size_t digitsEnd(std::string_view text, std::size_t at) noexcept {
+    while (at < text.size() && isDigit(text[at])) {
+        ++at;
+    }
+    return at;
+}
+
+// Compares the digit runs a[i, endA) and b[j, endB) by value, then the shorter run first.
+int compareDigitRuns(std::string_view a, std::size_t i, std::size_t endA, std::string_view b, std::size_t j,
+                     std::size_t endB) noexcept {
+    // The value: leading zeros dropped (one digit kept), then the longer number is larger.
+    std::size_t startA = i;
+    std::size_t startB = j;
+    while (startA + 1 < endA && a[startA] == '0') {
+        ++startA;
+    }
+    while (startB + 1 < endB && b[startB] == '0') {
+        ++startB;
+    }
+    const std::size_t lengthA = endA - startA;
+    const std::size_t lengthB = endB - startB;
+    if (lengthA != lengthB) {
+        return lengthA < lengthB ? -1 : 1;
+    }
+    if (const int value = a.substr(startA, lengthA).compare(b.substr(startB, lengthB)); value != 0) {
+        return value < 0 ? -1 : 1;
+    }
+    if (endA - i != endB - j) {
+        return endA - i < endB - j ? -1 : 1;
+    }
+    return 0;
+}
+
+// The folder that holds `path`: "" at the top.
+std::string parentOf(std::string_view path) {
+    const std::size_t slash = path.rfind('/');
+    return slash == std::string_view::npos ? std::string() : std::string(path.substr(0, slash));
+}
+
+std::string_view nameOf(std::string_view path) {
+    const std::size_t slash = path.rfind('/');
+    return slash == std::string_view::npos ? path : path.substr(slash + 1);
+}
+
+// Whether `folder` is `ancestor` or below it.
+bool isInFolder(std::string_view folder, std::string_view ancestor) {
+    if (ancestor.empty() || folder == ancestor) {
+        return true;
+    }
+    return folder.size() > ancestor.size() && folder.starts_with(ancestor) && folder[ancestor.size()] == '/';
+}
+
+// A native asset's label: its file name without the native extension.
+std::string assetLabel(const AssetRecord& record) {
+    std::string_view name = nameOf(record.path);
+    if (!record.imported) {
+        for (const std::string_view extension : {kNativeAssetExtension, kLevelExtension}) {
+            if (name.size() > extension.size() && endsWithIgnoreCaseAscii(name, extension)) {
+                name.remove_suffix(extension.size());
+                break;
+            }
+        }
+    }
+    return std::string(name);
+}
+
+std::string_view viewModeId(ContentViewMode mode) {
+    return mode == ContentViewMode::List ? "list" : "grid";
+}
+
+std::string_view sortKeyId(ContentSortKey key) {
+    return key == ContentSortKey::Type ? "type" : "name";
+}
+
+// The member `key` of the object `data`: null when it is missing, an error when it has another kind.
+Expected<const Value*> member(const Value& data, std::string_view key, Value::Kind kind) {
+    const Value* value = data.find(key);
+    if (value != nullptr && value->kind() != kind) {
+        return makeError("editor.content_browser.invalid_state", "\"" + std::string(key) + "\" has the wrong type");
+    }
+    return value;
+}
+
+// parseContentBrowserState: any member of the wrong type makes the whole file unreadable.
+Expected<ContentBrowserState> parseStateText(std::string_view text, std::string_view source) {
+    Expected<Value, serialization::Error> data = serialization::readDocument(
+        text, kContentBrowserStateFormat, {.source = source, .maxSize = kMaxContentBrowserStateSize});
+    if (!data) {
+        return makeError(data.error().code, data.error().toString());
+    }
+    if (data->kind() != Value::Kind::Object) {
+        return makeError("editor.content_browser.invalid_state", "the data is not an object");
+    }
+    const Expected<const Value*> folder = member(*data, "folder", Value::Kind::String);
+    const Expected<const Value*> mode = member(*data, "view", Value::Kind::String);
+    const Expected<const Value*> sortBy = member(*data, "sortBy", Value::Kind::String);
+    const Expected<const Value*> descending = member(*data, "descending", Value::Kind::Bool);
+    const Expected<const Value*> expanded = member(*data, "expanded", Value::Kind::Array);
+    const Expected<const Value*> treeWidth = member(*data, "treeWidth", Value::Kind::Number);
+    const Expected<const Value*> drawerHeight = member(*data, "drawerHeight", Value::Kind::Number);
+    for (const Expected<const Value*>* read :
+         {&folder, &mode, &sortBy, &descending, &expanded, &treeWidth, &drawerHeight}) {
+        if (!*read) {
+            return makeError(read->error().code, std::string(source) + ": " + read->error().message);
+        }
+    }
+    ContentBrowserState state;
+    state.folder = *folder != nullptr ? (*folder)->asString() : std::string();
+    state.view.mode = *mode != nullptr && (*mode)->asString() == "list" ? ContentViewMode::List : ContentViewMode::Grid;
+    state.view.sortBy =
+        *sortBy != nullptr && (*sortBy)->asString() == "type" ? ContentSortKey::Type : ContentSortKey::Name;
+    state.view.descending = *descending != nullptr && (*descending)->asBool();
+    if (*expanded != nullptr) {
+        for (const Value& element : (*expanded)->elements()) {
+            if (element.kind() == Value::Kind::String) {
+                state.expanded.push_back(element.asString());
+            }
+        }
+    }
+    if (*treeWidth != nullptr) {
+        state.treeWidth = std::clamp((*treeWidth)->toNumber<float>().value_or(kDefaultContentTreeWidth), 0.05f, 0.95f);
+    }
+    if (*drawerHeight != nullptr) {
+        state.drawerHeight = std::max((*drawerHeight)->toNumber<float>().value_or(0.0f), 0.0f);
+    }
+    return state;
+}
+
+// The badge text of a scan problem at its own path.
+std::string badgeMessage(const AssetProblem& problem) {
+    switch (problem.kind) {
+        case AssetProblemKind::MissingSidecar:
+            return "Not imported";
+        case AssetProblemKind::OrphanSidecar:
+            return "Source file missing";
+        case AssetProblemKind::DuplicateId:
+            return "Duplicate id of " + problem.otherPath;
+        default:
+            return problem.message;
+    }
+}
+
+} // namespace
+
+std::string_view displayName(ContentCategory category) noexcept {
+    const auto index = static_cast<std::size_t>(category);
+    return index < kCategoryNames.size() ? kCategoryNames[index] : kCategoryNames.back();
+}
+
+std::string_view categoryId(ContentCategory category) noexcept {
+    const auto index = static_cast<std::size_t>(category);
+    return index < kCategoryIds.size() ? kCategoryIds[index] : kCategoryIds.back();
+}
+
+std::optional<ContentCategory> parseCategory(std::string_view id) noexcept {
+    for (std::size_t i = 0; i < kCategoryIds.size(); ++i) {
+        if (kCategoryIds[i] == id) {
+            return static_cast<ContentCategory>(i);
+        }
+    }
+    return std::nullopt;
+}
+
+Expected<ContentBrowserState> parseContentBrowserState(std::string_view text, std::string_view source) {
+    return parseStateText(text, source);
+}
+
+ContentType contentTypeOf(std::string_view type) noexcept {
+    for (const TypeRow& row : kTypeTable) {
+        if (row.type == type) {
+            return row.info;
+        }
+    }
+    return ContentType{.displayName = type, .category = ContentCategory::Other};
+}
+
+int naturalCompare(std::string_view a, std::string_view b) noexcept {
+    std::size_t i = 0;
+    std::size_t j = 0;
+    while (i < a.size() && j < b.size()) {
+        if (isDigit(a[i]) && isDigit(b[j])) {
+            const std::size_t endA = digitsEnd(a, i);
+            const std::size_t endB = digitsEnd(b, j);
+            if (const int order = compareDigitRuns(a, i, endA, b, j, endB); order != 0) {
+                return order;
+            }
+            i = endA;
+            j = endB;
+            continue;
+        }
+        const auto ca = static_cast<unsigned char>(lowerAscii(a[i]));
+        const auto cb = static_cast<unsigned char>(lowerAscii(b[j]));
+        if (ca != cb) {
+            return ca < cb ? -1 : 1;
+        }
+        ++i;
+        ++j;
+    }
+    if (i < a.size()) {
+        return 1;
+    }
+    return j < b.size() ? -1 : 0;
+}
+
+ContentKey keyOf(const ContentItem& item) {
+    if (item.kind == ContentItemKind::Asset) {
+        return ContentKey{.id = item.id, .path = {}};
+    }
+    return ContentKey{.id = AssetId(), .path = item.path};
+}
+
+ContentBrowserModel::ContentBrowserModel(AssetDatabase* assets, std::string stateFile)
+    : m_assets(assets), m_stateFile(std::move(stateFile)) {
+    load();
+    rebuildTree();
+}
+
+Expected<void> ContentBrowserModel::rescan() {
+    if (m_assets == nullptr) {
+        return makeError("editor.document.no_asset_database", "no project is open");
+    }
+    Expected<std::vector<AssetProblem>> problems = m_assets->scan();
+    if (!problems) {
+        return makeUnexpected(std::move(problems).error());
+    }
+    m_problems = std::move(*problems);
+    for (const AssetProblem& problem : m_problems) {
+        if (problem.kind == AssetProblemKind::DuplicateId && m_assets->findByPath(problem.path) != nullptr) {
+            ITH_LOG_INFO(ContentBrowser, "{}: {}", problem.path, problem.message);
+        }
+    }
+    refresh();
+    return {};
+}
+
+void ContentBrowserModel::refresh() {
+    m_items.clear();
+    m_byPath.clear();
+    m_byId.clear();
+    m_children.clear();
+    m_folders = {std::string()};
+    const auto add = [this](ContentItem item) {
+        m_byPath.emplace(item.path, m_items.size());
+        if (item.kind == ContentItemKind::Asset) {
+            m_byId.emplace(item.id, m_items.size());
+        }
+        m_items.push_back(std::move(item));
+    };
+    if (m_assets != nullptr) {
+        for (const std::string& folder : m_assets->folders()) {
+            m_folders.insert(folder);
+            add(ContentItem{.kind = ContentItemKind::Folder,
+                            .path = folder,
+                            .folder = parentOf(folder),
+                            .label = std::string(nameOf(folder))});
+        }
+        for (const AssetRecord* record : m_assets->records()) {
+            const ContentType type = contentTypeOf(record->type);
+            add(ContentItem{.kind = ContentItemKind::Asset,
+                            .path = record->path,
+                            .folder = parentOf(record->path),
+                            .id = record->id,
+                            .label = assetLabel(*record),
+                            .type = record->type,
+                            .category = type.category});
+        }
+    }
+    // Problems become badges on the items they are about, or entries of their own (spec 3.2).
+    const auto itemAt = [this](const std::string& path) -> ContentItem* {
+        const auto found = m_byPath.find(path);
+        return found != m_byPath.end() ? &m_items[found->second] : nullptr;
+    };
+    for (const AssetProblem& problem : m_problems) {
+        const bool resolvedDuplicate = problem.kind == AssetProblemKind::DuplicateId && m_assets != nullptr &&
+                                       m_assets->findByPath(problem.path) != nullptr;
+        if (resolvedDuplicate || problem.path.empty()) {
+            continue; // logged by rescan(); a problem of the root itself is in problems() only
+        }
+        if (problem.kind == AssetProblemKind::CaseConflict) {
+            for (const auto& [path, other] :
+                 {std::pair{&problem.path, &problem.otherPath}, std::pair{&problem.otherPath, &problem.path}}) {
+                if (ContentItem* item = itemAt(*path); item != nullptr) {
+                    item->problems.push_back(ContentBadge{
+                        .kind = problem.kind, .message = "Differs only in case from " + *other, .otherPath = *other});
+                }
+            }
+            continue;
+        }
+        const ContentBadge badge{
+            .kind = problem.kind, .message = badgeMessage(problem), .otherPath = problem.otherPath};
+        if (ContentItem* item = itemAt(problem.path); item != nullptr) {
+            item->problems.push_back(badge);
+        } else if (problem.kind != AssetProblemKind::FormatMismatch) {
+            add(ContentItem{.kind = ContentItemKind::Problem,
+                            .path = problem.path,
+                            .folder = parentOf(problem.path),
+                            .label = std::string(nameOf(problem.path)),
+                            .problems = {badge}});
+        }
+    }
+    m_lowerLabels.clear();
+    m_lowerLabels.reserve(m_items.size());
+    for (std::size_t index = 0; index < m_items.size(); ++index) {
+        m_lowerLabels.push_back(toLowerAscii(m_items[index].label));
+        m_children[m_items[index].folder].push_back(index);
+    }
+    // Every item's place in name order, once: sorting what is shown then compares two numbers.
+    std::vector<std::uint32_t> order(m_items.size());
+    for (std::size_t index = 0; index < order.size(); ++index) {
+        order[index] = static_cast<std::uint32_t>(index);
+    }
+    std::ranges::sort(order, [this](std::uint32_t a, std::uint32_t b) {
+        const ContentItem& first = m_items[a];
+        const ContentItem& second = m_items[b];
+        if (const int natural = naturalCompare(first.label, second.label); natural != 0) {
+            return natural < 0;
+        }
+        if (first.label != second.label) {
+            return first.label < second.label;
+        }
+        return first.path < second.path;
+    });
+    m_nameRanks.assign(m_items.size(), 0);
+    for (std::size_t rank = 0; rank < order.size(); ++rank) {
+        m_nameRanks[order[rank]] = static_cast<std::uint32_t>(rank);
+    }
+
+    while (!folderExists(m_folder)) {
+        m_folder = parentOf(m_folder);
+    }
+    std::erase_if(m_expanded, [this](const std::string& folder) { return !folderExists(folder); });
+    rebuildTree();
+    rebuildView();
+    pruneSelection();
+    writeState();
+}
+
+const ContentItem* ContentBrowserModel::find(const ContentKey& key) const {
+    if (!key.id.isNil()) {
+        const auto found = m_byId.find(key.id);
+        return found != m_byId.end() ? &m_items[found->second] : nullptr;
+    }
+    const ContentItem* item = findByPath(key.path);
+    return item != nullptr && item->kind != ContentItemKind::Asset ? item : nullptr;
+}
+
+const ContentItem* ContentBrowserModel::findByPath(std::string_view path) const {
+    const auto found = m_byPath.find(std::string(path));
+    return found != m_byPath.end() ? &m_items[found->second] : nullptr;
+}
+
+bool ContentBrowserModel::folderExists(std::string_view path) const {
+    return m_folders.contains(std::string(path));
+}
+
+Expected<void> ContentBrowserModel::navigate(std::string_view folder) {
+    if (!folderExists(folder)) {
+        return makeError("editor.content.not_found", "'" + std::string(folder) + "' is not a folder in Content");
+    }
+    m_folder = std::string(folder);
+    for (std::string ancestor = parentOf(folder); !ancestor.empty(); ancestor = parentOf(ancestor)) {
+        m_expanded.insert(ancestor);
+    }
+    m_search.clear();
+    clearSelection();
+    rebuildTree();
+    rebuildView();
+    writeState();
+    return {};
+}
+
+bool ContentBrowserModel::navigateUp() {
+    if (m_folder.empty()) {
+        return false;
+    }
+    return navigate(parentOf(m_folder)).hasValue();
+}
+
+bool ContentBrowserModel::isExpanded(std::string_view folder) const {
+    return folder.empty() || m_expanded.contains(std::string(folder));
+}
+
+void ContentBrowserModel::setExpanded(std::string_view folder, bool expanded) {
+    if (folder.empty() || !folderExists(folder) || isExpanded(folder) == expanded) {
+        return;
+    }
+    if (expanded) {
+        m_expanded.insert(std::string(folder));
+    } else {
+        m_expanded.erase(std::string(folder));
+    }
+    rebuildTree();
+    writeState();
+    changed();
+}
+
+void ContentBrowserModel::setSearch(std::string text) {
+    if (text.size() > kMaxContentSearchSize) {
+        // Cut before the UTF-8 character that doesn't fit whole: back over continuation bytes.
+        std::size_t size = kMaxContentSearchSize;
+        while (size > 0 && (static_cast<unsigned char>(text[size]) & 0xC0U) == 0x80U) {
+            --size;
+        }
+        text.resize(size);
+    }
+    if (text == m_search) {
+        return;
+    }
+    m_search = std::move(text);
+    rebuildView();
+    pruneSelection();
+}
+
+void ContentBrowserModel::pointerPressed(float x, float y) noexcept {
+    m_keyboardFocus =
+        std::ranges::any_of(m_screenRects, [x, y](const ContentScreenRect& rect) { return rect.contains(x, y); });
+}
+
+void ContentBrowserModel::setFilter(ContentFilter filter) {
+    if (filter == m_filter) {
+        return;
+    }
+    m_filter = filter;
+    rebuildView();
+    pruneSelection();
+}
+
+bool ContentBrowserModel::searching() const {
+    return !m_filter.empty() || std::ranges::any_of(m_search, [](char c) { return c != ' '; });
+}
+
+std::optional<std::size_t> ContentBrowserModel::shownIndexOf(const ContentKey& key) const {
+    // A scan: commands and key presses ask for single items.
+    for (std::size_t index = 0; index < m_shown.size(); ++index) {
+        if (keyOf(*m_shown[index]) == key) {
+            return index;
+        }
+    }
+    return std::nullopt;
+}
+
+void ContentBrowserModel::setView(const ContentViewSettings& view) {
+    if (view == m_view) {
+        return;
+    }
+    m_view = view;
+    sortShown();
+    writeState();
+    changed();
+}
+
+Expected<void> ContentBrowserModel::select(std::span<const ContentKey> items, ContentSelect how) {
+    std::unordered_map<ContentKey, std::size_t, ContentKeyHash> shownIndex;
+    shownIndex.reserve(m_shown.size());
+    for (std::size_t index = 0; index < m_shown.size(); ++index) {
+        shownIndex.emplace(keyOf(*m_shown[index]), index);
+    }
+    for (const ContentKey& key : items) {
+        if (!shownIndex.contains(key)) {
+            return makeError("editor.content.not_found",
+                             "'" + (key.id.isNil() ? key.path : key.id.toString()) + "' is not shown");
+        }
+    }
+    if (how == ContentSelect::Range || how == ContentSelect::AddRange) {
+        const auto anchor = m_anchor.has_value() ? shownIndex.find(*m_anchor) : shownIndex.end();
+        if (anchor != shownIndex.end() && !items.empty()) {
+            if (how == ContentSelect::Range) {
+                m_selection.clear();
+                m_selected.clear();
+            }
+            selectRange(anchor->second, shownIndex.at(items.back()));
+            m_focus = items.back();
+            changed();
+            return {};
+        }
+        how = ContentSelect::Replace; // without an anchor, Shift acts like a plain click
+    }
+    switch (how) {
+        case ContentSelect::Replace:
+            m_selection.clear();
+            m_selected.clear();
+            [[fallthrough]];
+        case ContentSelect::Add:
+            for (const ContentKey& key : items) {
+                appendSelected(key);
+            }
+            break;
+        case ContentSelect::Toggle:
+            for (const ContentKey& key : items) {
+                if (isSelected(key)) {
+                    deselect(key);
+                } else {
+                    appendSelected(key);
+                }
+            }
+            break;
+        case ContentSelect::Remove:
+            for (const ContentKey& key : items) {
+                deselect(key);
+            }
+            break;
+        case ContentSelect::Range:
+        case ContentSelect::AddRange:
+            break; // handled above
+    }
+    if (how != ContentSelect::Remove) {
+        m_anchor = items.empty() ? std::nullopt : std::optional<ContentKey>(items.back());
+        m_focus = m_anchor;
+    }
+    changed();
+    return {};
+}
+
+void ContentBrowserModel::deselect(const ContentKey& key) {
+    if (m_selected.erase(key) > 0) {
+        std::erase(m_selection, key);
+    }
+}
+
+void ContentBrowserModel::appendSelected(const ContentKey& key) {
+    deselect(key);
+    m_selection.push_back(key);
+    m_selected.insert(key);
+}
+
+void ContentBrowserModel::selectRange(std::size_t from, std::size_t to) {
+    // From the anchor towards the clicked item; items already selected keep their place, and the
+    // clicked item comes last, so it is primary.
+    for (std::size_t step = 0;; ++step) {
+        const std::size_t index = from <= to ? from + step : from - step;
+        if (const ContentKey key = keyOf(*m_shown[index]); !isSelected(key)) {
+            appendSelected(key);
+        }
+        if (index == to) {
+            break;
+        }
+    }
+    appendSelected(keyOf(*m_shown[to]));
+}
+
+void ContentBrowserModel::selectAll() {
+    m_selection.clear();
+    m_selected.clear();
+    for (const ContentItem* item : m_shown) {
+        m_selection.push_back(keyOf(*item));
+        m_selected.insert(m_selection.back());
+    }
+    changed();
+}
+
+void ContentBrowserModel::clearSelection() {
+    m_selection.clear();
+    m_selected.clear();
+    m_anchor.reset();
+    m_focus.reset();
+    changed();
+}
+
+void ContentBrowserModel::setDrawerOpen(bool open) {
+    if (open != m_drawerOpen) {
+        m_drawerOpen = open;
+        changed();
+    }
+}
+
+void ContentBrowserModel::setTreeWidth(float fraction) {
+    const float clamped = std::clamp(fraction, 0.05f, 0.95f);
+    if (clamped != m_treeWidth) {
+        m_treeWidth = clamped;
+        writeState();
+        changed();
+    }
+}
+
+void ContentBrowserModel::setDrawerHeight(float height) {
+    const float value = std::max(height, 0.0f);
+    if (value != m_drawerHeight) {
+        m_drawerHeight = value;
+        writeState();
+        changed();
+    }
+}
+
+void ContentBrowserModel::rebuildTree() {
+    // The subfolders of each folder in natural order, then a depth-first walk.
+    std::unordered_map<std::string, std::vector<const std::string*>> subfolders;
+    for (const std::string& folder : m_folders) {
+        if (!folder.empty()) {
+            subfolders[parentOf(folder)].push_back(&folder);
+        }
+    }
+    for (auto& [parent, list] : subfolders) {
+        std::ranges::sort(list, [](const std::string* a, const std::string* b) {
+            const int order = naturalCompare(nameOf(*a), nameOf(*b));
+            return order != 0 ? order < 0 : *a < *b;
+        });
+    }
+    m_treeRows.clear();
+    const auto visit = [this, &subfolders](const auto& self, const std::string& folder, std::uint32_t depth) -> void {
+        const auto children = subfolders.find(folder);
+        const bool hasChildren = children != subfolders.end();
+        const bool expanded = isExpanded(folder);
+        m_treeRows.push_back(
+            ContentFolderRow{.path = folder,
+                             .name = folder.empty() ? std::string("Content") : std::string(nameOf(folder)),
+                             .depth = depth,
+                             .hasChildren = hasChildren,
+                             .expanded = expanded});
+        if (hasChildren && expanded) {
+            for (const std::string* child : children->second) {
+                self(self, *child, depth + 1);
+            }
+        }
+    };
+    visit(visit, std::string(), 0);
+}
+
+bool ContentBrowserModel::matches(const ContentItem& item, std::span<const std::string> words) const {
+    if (!m_filter.empty()) {
+        const bool inCategory = item.kind == ContentItemKind::Asset && m_filter.has(item.category);
+        if (!inCategory && !(m_filter.problems && item.hasProblems())) {
+            return false;
+        }
+    }
+    const std::string& label = m_lowerLabels[static_cast<std::size_t>(&item - m_items.data())];
+    return std::ranges::all_of(words,
+                               [&label](const std::string& word) { return label.find(word) != std::string::npos; });
+}
+
+void ContentBrowserModel::rebuildView() {
+    m_shown.clear();
+    if (!searching()) {
+        if (const auto children = m_children.find(m_folder); children != m_children.end()) {
+            m_shown.reserve(children->second.size());
+            for (const std::size_t index : children->second) {
+                m_shown.push_back(&m_items[index]);
+            }
+        }
+    } else {
+        std::vector<std::string> words;
+        for (const std::string_view word : split(m_search, ' ')) {
+            if (!word.empty()) {
+                words.push_back(toLowerAscii(word));
+            }
+        }
+        for (const ContentItem& item : m_items) {
+            if (item.kind != ContentItemKind::Folder && isInFolder(item.folder, m_folder) && matches(item, words)) {
+                m_shown.push_back(&item);
+            }
+        }
+    }
+    m_shownProblems = static_cast<std::size_t>(
+        std::ranges::count_if(m_shown, [](const ContentItem* item) { return item->hasProblems(); }));
+    sortShown();
+    ++m_viewBuilds;
+    changed();
+}
+
+void ContentBrowserModel::sortShown() {
+    const ContentViewSettings view = m_view;
+    const auto rank = [this](const ContentItem* item) {
+        return m_nameRanks[static_cast<std::size_t>(item - m_items.data())];
+    };
+    const auto less = [view, &rank](const ContentItem* a, const ContentItem* b) {
+        if (view.sortBy == ContentSortKey::Type) {
+            if (const int order = displayName(a->category).compare(displayName(b->category)); order != 0) {
+                return order < 0;
+            }
+            const std::string_view typeA = contentTypeOf(a->type).displayName;
+            const std::string_view typeB = contentTypeOf(b->type).displayName;
+            if (const int order = typeA.compare(typeB); order != 0) {
+                return order < 0;
+            }
+        }
+        return rank(a) < rank(b);
+    };
+    // Folders first in either direction; descending reverses each group.
+    const auto rest = std::ranges::stable_partition(
+        m_shown, [](const ContentItem* item) { return item->kind == ContentItemKind::Folder; });
+    const auto ordered = [&less, &view](const ContentItem* a, const ContentItem* b) {
+        return view.descending ? less(b, a) : less(a, b);
+    };
+    std::ranges::sort(m_shown.begin(), rest.begin(), ordered);
+    std::ranges::sort(rest, ordered);
+}
+
+void ContentBrowserModel::pruneSelection() {
+    if (m_selection.empty() && !m_anchor.has_value() && !m_focus.has_value()) {
+        return;
+    }
+    std::unordered_set<ContentKey, ContentKeyHash> shown;
+    shown.reserve(m_shown.size());
+    for (const ContentItem* item : m_shown) {
+        shown.insert(keyOf(*item));
+    }
+    const std::size_t before = m_selection.size();
+    std::erase_if(m_selection, [&shown](const ContentKey& key) { return !shown.contains(key); });
+    m_selected = {m_selection.begin(), m_selection.end()};
+    const bool anchorGone = m_anchor.has_value() && !shown.contains(*m_anchor);
+    const bool focusGone = m_focus.has_value() && !shown.contains(*m_focus);
+    if (anchorGone) {
+        m_anchor.reset();
+    }
+    if (focusGone) {
+        m_focus.reset();
+    }
+    if (before != m_selection.size() || anchorGone || focusGone) {
+        changed();
+    }
+}
+
+void ContentBrowserModel::load() {
+    if (m_stateFile.empty()) {
+        return;
+    }
+    const Expected<std::optional<fs::FileInfo>> info = fs::fileInfo(m_stateFile);
+    if (info && !info->has_value()) {
+        // A fresh project has none yet: the defaults, which are written only once something changes.
+        m_written = stateText();
+        return;
+    }
+    Expected<std::string> text = info ? fs::readFile(m_stateFile, kMaxContentBrowserStateSize)
+                                      : Expected<std::string>(makeUnexpected(info.error()));
+    Expected<ContentBrowserState> state = text ? parseContentBrowserState(*text, m_stateFile)
+                                               : Expected<ContentBrowserState>(makeUnexpected(std::move(text).error()));
+    if (!state) {
+        ITH_LOG_WARNING(ContentBrowser, "the Content Browser's state can't be read; it starts with the defaults: {}",
+                        state.error().message);
+        return;
+    }
+    m_folder = std::move(state->folder);
+    m_view = state->view;
+    m_expanded = {state->expanded.begin(), state->expanded.end()};
+    m_treeWidth = state->treeWidth;
+    m_drawerHeight = state->drawerHeight;
+    m_written = stateText();
+}
+
+std::optional<std::string> ContentBrowserModel::stateText() const {
+    std::vector<std::string> expanded(m_expanded.begin(), m_expanded.end());
+    std::ranges::sort(expanded);
+    Value list = Value::array();
+    for (std::string& folder : expanded) {
+        list.elements().push_back(Value::string(std::move(folder)));
+    }
+    Value data = Value::object();
+    data.set("folder", Value::string(m_folder));
+    data.set("view", Value::string(std::string(viewModeId(m_view.mode))));
+    data.set("sortBy", Value::string(std::string(sortKeyId(m_view.sortBy))));
+    data.set("descending", Value::boolean(m_view.descending));
+    data.set("expanded", std::move(list));
+    data.set("treeWidth", Value::real(m_treeWidth));
+    data.set("drawerHeight", Value::real(m_drawerHeight));
+    Expected<std::string, serialization::Error> text = serialization::writeDocument(kContentBrowserStateFormat, data);
+    if (!text) {
+        ITH_LOG_WARNING(ContentBrowser, "the Content Browser's state can't be written: {}", text.error().toString());
+        return std::nullopt;
+    }
+    return std::move(*text);
+}
+
+void ContentBrowserModel::writeState() {
+    if (m_stateFile.empty()) {
+        return;
+    }
+    std::optional<std::string> text = stateText();
+    if (!text.has_value() || m_written == text) {
+        return;
+    }
+    Expected<void> written = fs::writeFileAtomic(m_stateFile, *text, {.durability = fs::Durability::Atomic});
+    if (!written) {
+        if (!m_writeFailed) {
+            ITH_LOG_WARNING(ContentBrowser, "the Content Browser's state can't be written: {}",
+                            written.error().message);
+        }
+        m_writeFailed = true;
+        return;
+    }
+    m_writeFailed = false;
+    m_written = std::move(*text);
+}
+
+} // namespace ith

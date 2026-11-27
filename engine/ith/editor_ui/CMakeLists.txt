@@ -1,10 +1,11 @@
 # The editor's UI on Dear ImGui (ADR-0029): the ImGui context with our own platform backend (engine
 # events, clipboard, IME and cursor through ith::Platform) and renderer backend (render graph
 # passes on the RHI), the theme, fonts and icons, the idle policy, the shell and the panels (Output
-# Log, Outliner, Details, Viewport). ImGui is private to this module: it links ith::imgui privately,
-# and no public header names an ImGui type (the imgui_confined test). The UI and viewport shaders are
-# compiled into the module as text and compiled to bytecode by the editor application, so this
-# module builds without the shader compiler, in sanitizer builds too (ADR-0029 rule 19).
+# Log, Outliner, Details, Viewport, Content Browser and the content drawer). ImGui is private to this
+# module: it links ith::imgui privately, and no public header names an ImGui type (the
+# imgui_confined test). The UI and viewport shaders are compiled into the module as text and
+# compiled to bytecode by the editor application, so this module builds without the shader
+# compiler, in sanitizer builds too (ADR-0029 rule 19).
 ith_add_module(editor_ui
     LAYER editor
     KIND editor
@@ -13,6 +14,8 @@ ith_add_module(editor_ui
         DockLayout.cpp
         DetailsPanel.h
         DetailsPanel.cpp
+        ContentBrowserPanel.h
+        ContentBrowserPanel.cpp
         EditorShell.h
         EditorShell.cpp
         EditorUi.h

@@ -32,6 +32,7 @@
 
 namespace ith {
 
+class ContentBrowserModel;
 class UiHost;
 class ViewportConsumer;
 struct UiFrameInput;
@@ -40,8 +41,10 @@ class UiPlatformBackend final : public InputConsumer {
 public:
     // Installs the clipboard and IME functions in the current ImGui context and adds itself to
     // `window`'s input stack. `viewports` is the window's viewport consumer, already in the stack
-    // (null: none). Preconditions: an ImGui context exists; `input` and `viewports` outlive this.
-    UiPlatformBackend(Input& input, WindowId window, UiHost* host, const ViewportConsumer* viewports);
+    // (null: none); `content` the Content Browser's model, told about mouse presses (null: none).
+    // Preconditions: an ImGui context exists; `input`, `viewports` and `content` outlive this.
+    UiPlatformBackend(Input& input, WindowId window, UiHost* host, const ViewportConsumer* viewports,
+                      ContentBrowserModel* content = nullptr);
     UiPlatformBackend(const UiPlatformBackend&) = delete;
     UiPlatformBackend& operator=(const UiPlatformBackend&) = delete;
     UiPlatformBackend(UiPlatformBackend&&) = delete;
@@ -81,6 +84,7 @@ private:
     WindowId m_window;
     UiHost* m_host;
     const ViewportConsumer* m_viewports;
+    ContentBrowserModel* m_content;
     ConsumerId m_consumer = kNoConsumer;
     // Window pixels per window coordinate, from the last frame: events carry pixels, ImGui works in
     // window coordinates.

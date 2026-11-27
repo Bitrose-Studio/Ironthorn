@@ -12,7 +12,7 @@
 //   session.waitIdle(); // the file is written
 //
 // The session registers the built-in commands of editor_core (the Edit, Entity, Selection, File,
-// Query, Window and Viewport commands); editor_ui and game editor modules add theirs to the same
+// Query, Window, Viewport and Content commands); editor_ui and game editor modules add theirs to the same
 // registry. `types` names the component types that commands and level files may use and must
 // outlive the session. Headless: tests and automation use it directly. Main thread only.
 //
@@ -23,6 +23,7 @@
 // the calling thread. Relative paths are relative to the project directory.
 
 #include "ith/editor_core/CommandRegistry.h"
+#include "ith/editor_core/ContentBrowserModel.h"
 #include "ith/editor_core/EditorDocument.h"
 #include "ith/editor_core/LayoutSession.h"
 #include "ith/editor_core/PanelRegistry.h"
@@ -49,8 +50,10 @@ struct EditorSessionOptions {
     std::string projectDirectory;
     // The job system for file operations; null runs them on the calling thread.
     JobSystem* jobs = nullptr;
-    // The project's asset database, for opening a level by its asset id; null: by path only.
-    const AssetDatabase* assets = nullptr;
+    // The project's asset database, for opening levels by asset id and for the Content Browser, which
+    // scans, and later changes, it (ADR-0049 rule 23); null: levels open by path only and the content
+    // commands fail. It must outlive the session.
+    AssetDatabase* assets = nullptr;
     // The layered configuration that holds the named layouts and the default choice (ADR-0040);
     // null: only the built-in default layout exists. It must outlive the session.
     Config* config = nullptr;
@@ -100,6 +103,13 @@ public:
 
     [[nodiscard]] const Viewports& viewports() const noexcept { return m_viewports; }
 
+    // The Content Browser's view model (ADR-0049): its items, selection and session state. Its state
+    // file is <project>/Saved/Editor/ContentBrowser.json when the session has a project directory. It
+    // shows nothing until ith.content.rescan runs, which the editor does when the project opens.
+    [[nodiscard]] ContentBrowserModel& content() noexcept { return m_content; }
+
+    [[nodiscard]] const ContentBrowserModel& content() const noexcept { return m_content; }
+
     // Keeps the open level's cameras and writes the viewports file when it changed (ADR-0042 rule
     // 4). An untitled level, which has no file yet, keeps none. The editor calls it at exit.
     void saveViewports();
@@ -123,7 +133,9 @@ public:
     // the level's path once the file is written. The saved marker moves at once and comes back when
     // the write fails. Fails with "editor.document.no_path" (an untitled level and no path),
     // "editor.document.save_in_progress", "editor.document.busy" (an open is running) and the
-    // saveLevel errors; a failed write is reported later through lastFileError().
+    // saveLevel errors; a failed write is reported later through lastFileError(). When the written
+    // file is a new asset in the Content folder (its path and the level's id unknown to the asset
+    // database), the Content Browser rescans, so it shows the level without a Rescan by the user.
     Expected<void> save(std::string_view path = {});
 
     // Starts opening the level file at `path`: read on the background lane, then loaded all or
@@ -153,6 +165,9 @@ private:
     void start(std::unique_ptr<FileOperation> operation);
     static void runFileStep(FileOperation& operation);
     void finish();
+    // After a save to `fullPath`: a new level file in the Content folder, whose id the database doesn't
+    // have, appears in the Content Browser at once (a Rescan); a failure becomes a warning.
+    void showSavedLevel(const std::string& fullPath);
 
     const TypeRegistry* m_types;
     EditorSessionOptions m_options;
@@ -161,6 +176,7 @@ private:
     PanelRegistry m_panels;
     LayoutSession m_layouts;
     Viewports m_viewports;
+    ContentBrowserModel m_content;
     serialization::EntityMapping m_mapping;
     std::unique_ptr<FileOperation> m_operation;
     JobCounter m_pending;
@@ -171,11 +187,12 @@ private:
 };
 
 // Register the built-in commands (EditCommands.cpp, FileCommands.cpp, QueryCommands.cpp,
-// LayoutCommands.cpp, ViewportCommands.cpp).
+// LayoutCommands.cpp, ViewportCommands.cpp, ContentCommands.cpp).
 void registerEditCommands(CommandRegistry& registry);
 void registerFileCommands(CommandRegistry& registry);
 void registerQueryCommands(CommandRegistry& registry);
 void registerLayoutCommands(CommandRegistry& registry);
 void registerViewportCommands(CommandRegistry& registry);
+void registerContentCommands(CommandRegistry& registry);
 
 } // namespace ith

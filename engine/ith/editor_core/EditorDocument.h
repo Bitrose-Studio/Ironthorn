@@ -78,7 +78,8 @@ public:
     // that is not a change of the level. Precondition (asserted): no transaction is open.
     void adopt(const Uuid& levelId, std::string path);
 
-    // Gives the level a path, after a Save As.
+    // Gives the level a path: after a Save As, and when a Rescan finds its file moved. The dirty state
+    // doesn't change.
     void setPath(std::string path);
 
     // True while Play In Editor or Simulate runs (ADR-0037 rule 10).

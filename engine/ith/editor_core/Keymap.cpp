@@ -39,7 +39,11 @@ struct Listed {
 KeymapContext contextOf(std::string_view id) noexcept {
     const bool playKey =
         std::ranges::any_of(kPlayInEditorCommands, [&id](const std::string_view& command) { return command == id; });
-    return playKey ? KeymapContext::PlayInEditor : KeymapContext::Editor;
+    if (playKey) {
+        return KeymapContext::PlayInEditor;
+    }
+    return id.starts_with("ith.content.") && id != kContentDrawerCommand ? KeymapContext::Content
+                                                                         : KeymapContext::Editor;
 }
 
 Expected<Chord> parseChord(std::string_view text) {
@@ -213,7 +217,19 @@ InputReply KeymapConsumer::onInputEvent(const Event& event) {
     if (event.layoutKey >= U'a' && event.layoutKey <= U'z') {
         chord.key = static_cast<Key>(static_cast<std::uint16_t>(Key::A) + (event.layoutKey - U'a'));
     }
-    const std::string* command = m_keymap->commandFor(chord);
+    const std::string* command = nullptr;
+    if (m_session->content().keyboardFocus()) {
+        // The asset view's own keys, and the keys of the file operations still to come: nothing runs, not
+        // even an Editor binding of the same chord.
+        if (std::ranges::find(kContentWidgetChords, chord) != kContentWidgetChords.end() ||
+            std::ranges::find(kContentReservedChords, chord) != kContentReservedChords.end()) {
+            return InputReply::Consumed;
+        }
+        command = m_keymap->commandFor(chord, KeymapContext::Content);
+    }
+    if (command == nullptr) {
+        command = m_keymap->commandFor(chord);
+    }
     if (command == nullptr) {
         return InputReply::NotConsumed;
     }

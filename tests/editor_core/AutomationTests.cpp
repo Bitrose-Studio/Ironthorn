@@ -4,6 +4,8 @@
 
 #include "ith/editor_core/Automation.h"
 
+#include "ith/asset_database/AssetDatabase.h"
+#include "ith/asset_database/Importer.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
@@ -106,7 +108,11 @@ TEST_SUITE("editor_core.automation") {
             TempProject project;
             ith::JobSystem jobs({.foregroundWorkers = 1, .backgroundWorkers = 1});
             ith::Config config = ith::test::editor::projectConfig(project.root());
-            EditorSession session(types(), {.projectDirectory = project.root(), .jobs = &jobs, .config = &config});
+            // The project's assets, as the editor has them (the content commands need them).
+            const ith::ImporterRegistry importers;
+            ith::AssetDatabase assets(project.root(), importers);
+            EditorSession session(
+                types(), {.projectDirectory = project.root(), .jobs = &jobs, .assets = &assets, .config = &config});
             ith::test::editor::addEditorPanels(session.panels());
             Automation automation(session);
             const auto report = automation.runScriptFile(path);

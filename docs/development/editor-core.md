@@ -26,7 +26,8 @@ An `EditorSession` owns one `EditorDocument` and the `CommandRegistry`, with the
 commands registered. `types` names the component types that commands and level files may use.
 The options give the project directory that relative paths start from, the job system for file
 work (without one, files are read and written at once on the calling thread) and the asset
-database for opening levels by id. Everything is main thread only.
+database, for opening levels by id and for the [Content Browser](#content-browser), which scans it
+(and, with file operations, will change it). Everything is main thread only.
 
 The document owns the editor world, the open level's asset id, the undo history, the selection,
 the change counters and the transactions. The world is read through `document().world()`;
@@ -558,6 +559,72 @@ where the entity already is runs nothing.
 - **Rotation.** `eulerDegrees` and `quatFromEulerDegrees` convert between a quaternion and X, Y
   and Z in degrees: pitch, yaw and roll about X, Y and Z, applied as yaw, then pitch, then roll.
 
+### Content Browser
+
+`session.content()` is the `ContentBrowserModel`
+([ADR-0049](../decisions/0049-editor-content-browser-v1.md), the
+[spec](../specs/content-browser.md)), the view model the Content Browser panel and the content
+drawer share. This is the browse slice (ADR-0049 rule 27); file operations and import come next.
+
+```cpp
+session.execute("ith.content.rescan");                                 // scan Content/, build the items
+session.execute("ith.content.navigate", json(R"({"folder": "Meshes"})"));
+for (const ith::ContentItem* item : session.content().shown()) { ... }  // display order
+```
+
+- **Items.** Every folder of `AssetDatabase::folders()`, every asset of the database (labels:
+  native assets without `.ithasset` or `.ithmap`, imported files with their full name), and a
+  problem entry for each file the last scan found wrong that is not an asset (a file without a
+  sidecar, an orphan sidecar, an unresolved duplicate id, an unreadable or leftover temporary
+  file). Problems about folders and assets are badges on them (case conflicts on both sides, format
+  mismatches); a duplicate the scan resolved is one info line in the log. Items are keyed by asset
+  id for assets and by content path otherwise (`ContentKey`), so a selected asset stays selected
+  when Rescan finds it renamed.
+- **Type categories.** `contentTypeOf(type)` is the table of spec 3.2: `ith.level` is a Level,
+  `gltf` a Model, the input action and context formats Data; a type the table doesn't know is
+  Other, shown by its raw type. The module that brings a format or an importer adds its row.
+- **Shown items.** Without a search or filter, the current folder's own items; with one, the
+  matching assets and problem entries of the current folder and every folder below it. Search
+  words all have to be in the label, ASCII without case; the type filter combines categories with
+  OR and Problems, and the search with AND. Folders come first; the rest sorts by name in natural
+  order (`naturalCompare`: `Rock2` before `Rock10`, `Rock7` before `Rock07`) or by type, either
+  way ascending or descending. Each item's name rank is computed once per refresh, so sorting what
+  is shown compares numbers.
+- **Selection.** An ordered list (the last is primary), an anchor and a focus item, changed by
+  `ith.content.select` with a mode: `replace` (a click; no items clears), `add`, `toggle`,
+  `remove`, `range` (Shift: from the anchor, which stays) and `add_range` (Ctrl + Shift). Items
+  that are no longer shown leave it. It never touches the level, its history or its entity
+  selection.
+- **Nothing per frame.** Every change rebuilds what it affects at once and bumps `generation()`;
+  `viewBuilds()` counts the rebuilds of the shown items for tests. Rescan is the only way outside
+  changes come in (no watcher, ADR-0035 rule 9); the editor's own first save of a new level into
+  `Content/` rescans by itself, so the level shows at once.
+- **Session state** in `<project>/Saved/Editor/ContentBrowser.json` (`ith.content_browser_state`,
+  version 1, written atomically when it changes): the current folder, the view mode and sort, the
+  expanded folders, the tree's width and the drawer's height. A missing file means the defaults; an
+  unreadable one means the defaults and one warning; a saved folder that is gone falls back to its
+  nearest ancestor. Search, filter, selection and the drawer's open state start empty.
+
+The commands are Actions, so they record no undo entry and never make the level dirty. Without an
+asset database every one fails with `editor.document.no_asset_database`; the queries then show an
+empty browser.
+
+| Id | Arguments | What it does |
+|---|---|---|
+| `ith.content.navigate` | `folder` | Makes the folder current, expands its ancestors, clears the search and the selection; `editor.content.not_found` for anything else |
+| `ith.content.navigate_up` | | The parent folder (Alt + Up); nothing at the root |
+| `ith.content.select` | `items` (`{"id"}` or `{"path"}` each), `mode` | Changes the selection; an item not shown is `editor.content.not_found`. Returns `selection`, `primary` |
+| `ith.content.select_all` | | Every shown item (Ctrl + A in the browser) |
+| `ith.content.dismiss` | | Clears the selection; with nothing selected, closes the drawer (Escape in the browser) |
+| `ith.content.set_view` | `mode` (`grid`, `list`), `sortBy` (`name`, `type`), `descending` | The view settings |
+| `ith.content.set_filter` | `search` (at most `kMaxContentSearchSize` bytes, cut at a UTF-8 character), `categories` (`level` … `other`, which match assets only, and `problems`) | Returns `shown` |
+| `ith.content.rescan` | | Refused while a save is written (`editor.document.save_in_progress`). Scans the disk and rebuilds; the open level's path follows its file when it was moved outside the editor (not a dirty change), and a warning says when its file is gone. Returns `assets`, `problems` |
+| `ith.content.open` | `item` (else the primary item), `unsaved` | A folder becomes current; a level opens through `ith.file.open_level` by id, with its unsaved-changes rule, refused while playing (`editor.command.playing`), and closes the drawer; other items do nothing |
+| `ith.content.toggle_drawer` | `open` | Opens or closes the drawer; while the panel is in the layout, focuses it instead (`target`: `panel`), unless `open` is false |
+| `ith.query.content` | | The current folder, search, categories, view, the shown items (kind, path, id, label, type, the category of an asset, problems), the problem count, selection, primary, anchor, focus, `prompt` (null in this slice) and `drawerOpen` |
+| `ith.query.content_tree` | | `current` and the tree's rows (path, name, depth, children, expanded) |
+| `ith.query.content_problems` | | Every problem of the last scan |
+
 ## Prompts
 
 A command that needs input from the user, such as Rename's new name, can have a **prompt**, set by
@@ -591,7 +658,7 @@ an id `ith.<name>`, a display name, a default dock place (`Center`, `Left`, `Rig
 | `ith.details` | Details | Right | 1 | `editor_ui` (`registerDetails`) |
 | `ith.output_log` | Output Log | Bottom | 1 | `editor_ui` (`registerOutputLog`) |
 | `ith.viewport` | Viewport | Center | 4 | the viewport step |
-| `ith.content_browser` | Content Browser | Bottom | 1 | the Content Browser step |
+| `ith.content_browser` | Content Browser | Bottom | 1 | `editor_ui` (`registerContentBrowser`) |
 
 A single panel's instance id is its id. A multi-instance panel's instances are `<id>.<n>`
 (`ith.viewport.2`), shown as "Viewport 2". ImGui window names end in `###<instance id>`, so a
@@ -681,14 +748,32 @@ that side.
 each configuration layer: a command id maps to chords such as `"Ctrl+Keyboard.Z"`, the highest
 layer that lists a command decides its chords, and `[]` or `null` unbinds it. Invalid chords,
 unknown command ids and conflicts are warnings; in a conflict the command bound in the higher
-layer wins, and within one layer the lower id. The Play In Editor keys (`ith.play.stop`,
-`ith.play.free_mouse`, `ith.play.possess_or_eject`) have their own context, so Escape both stops
-play and, in the editor, clears the selection.
+layer wins, and within one layer the lower id. Conflicts are checked per context. There are three
+contexts, each command in one, chosen by its id
+([ADR-0049](../decisions/0049-editor-content-browser-v1.md) rule 3, amending ADR-0037 rule 4):
+
+- **Play In Editor**: `ith.play.stop`, `ith.play.free_mouse`, `ith.play.possess_or_eject`, handled by
+  the Play In Editor consumer while a game runs;
+- **Content**: every `ith.content.*` command except `ith.content.toggle_drawer`, looked up first
+  while the Content Browser had the keyboard focus in the UI's last frame
+  (`ContentBrowserModel::keyboardFocus`, which `editor_ui` reports), and never otherwise;
+- **Editor**: everything else.
+
+So Escape stops play, clears the content selection with the focus in the browser, and clears the
+entity selection elsewhere; F2, Delete, Ctrl + D and Ctrl + A work the same way. Ctrl + Space
+(`ith.content.toggle_drawer`) works with the focus anywhere except in a text field. With the focus
+in the browser, the asset view's widget keys (`kContentWidgetChords`: the arrows, Home and End,
+alone and with Shift, and Ctrl + F) are consumed without running anything, so End never also runs
+Snap to Floor; so are F2, Delete and Ctrl + D (`kContentReservedChords`) until the file operations
+register their commands, so unbinding a content command can't let Delete reach the level. The
+focus flag also follows a mouse press (none while a popup is open) and `ith.content.toggle_drawer`
+between frames, so keys in the same batch of events reach the right context.
 
 `KeymapConsumer` is the keymap consumer of an editor window's input stack (ADR-0029 rule 7). It
 invokes the bound command of a key press (`CommandRegistry::invoke`, so a prompt can ask for
-input); letter keys follow the user's layout, so Ctrl + Z is the key that prints Z. While an interaction holds a transaction open, Escape cancels it
-(`Transactions::cancelOpen`) and other keys go on to the consumers below.
+input); letter keys follow the user's layout, so Ctrl + Z is the key that prints Z. While an
+interaction holds a transaction open, Escape cancels it (`Transactions::cancelOpen`) and other keys
+go on to the consumers below.
 
 ## Preferences
 
@@ -731,8 +816,25 @@ runner serves the headless tests and the editor's `--automation` run.
   below every support, entities without bounds, disabled shapes, children following their roots
   under scaled, rotated, stretched and collapsed parents, one undo entry and none for a second
   End), and the WorldTransforms an opened level gets without an undo entry;
-- the keymap tests: chords, layers and conflicts, the engine's `Keymap.json` (every id registered
-  or listed as coming with a later step; the viewport keys resolve), and the consumer;
+- the keymap tests: chords, layers and conflicts, the Content context beside the Editor's, the
+  engine's `Keymap.json` (every id registered or listed as coming with a later step; the viewport
+  keys resolve), and the consumer;
+- the Content Browser tests (`ContentBrowserTests.cpp`, spec requirements 1 to 15, 50 to 52, 54,
+  55, 57 and 58) in a temporary project with an asset database: folders, assets, hidden files and
+  the tree; every scan problem as an entry or a badge (case conflicts where the file system keeps
+  case); the type table and natural order; sorting by name and type in both directions; search and
+  filter over the subtree, ASCII without case; every selection mode with its anchor; selecting
+  leaving the level alone; navigation; no asset database; Rescan after outside changes, the open
+  level following its file; opening levels with the unsaved-changes answer and while playing; the
+  drawer and the panel's focus; the Content keymap context; the session state, a deleted folder and
+  an unreadable file; nothing rebuilt without a change; the widget keys running nothing with the
+  browser focused (End is not Snap to Floor); Ctrl + Space giving the focus at once and the
+  press hit test; a new level showing after its first save; Rescan refused during a save; the
+  search limit at a UTF-8 boundary; categories for assets only; Keypad Enter; and the state reader.
+  Requirement 13's F2 half comes with renaming in slice 2;
+- the Content Browser benchmark (`ContentBrowserBenchmark.cpp`, CTest `content_browser_benchmark`,
+  label `benchmark`): 10 000 assets in 500 folders; the view model of a 1 000-item folder and a
+  search over every item, each against its 5 ms target (spec requirement 59);
 - the viewport input tests, through a real `Input` with the keymap and viewport consumers: RMB + W
   flies at the step's speed without running `translate_tool`, all fly keys by physical key, W alone
   runs it, Ctrl + Z still undoes during fly and other keys are swallowed, releases go to the
@@ -773,7 +875,8 @@ runner serves the headless tests and the editor's `--automation` run.
   stale hits (a despawned entity, its reused slot, an unused slot) and entities without a stable id
   changing nothing;
 - the automation tests: the matcher, script errors, every script in `tests/editor_core/scripts`
-  run in a fresh project, and the **coverage test**, which fails when a registered command is run
+  run in a fresh project with an asset database (`content_browser.json` browses the levels it
+  saves), and the **coverage test**, which fails when a registered command is run
   by no script. A new command therefore comes with a script step;
 - the view-model tests: the tree's rows, filter, expansion and ranges; the Outliner's order,
   selection, rename and the F2 prompt, Delete, Enabled and drag and drop; Details' rows,

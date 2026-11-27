@@ -1,7 +1,7 @@
-// The keymap (ADR-0037 rule 4, ADR-0029 rules 7 and 16): chords, layers where the highest listing
-// of a command wins and [] or null unbinds, conflicts within a context, the Play In Editor context,
-// the engine's Keymap.json, and the consumer: letters by layout, repeats, Escape during an
-// interaction, and refused commands.
+// The keymap (ADR-0037 rule 4, ADR-0029 rules 7 and 16, ADR-0049 rule 3): chords, layers where the
+// highest listing of a command wins and [] or null unbinds, conflicts within a context, the Play In
+// Editor and Content contexts, the engine's Keymap.json, and the consumer: letters by layout,
+// repeats, Escape during an interaction, and refused commands.
 
 #include "ith/editor_core/Keymap.h"
 
@@ -33,11 +33,11 @@ using ith::test::editor::json;
 using ith::test::editor::run;
 using ith::test::editor::types;
 
-// Commands of Keymap.json that later editor steps register: the content drawer (step 12) and Play
-// In Editor (step 13).
+// Commands of Keymap.json that later editor work registers: the Content Browser's file operations
+// (step 12, slice 2) and Play In Editor (step 13).
 constexpr std::string_view kLaterCommands[] = {
-    "ith.content_browser.open_drawer", "ith.play.play", "ith.play.simulate", "ith.play.stop", "ith.play.free_mouse",
-    "ith.play.possess_or_eject",
+    "ith.content.rename", "ith.content.delete", "ith.content.duplicate", "ith.play.play",
+    "ith.play.simulate",  "ith.play.stop",      "ith.play.free_mouse",   "ith.play.possess_or_eject",
 };
 
 Keymap keymapOf(const EditorSession& session, const std::vector<std::string_view>& layers,
@@ -128,6 +128,27 @@ TEST_SUITE("editor_core.keymap") {
         CHECK_FALSE(hasWarning(warnings, "editor.keymap.conflict"));
     }
 
+    TEST_CASE("the Content context: content commands bind beside the Editor's, conflicts are per context") {
+        EditorSession session(types());
+        std::vector<ith::Error> warnings;
+        const Keymap keymap = keymapOf(session, {R"({"ith.edit.select_all": ["Ctrl+Keyboard.A"],
+                                            "ith.content.select_all": ["Ctrl+Keyboard.A"],
+                                            "ith.content.toggle_drawer": ["Ctrl+Keyboard.Space"]})"},
+                                       warnings);
+        CHECK(*keymap.commandFor(chord("Ctrl+Keyboard.A")) == "ith.edit.select_all");
+        CHECK(*keymap.commandFor(chord("Ctrl+Keyboard.A"), ith::KeymapContext::Content) == "ith.content.select_all");
+        // The drawer's toggle is an Editor binding: it works with the focus anywhere.
+        CHECK(*keymap.commandFor(chord("Ctrl+Keyboard.Space")) == "ith.content.toggle_drawer");
+        CHECK(keymap.commandFor(chord("Ctrl+Keyboard.Space"), ith::KeymapContext::Content) == nullptr);
+        CHECK_FALSE(hasWarning(warnings, "editor.keymap.conflict"));
+
+        std::vector<ith::Error> clash;
+        const Keymap twice = keymapOf(
+            session, {R"({"ith.content.select_all": ["Keyboard.F3"], "ith.content.dismiss": ["Keyboard.F3"]})"}, clash);
+        CHECK(*twice.commandFor(chord("Keyboard.F3"), ith::KeymapContext::Content) == "ith.content.dismiss");
+        CHECK(hasWarning(clash, "editor.keymap.conflict"));
+    }
+
     TEST_CASE("the engine's Keymap.json loads cleanly; its ids are registered or come with a later step") {
         EditorSession session(types());
         // The engine layer as the build copies it: engine/config (the tests run from the source directory).
@@ -161,11 +182,14 @@ TEST_SUITE("editor_core.keymap") {
                 return warning.message == "no command " + std::string(id);
             }));
         }
-        for (const auto& [bound, id] : keymap.bindings()) {
-            const bool registered = session.commands().find(id) != nullptr;
-            const bool later =
-                std::ranges::any_of(kLaterCommands, [&](const std::string_view& other) { return other == id; });
-            CHECK_MESSAGE((registered || later), id);
+        for (const ith::KeymapContext context :
+             {ith::KeymapContext::Editor, ith::KeymapContext::PlayInEditor, ith::KeymapContext::Content}) {
+            for (const auto& [bound, id] : keymap.bindings(context)) {
+                const bool registered = session.commands().find(id) != nullptr;
+                const bool later =
+                    std::ranges::any_of(kLaterCommands, [&](const std::string_view& other) { return other == id; });
+                CHECK_MESSAGE((registered || later), id);
+            }
         }
     }
 
