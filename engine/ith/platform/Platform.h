@@ -1,8 +1,8 @@
 #pragma once
 
 // The platform layer: initialization, windows, the per-frame event pump with device input
-// (keyboard, text, mouse, gamepads), gamepad output, the clipboard and the cursor (ADR-0012,
-// ADR-0013).
+// (keyboard, text, mouse, gamepads, files dropped from other applications), gamepad output, the
+// clipboard, the cursor and the open-file dialog (ADR-0012, ADR-0013, ADR-0049 rules 24 and 25).
 //
 //   ith::Expected<ith::Platform> platform = ith::Platform::create();
 //   if (!platform) {
@@ -71,6 +71,32 @@ enum class CursorShape : std::uint8_t {
 // The number of CursorShape values.
 inline constexpr std::size_t kCursorShapeCount = 12;
 
+// One entry of an open-file dialog's file type list.
+struct FileDialogFilter {
+    // What the user sees, UTF-8: "Images".
+    std::string_view name;
+    // The file extensions it shows, without dots, separated by semicolons: "png;jpg;jpeg"; or "*"
+    // for every file. Never empty (asserted). Only letters, digits, '-', '_' and '.' are allowed in
+    // an extension; the dialog reports any other pattern as an error (FileDialogClosed). zenity
+    // matches extensions case-sensitively; the Windows dialog and the desktop portal don't, so
+    // list both cases ("png;PNG") where it matters.
+    std::string_view patterns;
+};
+
+// What Platform::showOpenFileDialog() shows. The platform copies everything it needs, so the
+// strings need to live only for the call.
+struct OpenFileDialogDesc {
+    // The file types the user can choose from, the first selected. Empty shows every file.
+    std::span<const FileDialogFilter> filters;
+    // The folder the dialog starts in, UTF-8; empty lets the operating system choose. It should
+    // exist: on Windows, SDL may fall back to the older dialog, limited to MAX_PATH paths,
+    // otherwise. A trailing separator is added if missing, so the library doesn't take the last
+    // name for a file.
+    std::string_view defaultFolder;
+    // Whether the user may choose several files.
+    bool allowMany = false;
+};
+
 struct PlatformDesc {
     // The video driver to use: "windows", "wayland", "x11", or "offscreen", which needs no
     // display and is what tests and CI use. Empty picks the default: the SDL_VIDEO_DRIVER
@@ -122,7 +148,8 @@ public:
     // frames nobody looks at. Returns at once when events are already queued; events the platform
     // doesn't report (device and display bookkeeping) don't end the wait. The span may be
     // empty (a timeout, or only a wake). A negative timeout counts as zero; timeouts are rounded
-    // down to milliseconds and capped at about 24 days.
+    // down to milliseconds and capped at about 24 days, and at 50 ms while an open-file dialog is
+    // open (see showOpenFileDialog). The span is valid like pumpEvents()'s.
     //
     // Precondition (asserted): called on the main thread.
     std::span<const Event> waitEvents(std::chrono::milliseconds timeout) ITH_LIFETIMEBOUND;
@@ -176,6 +203,35 @@ public:
     // Precondition (asserted): called on the main thread.
     Expected<void> setCursorVisible(bool visible);
     [[nodiscard]] bool cursorVisible() const;
+
+    // Shows the operating system's open-file dialog over `window` and returns at once (ADR-0012
+    // rule 8, ADR-0049 rule 25). For the editor and tools only; games use their own UI. The result
+    // comes from a later pump: one FileDialogFile event per chosen file, then FileDialogClosed,
+    // whose `text` is empty when files were chosen or the user cancelled and holds the error
+    // otherwise (no dialog available, as on a Linux system with neither the desktop portal nor
+    // zenity; an invalid filter pattern). With the desktop portal some failures leave a stale or
+    // unrelated message from the library in that text. The events carry `window`'s id; that they
+    // still arrive when the window is destroyed while the dialog is open is not verified.
+    //
+    // One dialog at a time: until the pump that delivers FileDialogClosed, another call fails with
+    // "platform.dialog_busy". While a dialog is open, waitEvents() waits at most 50 ms, because
+    // the desktop portal's result arrives only inside a pump. A dialog still open when the Platform
+    // is destroyed delivers nothing. With the Windows dialog and zenity, a later Platform in the
+    // same process can open a dialog once the old one has closed; with the desktop portal its result
+    // never arrives after shutdown, so later Platforms in the process stay "platform.dialog_busy".
+    //
+    // Paths are the operating system's bytes: UTF-8 on Windows, where a std::filesystem::path must
+    // be built from them as UTF-8 (std::u8string), not in the ANSI code page; on Linux UTF-8 on
+    // normally configured systems, but a file name may be any bytes, not valid UTF-8.
+    //
+    // On Linux a dialog needs xdg-desktop-portal with a backend, or zenity; the first call checks
+    // which is there, and blocks while it does.
+    //
+    // Preconditions (asserted): called on the main thread; `window` is open; no string of `desc`
+    // contains a NUL character; no filter's `patterns` is empty. If asserts continue, or are
+    // compiled out, an unknown window gives a dialog without a parent, and an empty pattern a
+    // FileDialogClosed with an error.
+    Expected<void> showOpenFileDialog(const Window& window, const OpenFileDialogDesc& desc);
 
     // The name of a physical key in the user's keyboard layout, for showing bindings: "Z" for
     // Key::W on AZERTY, "Left Shift" for Key::LeftShift. Empty for Key::None and keys the layout

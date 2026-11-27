@@ -83,6 +83,89 @@ while (running) {
   `platform.text_input_failed`, `platform.cursor_failed`) and SDL's message. Reading the clipboard
   returns an empty string when there is no text or it can't be read.
 
+## Dropped files and the open-file dialog
+
+For the editor and tools ([ADR-0049](../decisions/0049-editor-content-browser-v1.md) rules 24
+and 25); games use their own UI.
+
+- **Drops.** Files and folders dragged from the file manager onto a window arrive as
+  `DropBegin`, `DropPosition` while the drag moves, one `DropFile` per path (in `text`), and
+  `DropComplete`, all with the window's id (`kNoWindow` when the operating system drops onto the
+  application rather than one of its windows). `DropPosition` and `DropFile` carry the position
+  in window pixels, like mouse events; `DropFile` has the last position of the drag. Dropped text
+  is not delivered, so a drag of text sends only `DropBegin` and `DropComplete`. When Windows
+  can't start its drag and drop service (OLE), SDL falls back to the older drop message: there is
+  no `DropPosition` then, and `DropFile` is at 0, 0. Not verified yet: drops from a non-elevated
+  file manager into an editor run as administrator, which Windows is expected to block.
+- **Paths** in `DropFile` and `FileDialogFile` are the operating system's bytes. On Windows they
+  are always UTF-8: build a `std::filesystem::path` from them as UTF-8 (a `std::u8string`), never
+  through the ANSI code page. On Linux they are UTF-8 on normally configured systems, but a file
+  name may be any bytes, not valid UTF-8.
+- **The open-file dialog.** `Platform::showOpenFileDialog(window, {filters, defaultFolder,
+  allowMany})` shows the operating system's dialog and returns at once. A later pump delivers one
+  `FileDialogFile` per chosen file (the path in `text`) and then `FileDialogClosed`, whose `text`
+  is empty when files were chosen or the user cancelled, and the error otherwise. One dialog at a
+  time: until its `FileDialogClosed` has been pumped, another call fails with
+  `platform.dialog_busy`.
+  - **Filters** are a name and extensions without dots separated by semicolons
+    (`{"Models", "gltf;glb"}`), or `"*"` for every file. A pattern is never empty (asserted); an
+    invalid one is reported through `FileDialogClosed`. zenity matches extensions
+    case-sensitively, the Windows dialog and the desktop portal don't, so list both cases
+    (`"png;PNG"`) where it matters.
+  - **The default folder** should exist: on Windows SDL may otherwise fall back to the older
+    dialog, which is limited to `MAX_PATH`. The platform adds a trailing separator (and on
+    Windows turns `/` into `\`), because SDL takes the location as a folder or a file and would
+    otherwise treat the last name as a file.
+  - **Releases without asserts:** an unknown window gives a dialog without a parent, and an empty
+    pattern a `FileDialogClosed` with an error.
+
+  ```cpp
+  const ith::FileDialogFilter filters[] = {{.name = "Models", .patterns = "gltf;glb"},
+                                           {.name = "All files", .patterns = "*"}};
+  if (auto shown = platform.showOpenFileDialog(window, {.filters = filters, .allowMany = true}); !shown) {
+      log(shown.error()); // platform.dialog_busy
+  }
+  // in a later frame
+  for (const ith::Event& event : platform.pumpEvents()) {
+      if (event.type == ith::EventType::FileDialogFile) {
+          paths.emplace_back(event.text); // copy: the view is valid until the next pump
+      } else if (event.type == ith::EventType::FileDialogClosed && !event.text.empty()) {
+          log(event.text); // no dialog available, for example
+      }
+  }
+  ```
+
+  As for every event, the span and its `text` views are valid until the next pump or until the
+  `Platform` is moved or destroyed.
+
+  On Windows SDL shows the system dialog on a thread of its own. On Linux it needs, at run time,
+  `xdg-desktop-portal` with a backend, or `zenity`; SDL tries the portal over D-Bus first, and the
+  first dialog call blocks while it checks which is there. Without either, `FileDialogClosed`
+  reports the error and the editor imports by drop only. Some portal failures leave a stale or
+  unrelated SDL message in `FileDialogClosed`'s text.
+
+  **How the result reaches the main thread.** SDL's callback may run on any thread. It copies the
+  paths, or SDL's error message, into a slot of the platform guarded by a mutex, and calls
+  `Platform::wake()`, which puts an event without data into SDL's thread-safe queue so that a
+  `waitEvents()` returns. Every pump takes the slot at its end and turns it into the events,
+  stamped when the pump takes them (SDL's clock and `std::chrono::steady_clock` may drift apart, so
+  their order against the frame's other timestamps is close, not exact). The paths are owned by
+  the slot, never by SDL's queue, so nothing leaks when the queue is cleared at shutdown, and a
+  full queue only delays the result to the next pump. The platform keeps its copies of the filters
+  and the default folder until the callback has run, as SDL requires. The slot is never
+  destroyed, because SDL's dialog thread (Windows, zenity) is detached and may call back during
+  static destruction at exit.
+  - **The desktop portal** calls back only inside SDL's pump, and `waitEvents()` doesn't wake for
+    it, so while a dialog is open `waitEvents()` waits at most 50 ms.
+  - **A window destroyed while its dialog is open:** the dialog should still end with
+    `FileDialogClosed` and the old window id; not verified.
+  - **A `Platform` destroyed while a dialog is open** drops its result: the callback that comes
+    later delivers nothing. With the Windows dialog and zenity, a later `Platform` in the same
+    process can open a dialog once the old one has closed. With the desktop portal the callback
+    never arrives after shutdown, so later `Platform`s in the process stay `platform.dialog_busy`.
+    If that ever matters, the remedy is storage per request, with a request id passed to SDL as
+    the callback's userdata.
+
 ## Video drivers
 
 `PlatformDesc::videoDriver` picks the driver: `windows`, `wayland`, `x11` or `offscreen`. Empty
@@ -144,11 +227,18 @@ the post, so a late background job (its workers run below normal priority) or an
 doesn't fail the test. The latency is printed; ADR-0035 rule 26 asks for 50 ms, which the test
 allows up to 500 ms for shared CI machines, far below the 10 s a missed wake would take. Like every
 platform test it runs through CTest on the offscreen driver, never on a desktop.
+`tests/platform/DropAndFileDialogTests.cpp` pushes SDL's drop events to check their translation.
+The real file dialog can't be shown headless: the tests open it with an invalid filter, which SDL
+rejects before showing anything (for `platform.dialog_busy` and the error path), or stand in for
+showing it and for SDL's callback with `ith::detail::beginOpenFileDialog` and
+`ith::detail::finishOpenFileDialog` (chosen files, both kinds of cancel, errors, a result from
+another thread ending `waitEvents`, the 50 ms wait cap, and a callback that comes after its
+`Platform` is gone).
 
 ## Not here yet
 
-- **Custom cursor images and file dialogs**: custom images when a tool needs one, file dialogs
-  with the editor.
+- **Custom cursor images, save and folder dialogs**: custom images when a tool needs one, the
+  dialogs when a feature needs them.
 - **Gyro, accelerometer and touchpad** of gamepads, and **touch and pen** (with Android).
 - **Popup windows, fullscreen, position, minimize and maximize calls**: with the editor shell.
 - **Routing SDL's allocations** to the engine allocator, and handling mobile lifecycle events in

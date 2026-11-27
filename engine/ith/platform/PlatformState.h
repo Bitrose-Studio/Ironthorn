@@ -8,10 +8,17 @@
 // may read them from any thread.
 
 #include "ith/foundation/Expected.h"
+#include "ith/platform_events/Event.h"
 
 #include <atomic>
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <thread>
+
+namespace ith {
+struct OpenFileDialogDesc;
+} // namespace ith
 
 namespace ith::detail {
 
@@ -47,5 +54,28 @@ inline bool isMainThread() {
 
 // An error with `code` whose message is `what`, a colon and the windowing library's last error.
 Unexpected<Error> sdlError(const char* code, const char* what);
+
+// The start of an open-file dialog, the part of Platform::showOpenFileDialog before the library
+// shows it: fails with "platform.dialog_busy" while a dialog is open, otherwise marks one open for
+// `window` and keeps copies of `desc`'s strings for the library. Only showOpenFileDialog and tests
+// may call it; tests use it to stand in for showing the operating system's dialog, which can't be
+// done headless.
+//
+// Precondition (asserted): called on the main thread.
+Expected<void> beginOpenFileDialog(WindowId window, const OpenFileDialogDesc& desc);
+
+// `folder` as the default location of a file dialog: unchanged when empty, otherwise with a
+// trailing separator added when it has none (on Windows after turning every '/' into '\'), because
+// the library takes a location without one for a file in its parent folder.
+std::string dialogFolder(std::string_view folder);
+
+// The end of an open-file dialog, which the library's callback forwards to, on any thread: `files`
+// is the library's list of paths ending in a null pointer (just the null pointer, or one empty
+// name, when the user cancelled), or null on an error, whose message is then the calling thread's
+// last library error. Copies the result and wakes the main thread; the next pump delivers it as
+// FileDialogFile and FileDialogClosed events. Does nothing when no dialog is open, and drops the
+// result of a dialog whose Platform was destroyed. Only the library's callback and tests may call
+// it.
+void finishOpenFileDialog(const char* const* files);
 
 } // namespace ith::detail

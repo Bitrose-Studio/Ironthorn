@@ -94,6 +94,31 @@ enum class EventType : std::uint8_t {
     GamepadButtonUp,
     // An axis of gamepad `device` changed: `gamepadAxis`, `axisValue` (see GamepadAxis).
     GamepadAxisMoved,
+
+    // A drag from another application entered `window` (kNoWindow when the operating system drops
+    // onto the application itself). The drop's other events follow, then DropComplete. A drag of
+    // something else than files (text) also sends DropBegin and DropComplete, with no DropFile.
+    DropBegin,
+    // The drag moved over `window`: `x`, `y` in the window's pixels, like a mouse position.
+    DropPosition,
+    // One file or folder was dropped onto `window`: its absolute path in `text` and the drop's
+    // position in `x`, `y`, in the window's pixels. Several files send one each. The path is the
+    // operating system's bytes: UTF-8 on Windows (build a std::filesystem::path from it as UTF-8,
+    // std::u8string), and on Linux UTF-8 on normally configured systems, though a file name may
+    // be any bytes. When Windows can't start its drag and drop service (OLE), SDL falls back to
+    // the older drop message: no DropPosition, and DropFile at 0, 0.
+    DropFile,
+    // The drop on `window` ended, with files or without (the drag left, or carried no files).
+    DropComplete,
+    // The open-file dialog of Platform::showOpenFileDialog chose a file: its absolute path in
+    // `text`, the operating system's bytes like DropFile's. `window` is the dialog's window. One
+    // event per file, then FileDialogClosed in the same pump.
+    FileDialogFile,
+    // The open-file dialog of `window` closed. `text` is empty when files were chosen (the
+    // FileDialogFile events before it) and when the user cancelled; otherwise it is the error
+    // that kept the dialog from being shown or from finishing (with the desktop portal possibly a
+    // stale message). Another dialog may be opened now.
+    FileDialogClosed,
 };
 
 // One event. Which fields mean something depends on `type` (see EventType); the others keep their
@@ -128,7 +153,8 @@ struct Event {
     // KeyDown sent by the operating system's key repeat. Repeats are not presses.
     bool repeat = false;
 
-    // Mouse. `x`, `y` is the position in the window's pixels, from its top-left corner.
+    // Mouse, DropPosition and DropFile. `x`, `y` is the position in the window's pixels, from its
+    // top-left corner.
     MouseButton mouseButton = MouseButton::None;
     // 1 for a single click, 2 for a double click, and so on (MouseButtonDown only).
     std::uint8_t clicks = 0;
@@ -150,7 +176,9 @@ struct Event {
     GamepadAxis gamepadAxis = GamepadAxis::None;
     float axisValue = 0.0f;
 
-    // TextInput and TextEditing: the text; GamepadConnected: the gamepad's name. UTF-8.
+    // TextInput and TextEditing: the text; GamepadConnected: the gamepad's name; DropFile and
+    // FileDialogFile: the path (see DropFile for its encoding); FileDialogClosed: the error, if
+    // any. UTF-8 otherwise.
     std::string_view text;
     std::int32_t textCursor = 0;
     std::int32_t textSelectionLength = 0;

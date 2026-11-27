@@ -137,12 +137,15 @@ set_tests_properties(input_actions_benchmark PROPERTIES LABELS "benchmark" TIMEO
 
 # The platform layer on SDL's headless "offscreen" driver. The tests also call SDL directly, to
 # list its compiled-in video drivers and to push events the offscreen driver can't produce.
-# WakeTests.cpp checks waitEvents and Platform::wake with a JobSystem (ADR-0035 rule 23).
+# WakeTests.cpp checks waitEvents and Platform::wake with a JobSystem (ADR-0035 rule 23);
+# DropAndFileDialogTests.cpp the drop events and the open-file dialog (ADR-0049 rules 24 and 25,
+# ADR-0051).
 if(IRONTHORN_BUILD_CLIENT)
     ith_add_test_suite(platform
         SOURCES
             platform/PlatformTests.cpp
             platform/WakeTests.cpp
+            platform/DropAndFileDialogTests.cpp
         LIBRARIES ith::platform ith::jobs SDL3::SDL3-static Threads::Threads)
 endif()
 

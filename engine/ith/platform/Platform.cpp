@@ -1,6 +1,7 @@
 #include "ith/platform/Platform.h"
 
 #include "ith/foundation/Assert.h"
+#include "ith/foundation/Mutex.h"
 #include "ith/platform/PlatformState.h"
 
 #include <SDL3/SDL.h>
@@ -9,12 +10,15 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <limits>
+#include <new>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace ith {
 namespace detail {
@@ -388,6 +392,22 @@ Translated textEditingEvent(const SDL_TextEditingEvent& event) {
             .text = event.text};
 }
 
+// DropPosition and DropFile carry the position, converted like a mouse position; DropBegin and
+// DropComplete don't.
+Translated dropEvent(EventType type, const SDL_DropEvent& event) {
+    Translated translated{.event = Event{.type = type, .timestampNs = event.timestamp, .window = event.windowID}};
+    if (type == EventType::DropPosition || type == EventType::DropFile) {
+        const float density = pixelDensity(event.windowID);
+        translated.event.x = event.x * density;
+        translated.event.y = event.y * density;
+    }
+    if (type == EventType::DropFile) {
+        // An empty path rather than none, so a DropFile always has its text set.
+        translated.text = event.data != nullptr ? event.data : "";
+    }
+    return translated;
+}
+
 // `modifiers` follows the key events in queue order, so mouse events get the modifiers held when
 // they happened, not those at the time of the pump (SDL's mouse events carry none).
 std::optional<Translated> translate(const SDL_Event& event, KeyModifiers& modifiers) {
@@ -451,6 +471,15 @@ std::optional<Translated> translate(const SDL_Event& event, KeyModifiers& modifi
             return gamepadButtonEvent(event.gbutton);
         case SDL_EVENT_GAMEPAD_AXIS_MOTION:
             return gamepadAxisEvent(event.gaxis);
+        case SDL_EVENT_DROP_BEGIN:
+            return dropEvent(EventType::DropBegin, event.drop);
+        case SDL_EVENT_DROP_POSITION:
+            return dropEvent(EventType::DropPosition, event.drop);
+        case SDL_EVENT_DROP_FILE:
+            return dropEvent(EventType::DropFile, event.drop);
+        case SDL_EVENT_DROP_COMPLETE:
+            return dropEvent(EventType::DropComplete, event.drop);
+        // SDL_EVENT_DROP_TEXT ends here: dropped text is not delivered.
         default:
             return std::nullopt;
     }
@@ -519,7 +548,161 @@ Uint16 motorStrength(float strength) {
     return static_cast<Uint16>(std::lround(std::clamp(strength, 0.0f, 1.0f) * 65535.0f));
 }
 
+// The open-file dialog (ADR-0049 rule 25). Process-wide like the windowing library, because the
+// library's callback has no Platform to reach and may run on another thread, also after the
+// Platform that opened the dialog is gone.
+//
+// The hand-off: beginOpenFileDialog sets `busy` and `callbackPending` and stores the filters. The
+// callback, on whichever thread the library calls it, copies the paths (or the error) into
+// `result` under the mutex and calls Platform::wake(), which pushes an event into the library's
+// thread-safe queue so that a waitEvents() returns. Every pump takes `result` at its end and turns
+// it into FileDialogFile and FileDialogClosed events, which ends `busy`. The paths are owned by
+// `result` (std::string values), never by the library's queue, so nothing leaks when the queue is
+// cleared at shutdown, and a full queue only delays the result to the next pump; the wake event
+// carries no data.
+//
+// Lock order: the mutex is never held while calling into the library, except for the wake push
+// and SDL_GetError (thread-local) in the callback. The library's own locks are never held when it
+// calls the callback or when the main thread takes the mutex, so the two can't deadlock. Because
+// wake() pushes under the lock and SDL runs its event watchers and filter inside SDL_PushEvent, no
+// event watcher or filter may take this mutex or call into the platform.
+//
+// One state for the process means a callback that never comes (the Linux desktop portal after
+// SDL_Quit) keeps every later Platform busy. Should that ever matter, the remedy is storage per
+// request, with the request's id passed to the library as the callback's userdata.
+struct OpenFileDialogResult {
+    std::vector<std::string> files;
+    // Empty when the dialog closed without an error.
+    std::string error;
+    WindowId window = kNoWindow;
+};
+
+struct FileDialogState {
+    Mutex mutex;
+    // From showOpenFileDialog until the pump that delivers its FileDialogClosed.
+    bool busy ITH_GUARDED_BY(mutex) = false;
+    // From showOpenFileDialog until the library's callback ran; the library may read the filters
+    // meanwhile, so they stay as they are.
+    bool callbackPending ITH_GUARDED_BY(mutex) = false;
+    // The Platform that opened the dialog was destroyed while the callback was pending: the
+    // callback drops its result and wakes nobody, since the library may be shut down.
+    bool abandoned ITH_GUARDED_BY(mutex) = false;
+    WindowId window ITH_GUARDED_BY(mutex) = kNoWindow;
+    std::optional<OpenFileDialogResult> result ITH_GUARDED_BY(mutex);
+    // Copies of the caller's strings and the library's view of the filters, kept until the
+    // callback has run.
+    std::vector<std::string> filterStrings ITH_GUARDED_BY(mutex);
+    std::vector<SDL_DialogFileFilter> filters ITH_GUARDED_BY(mutex);
+    std::string defaultFolder ITH_GUARDED_BY(mutex);
+};
+
+// Built on first use and never destroyed: the library's dialog thread on Windows and with zenity
+// is detached and may call back while static objects are destroyed at exit, so the state must
+// outlive them (the pattern of the logger, ADR-0007 rule 8).
+FileDialogState& fileDialogState() {
+    alignas(FileDialogState) static std::array<std::byte, sizeof(FileDialogState)> storage;
+    static FileDialogState& instance = *new (storage.data()) FileDialogState();
+    return instance;
+}
+
+// How long waitEvents() waits at most while a file dialog is open (see there).
+constexpr std::int64_t kFileDialogWaitCapMs = 50;
+
+bool fileDialogPending() {
+    FileDialogState& dialog = fileDialogState();
+    const MutexLock lock(dialog.mutex);
+    return dialog.callbackPending;
+}
+
+void SDLCALL openFileDialogCallback(void* /*userdata*/, const char* const* files, int /*filter*/) {
+    detail::finishOpenFileDialog(files);
+}
+
+bool hasNul(std::string_view text) {
+    return text.find('\0') != std::string_view::npos;
+}
+
 } // namespace
+
+namespace detail {
+
+// SDL takes its default location as a folder or a file: the Windows dialog splits it at the last
+// separator, and zenity selects the named item in its parent. A trailing separator makes the whole
+// string the folder.
+std::string dialogFolder(std::string_view folder) {
+    std::string result(folder);
+    if (result.empty()) {
+        return result;
+    }
+#ifdef _WIN32
+    std::ranges::replace(result, '/', '\\');
+    constexpr char kSeparator = '\\';
+#else
+    constexpr char kSeparator = '/';
+#endif
+    if (result.back() != kSeparator) {
+        result.push_back(kSeparator);
+    }
+    return result;
+}
+
+Expected<void> beginOpenFileDialog(WindowId window, const OpenFileDialogDesc& desc) {
+    ITH_ASSERT_MSG(isMainThread(), kNotMainThread);
+    FileDialogState& dialog = fileDialogState();
+    const MutexLock lock(dialog.mutex);
+    if (dialog.busy || dialog.callbackPending) {
+        return makeError("platform.dialog_busy", "a file dialog is already open");
+    }
+    dialog.busy = true;
+    dialog.callbackPending = true;
+    dialog.window = window;
+    // Every string is stored before any view of one is taken, so the views stay valid.
+    dialog.filterStrings.clear();
+    for (const FileDialogFilter& filter : desc.filters) {
+        dialog.filterStrings.emplace_back(filter.name);
+        dialog.filterStrings.emplace_back(filter.patterns);
+    }
+    dialog.filters.clear();
+    for (std::size_t i = 0; i + 1 < dialog.filterStrings.size(); i += 2) {
+        dialog.filters.push_back(
+            {.name = dialog.filterStrings[i].c_str(), .pattern = dialog.filterStrings[i + 1].c_str()});
+    }
+    dialog.defaultFolder = dialogFolder(desc.defaultFolder);
+    return {};
+}
+
+void finishOpenFileDialog(const char* const* files) {
+    FileDialogState& state = fileDialogState();
+    const MutexLock lock(state.mutex);
+    // A call without a dialog would deliver a result nobody asked for.
+    if (!state.callbackPending) {
+        return;
+    }
+    state.callbackPending = false;
+    // Checked before anything else is read: the library may be shut down already.
+    if (state.abandoned) {
+        state.abandoned = false;
+        return;
+    }
+    OpenFileDialogResult result;
+    if (files == nullptr) {
+        const char* error = SDL_GetError();
+        result.error = error != nullptr && *error != '\0' ? error : "the file dialog failed";
+    } else {
+        for (const char* const* file = files; *file != nullptr; ++file) {
+            // zenity reports a cancel as one empty name.
+            if (**file != '\0') {
+                result.files.emplace_back(*file);
+            }
+        }
+    }
+    result.window = state.window;
+    state.result = std::move(result);
+    // Under the lock, so ~Platform can't shut the library down while the wake is pushed.
+    Platform::wake();
+}
+
+} // namespace detail
 
 Expected<Platform> Platform::create(const PlatformDesc& desc) {
     detail::PlatformState& state = detail::platformState();
@@ -547,6 +730,11 @@ Expected<Platform> Platform::create(const PlatformDesc& desc) {
     // Gamepads are optional: without them the application still gets its windows, keyboard and
     // mouse, and the gamepad functions report "platform.gamepad_not_found".
     static_cast<void>(SDL_InitSubSystem(SDL_INIT_GAMEPAD));
+    // Drops are on by default; they are set anyway, so import by drop doesn't depend on a default.
+    for (const SDL_EventType type :
+         {SDL_EVENT_DROP_BEGIN, SDL_EVENT_DROP_POSITION, SDL_EVENT_DROP_FILE, SDL_EVENT_DROP_COMPLETE}) {
+        SDL_SetEventEnabled(type, true);
+    }
     // The event Platform::wake() pushes. Without one (none left to register) wake() does nothing.
     state.wakePending.store(false);
     state.wakeEventType.store(SDL_RegisterEvents(1));
@@ -589,6 +777,20 @@ Platform::~Platform() {
     ITH_ASSERT_MSG(detail::isMainThread(), detail::kNotMainThread);
     ITH_ASSERT_MSG(state.windowCount.load(std::memory_order_relaxed) == 0,
                    "every Window must be destroyed before the Platform");
+    {
+        // A result not yet delivered is dropped; a callback still to come drops its own.
+        FileDialogState& dialog = fileDialogState();
+        const MutexLock lock(dialog.mutex);
+        dialog.busy = false;
+        dialog.result.reset();
+        dialog.abandoned = dialog.callbackPending;
+        if (!dialog.callbackPending) {
+            dialog.window = kNoWindow;
+            dialog.filterStrings.clear();
+            dialog.filters.clear();
+            dialog.defaultFolder.clear();
+        }
+    }
     state.wakeEventType.store(0);
     destroyCursors();
     // SDL_Quit closes the windows and gamepads that are left, so none is alive afterwards.
@@ -630,8 +832,13 @@ std::span<const Event> Platform::pumpEvents() {
 std::span<const Event> Platform::waitEvents(std::chrono::milliseconds timeout) {
     assertUsable();
     constexpr std::int64_t kMaxTimeoutMs = std::numeric_limits<std::int32_t>::max();
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::milliseconds(std::clamp<std::int64_t>(timeout.count(), 0, kMaxTimeoutMs));
+    std::int64_t timeoutMs = std::clamp<std::int64_t>(timeout.count(), 0, kMaxTimeoutMs);
+    // The desktop portal's callback runs only inside the library's pump, and the wait doesn't wake
+    // for it, so a dialog's result could wait out the whole timeout.
+    if (fileDialogPending()) {
+        timeoutMs = std::min(timeoutMs, kFileDialogWaitCapMs);
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     // Events the platform doesn't translate (device and display bookkeeping) don't end the wait.
     for (;;) {
         const auto left = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
@@ -704,6 +911,31 @@ std::span<const Event> Platform::collectEvents(const void* first, bool* woke) {
         }
         m_events.push_back(translated->event);
     }
+    // The file dialog's result, once its callback has run (see FileDialogState).
+    std::optional<OpenFileDialogResult> dialogResult;
+    {
+        FileDialogState& dialog = fileDialogState();
+        const MutexLock lock(dialog.mutex);
+        if (dialog.result) {
+            dialogResult = std::move(dialog.result);
+            dialog.result.reset();
+            dialog.busy = false;
+        }
+    }
+    if (dialogResult) {
+        // Stamped when the pump takes the result: later than the events before it, as far as the
+        // library's clock (SDL_GetTicksNS) and std::chrono::steady_clock agree; they may drift apart.
+        const auto now = static_cast<std::uint64_t>(steadyNowNs());
+        const auto addEvent = [&](EventType type, std::string_view text) {
+            textRanges.push_back({.event = m_events.size(), .offset = m_text.size(), .size = text.size()});
+            m_text.append(text);
+            m_events.push_back(Event{.type = type, .timestampNs = now, .window = dialogResult->window});
+        };
+        for (const std::string& file : dialogResult->files) {
+            addEvent(EventType::FileDialogFile, file);
+        }
+        addEvent(EventType::FileDialogClosed, dialogResult->error);
+    }
     for (const TextRange& range : textRanges) {
         m_events[range.event].text = std::string_view(m_text).substr(range.offset, range.size);
     }
@@ -775,6 +1007,52 @@ Expected<void> Platform::setCursorVisible(bool visible) {
 bool Platform::cursorVisible() const {
     assertUsable();
     return SDL_CursorVisible();
+}
+
+// NOLINTNEXTLINE(readability-make-member-function-const): showing a dialog is not a const operation
+Expected<void> Platform::showOpenFileDialog(const Window& window, const OpenFileDialogDesc& desc) {
+    assertUsable();
+    SDL_Window* sdlWindow = SDL_GetWindowFromID(window.id());
+    ITH_ASSERT_MSG(sdlWindow != nullptr, "the file dialog needs an open window");
+    [[maybe_unused]] const bool anyNul =
+        hasNul(desc.defaultFolder) || std::ranges::any_of(desc.filters, [](const FileDialogFilter& f) {
+            return hasNul(f.name) || hasNul(f.patterns);
+        });
+    ITH_ASSERT_MSG(!anyNul, "file dialog strings must not contain NUL characters");
+
+    // SDL reads the last character of every pattern, so an empty one would be read out of bounds.
+    const bool emptyPattern =
+        std::ranges::any_of(desc.filters, [](const FileDialogFilter& f) { return f.patterns.empty(); });
+    ITH_ASSERT_MSG(!emptyPattern, "every file dialog filter needs a pattern");
+
+    Expected<void> begun = detail::beginOpenFileDialog(window.id(), desc);
+    if (!begun) {
+        return begun;
+    }
+    if (emptyPattern) {
+        // When asserts continue or are compiled out: reported like SDL's own filter errors.
+        SDL_SetError("a file dialog filter has an empty pattern");
+        detail::finishOpenFileDialog(nullptr);
+        return {};
+    }
+    FileDialogState& dialog = fileDialogState();
+    const SDL_DialogFileFilter* filters = nullptr;
+    int filterCount = 0;
+    const char* defaultFolder = nullptr;
+    {
+        const MutexLock lock(dialog.mutex);
+        filters = dialog.filters.empty() ? nullptr : dialog.filters.data();
+        ITH_ASSERT_MSG(dialog.filters.size() <= static_cast<std::size_t>(std::numeric_limits<int>::max()),
+                       "too many file dialog filters");
+        filterCount = static_cast<int>(dialog.filters.size());
+        defaultFolder = dialog.defaultFolder.empty() ? nullptr : dialog.defaultFolder.c_str();
+    }
+    // Not under the lock: the library may call the callback before it returns (an invalid filter,
+    // no dialog available). The filters stay untouched until the callback has run. Without a
+    // window (asserted above) the dialog has no parent.
+    SDL_ShowOpenFileDialog(openFileDialogCallback, nullptr, sdlWindow, filters, filterCount, defaultFolder,
+                           desc.allowMany);
+    return {};
 }
 
 std::string Platform::keyDisplayName(Key key) const {
