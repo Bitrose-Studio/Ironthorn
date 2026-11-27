@@ -104,10 +104,10 @@ void OutlinerPanel::draw() {
     // NOLINTNEXTLINE(bugprone-signed-bitwise): ImGui's flags are int enums
     constexpr ImGuiTableFlags kTable = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV;
     if (ImGui::BeginChild("##rows", ImVec2(0.0f, 0.0f))) {
+        // No header row, as in Details: the columns are the label and the Enabled check box.
         if (ImGui::BeginTable("##outliner", 2, kTable)) {
-            ImGui::TableSetupColumn("Item Label", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("##enabled", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
-            ImGui::TableHeadersRow();
             ImGuiListClipper clipper;
             clipper.Begin(static_cast<int>(m_model.tree().rows().size()));
             while (clipper.Step()) {

@@ -5,7 +5,9 @@
 // compared with tests/editor_ui_gpu/golden/viewport_<backend>.ppm (GoldenImage.h). ITH_UPDATE_GOLDEN=1
 // writes the images instead. A second test on each backend resizes and hides the viewport across
 // frames, so its targets are destroyed and recreated under the debug layers, and must end on the same
-// image.
+// image. A third shows the same scene from a low camera in a wide 1280 x 448 window, where most of the
+// grid is seen at a grazing angle (viewport_grazing_<backend>.ppm): its lines must fade out there
+// instead of aliasing into false curves, and the grid must not end on a visible rim.
 
 #include "ith/editor_core/EditorCamera.h"
 #include "ith/editor_core/EditorSession.h"
@@ -49,10 +51,39 @@ using namespace ith::test::golden;
 
 namespace {
 
-constexpr std::uint32_t kWidth = 640;
-constexpr std::uint32_t kHeight = 400;
 constexpr rhi::Format kFormat = rhi::Format::R8G8B8A8Srgb;
-constexpr std::uint32_t kRowPitch = kWidth * 4;
+
+// What a golden image shows: the window's size in pixels (a width that is a multiple of 64, so rows
+// read back tightly packed on every backend) and the viewport's camera.
+struct Shot {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    EditorCamera camera;
+};
+
+// The default camera, pinned here so the image doesn't follow a change of the default, in a 640 x 400
+// window.
+Shot defaultShot() {
+    Shot shot{.width = 640, .height = 400, .camera = {}};
+    shot.camera.position = {3.6742346f, 3.0f, 3.6742346f};
+    shot.camera.yaw = 0.25f * kPi;
+    shot.camera.pitch = -kPi / 6.0f;
+    shot.camera.fovY = kHalfPi;
+    return shot;
+}
+
+// A camera two metres up, looking ten degrees down, in a wide 1280 x 448 window: most of the grid is
+// seen at a grazing angle, where its lines lie far closer together than a pixel, and the grid runs out
+// toward the horizon. The lines must fade out smoothly there instead of aliasing into false patterns.
+Shot grazingShot() {
+    Shot shot = defaultShot();
+    shot.width = 1280;
+    shot.height = 448;
+    shot.camera.position = {4.0f, 2.0f, 6.0f};
+    shot.camera.yaw = 0.15f * kPi;
+    shot.camera.pitch = -kPi / 18.0f;
+    return shot;
+}
 
 const TypeRegistry& types() {
     static const TypeRegistry kTypes = [] {
@@ -114,12 +145,18 @@ struct Rendered {
     std::uint32_t shapeDraws = 0;
 };
 
-// The full window.
-constexpr ImVec2 kFull{static_cast<float>(kWidth), static_cast<float>(kHeight)};
+// The full window of `shot`.
+ImVec2 fullWindow(const Shot& shot) {
+    return {static_cast<float>(shot.width), static_cast<float>(shot.height)};
+}
 
-// Renders one frame per entry of `frames`, the viewport window of that size (zero: hidden), on
-// `device` and reads the last frame back.
-Rendered renderViewport(rhi::Device& device, std::span<const ImVec2> frames) {
+// Renders one frame per entry of `frames`, the viewport window of that size (zero: hidden), in the
+// window and with the camera of `shot`, on `device` and reads the last frame back.
+Rendered renderViewport(rhi::Device& device, const Shot& shot, std::span<const ImVec2> frames) {
+    REQUIRE(shot.width % 64 == 0); // rows stay tightly packed at D3D12's 256-byte pitch
+    const std::uint32_t width = shot.width;
+    const std::uint32_t height = shot.height;
+    const std::uint32_t rowPitch = width * 4;
     Expected<ShaderCompiler> compiler = ShaderCompiler::create();
     REQUIRE(compiler.hasValue());
     const rhi::ShaderFormat format = device.capabilities().shaderFormat;
@@ -140,14 +177,14 @@ Rendered renderViewport(rhi::Device& device, std::span<const ImVec2> frames) {
         compileStage(*compiler, format, kViewportGridShaderName, viewportGridShaderSource(), kViewportGridPixelEntry,
                      ShaderStage::Pixel);
 
-    const rhi::TextureDesc targetDesc{.width = kWidth,
-                                      .height = kHeight,
+    const rhi::TextureDesc targetDesc{.width = width,
+                                      .height = height,
                                       .format = kFormat,
                                       .usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::CopySrc,
                                       .debugName = "Viewport golden target"};
     Expected<rhi::TextureHandle, rhi::Error> target = device.createTexture(targetDesc);
     REQUIRE(target.hasValue());
-    const rhi::BufferDesc readbackDesc{.size = std::uint64_t{kRowPitch} * kHeight,
+    const rhi::BufferDesc readbackDesc{.size = std::uint64_t{rowPitch} * height,
                                        .usage = rhi::BufferUsage::CopyDst,
                                        .memory = rhi::MemoryType::Readback,
                                        .debugName = "Viewport golden readback"};
@@ -160,12 +197,7 @@ Rendered renderViewport(rhi::Device& device, std::span<const ImVec2> frames) {
     REQUIRE(session.execute("ith.entity.create", shapeAt("Sphere", vec3(0.9f, 0.5f, 0.4f), vec3(0.1f, 0.3f, 0.85f)))
                 .hasValue());
     REQUIRE(session.execute("ith.edit.select_none").hasValue());
-    // The default camera, pinned here so the image doesn't follow a change of the default.
-    EditorCamera& camera = session.viewports().at(0).camera;
-    camera.position = {3.6742346f, 3.0f, 3.6742346f};
-    camera.yaw = 0.25f * kPi;
-    camera.pitch = -kPi / 6.0f;
-    camera.fovY = kHalfPi;
+    session.viewports().at(0).camera = shot.camera;
 
     Input input;
     const Expected<std::string> executable = fs::executableDirectory();
@@ -194,8 +226,8 @@ Rendered renderViewport(rhi::Device& device, std::span<const ImVec2> frames) {
         rg::ImportedState targetState;
         rg::ImportedState readbackState;
         for (std::size_t frame = 0; frame < frames.size(); ++frame) {
-            (*ui)->newFrame({.size = {static_cast<std::int32_t>(kWidth), static_cast<std::int32_t>(kHeight)},
-                             .pixelSize = {static_cast<std::int32_t>(kWidth), static_cast<std::int32_t>(kHeight)},
+            (*ui)->newFrame({.size = {static_cast<std::int32_t>(width), static_cast<std::int32_t>(height)},
+                             .pixelSize = {static_cast<std::int32_t>(width), static_cast<std::int32_t>(height)},
                              .deltaSeconds = 1.0f / 60.0f});
             (*panel)->newFrame();
             drawViewport(session, frames[frame]);
@@ -218,9 +250,9 @@ Rendered renderViewport(rhi::Device& device, std::span<const ImVec2> frames) {
                         pass.read(texture, rg::TextureUse::CopySrc);
                         pass.write(buffer, rg::BufferUse::CopyDst);
                     },
-                    [texture, buffer](rg::PassContext& context) {
+                    [texture, buffer, rowPitch](rg::PassContext& context) {
                         context.list().copyTextureToBuffer({.buffer = context.buffer(buffer),
-                                                            .rowPitch = kRowPitch,
+                                                            .rowPitch = rowPitch,
                                                             .texture = context.texture(texture)});
                     },
                     rg::PassFlags::NeverCull);
@@ -231,7 +263,7 @@ Rendered renderViewport(rhi::Device& device, std::span<const ImVec2> frames) {
             REQUIRE(device.endFrame().hasValue());
         }
         REQUIRE(device.waitIdle().hasValue());
-        rendered = {.image = imageFromTexels(device.mappedMemory(*readback), kWidth, kHeight),
+        rendered = {.image = imageFromTexels(device.mappedMemory(*readback), width, height),
                     .renders = (*panel)->renders(),
                     .shapeDraws = (*panel)->lastShapeDraws()};
         graph.reset();
@@ -242,11 +274,12 @@ Rendered renderViewport(rhi::Device& device, std::span<const ImVec2> frames) {
     return rendered;
 }
 
-// The golden image: three frames of the full window. One shape draw each, rendered once: the later
-// frames changed nothing.
-Image renderGolden(rhi::Device& device) {
-    const std::array frames{kFull, kFull, kFull};
-    const Rendered rendered = renderViewport(device, frames);
+// The golden image of `shot`: three frames of the full window. Two shape draws, rendered once: the
+// later frames changed nothing.
+Image renderGolden(rhi::Device& device, const Shot& shot) {
+    const ImVec2 full = fullWindow(shot);
+    const std::array frames{full, full, full};
+    const Rendered rendered = renderViewport(device, shot, frames);
     CHECK(rendered.shapeDraws == 2);
     CHECK(rendered.renders == 1);
     return rendered.image;
@@ -259,8 +292,10 @@ Image renderGolden(rhi::Device& device) {
 Image renderResizedAndHidden(rhi::Device& device) {
     const ImVec2 smaller{400.0f, 300.0f};
     const ImVec2 hidden{0.0f, 0.0f};
-    const std::array frames{kFull, smaller, smaller, kFull, hidden, hidden, hidden, kFull, kFull, kFull};
-    const Rendered rendered = renderViewport(device, frames);
+    const Shot shot = defaultShot();
+    const ImVec2 full = fullWindow(shot);
+    const std::array frames{full, smaller, smaller, full, hidden, hidden, hidden, full, full, full};
+    const Rendered rendered = renderViewport(device, shot, frames);
     CHECK(rendered.renders == 4);
     return rendered.image;
 }
@@ -274,7 +309,15 @@ TEST_SUITE("editor_ui_gpu.viewport") {
         if (!device) {
             return;
         }
-        checkGolden(renderGolden(*device), "viewport_d3d12");
+        checkGolden(renderGolden(*device, defaultShot()), "viewport_d3d12");
+    }
+
+    TEST_CASE("the grid seen at a grazing angle in a wide viewport on WARP matches its golden image") {
+        std::optional<rhi::Device> device = softwareDevice(rhi::Backend::D3D12);
+        if (!device) {
+            return;
+        }
+        checkGolden(renderGolden(*device, grazingShot()), "viewport_grazing_d3d12");
     }
 
     TEST_CASE("resizing and hiding the viewport on WARP destroys and recreates its target cleanly") {
@@ -291,7 +334,15 @@ TEST_SUITE("editor_ui_gpu.viewport") {
         if (!device || !isLavapipe(*device)) {
             return;
         }
-        checkGolden(renderGolden(*device), "viewport_vulkan");
+        checkGolden(renderGolden(*device, defaultShot()), "viewport_vulkan");
+    }
+
+    TEST_CASE("the grid seen at a grazing angle in a wide viewport on lavapipe matches its golden image") {
+        std::optional<rhi::Device> device = softwareDevice(rhi::Backend::Vulkan);
+        if (!device || !isLavapipe(*device)) {
+            return;
+        }
+        checkGolden(renderGolden(*device, grazingShot()), "viewport_grazing_vulkan");
     }
 
     TEST_CASE("resizing and hiding the viewport on lavapipe destroys and recreates its target cleanly") {

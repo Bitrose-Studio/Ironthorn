@@ -1,0 +1,1 @@
+- The Outliner no longer shows a stray "Item Label" header row above its entities.

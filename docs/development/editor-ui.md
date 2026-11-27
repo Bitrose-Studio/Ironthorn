@@ -295,6 +295,8 @@ A change a panel can't make (a refused command) goes to the log, in the category
 - the entities as a tree with a list clipper, so only the visible rows are drawn;
 - an Enabled check box per row.
 
+Like Details, the rows have no header row.
+
 Disabled entities, those below a disabled one, and the ancestors a search shows only for their
 matches are dimmed.
 
@@ -408,8 +410,13 @@ the image reads after them:
 - `ViewportGrid` draws the grid as one fullscreen triangle. Each pixel casts its view ray at
   y = 0 and writes the hit's depth, so the grid is depth-tested against the shapes. It has minor
   lines every metre and major lines every 10 m; the X axis (z = 0) and the Z axis (x = 0) have
-  their own colours. The minor lines fade where they get denser than a few pixels, and everything
-  fades out at 50 m plus 10 times the camera's height. The colours are the theme's `gridMinor`,
+  their own colours. Every line is about one pixel wide on screen, antialiased with the screen
+  gradient of the world coordinates. Each level (minor, major) fades out as its cells shrink on
+  screen, fully drawn while its lines are at least 10 pixels apart in both directions and gone once
+  they are 3 pixels apart in either, so lines seen far away or at a grazing angle never alias into
+  false curves or moire. The axes are single lines and only fade with distance. Everything fades
+  out smoothly (a smoothstep, with no kink at its end, so no rim shows) at 50 m plus 10 times the
+  camera's height. The colours are the theme's `gridMinor`,
   `gridMajor`, `gridAxisX` and `gridAxisZ`.
 
 Rendering is camera-relative ([ADR-0006](../decisions/0006-math-and-coordinate-conventions.md)
@@ -548,7 +555,10 @@ passed and 1 when it failed.
   400, with a red cube and a blue sphere on the grid from a pinned camera
   (`golden/viewport_d3d12.ppm`, `golden/viewport_vulkan.ppm`), every shader compiled at run time.
   A test on each backend also resizes the viewport and hides it across frames, so its targets are
-  destroyed and recreated under the debug layers, and must end on that golden image. The helpers of
+  destroyed and recreated under the debug layers, and must end on that golden image. A third golden
+  image shows the same scene from a camera 2 m up looking 10 degrees down in a wide 1280 x 448
+  window (`golden/viewport_grazing_<backend>.ppm`), where most of the grid is seen at a grazing
+  angle and must fade out instead of aliasing. The helpers of
   the golden tests are in `GoldenImage.h`.
 - `imgui_confined` and `imgui_confined_refuses_imgui_outside_editor_ui` (label `lint`).
 

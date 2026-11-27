@@ -2,9 +2,14 @@
 // as one fullscreen triangle. Each pixel casts its view ray at the plane and writes the hit's depth,
 // so the grid is depth-tested against the shapes (reversed depth, ADR-0006 rule 6). Minor lines
 // every metre, major lines every ten, the world X axis (z = 0) and Z axis (x = 0) in their own
-// colours; everything fades with distance, and the minor lines also fade out where they would be
-// closer together than a few pixels. Lines are about one pixel wide, antialiased with screen-space
-// derivatives.
+// colours.
+//
+// Every line is about one pixel wide on screen whatever its distance, antialiased with the screen
+// gradient of the world coordinates. Seen far away or at a grazing angle, parallel lines come closer
+// together on screen than a pixel, where they would alias into false curves and moire; so each level
+// fades out as its cells shrink on screen toward a few pixels across, minor lines first, then major
+// lines. The axes are single lines and cannot alias. Everything also fades out with distance,
+// smoothly to zero, so the grid has no visible edge.
 //
 // Colours are four 8-bit sRGB channels, red in the lowest byte, as the theme gives them; they are
 // decoded to linear and blended with straight alpha over the shapes.
@@ -22,6 +27,12 @@ struct Constants {
     uint4 colors;
 };
 [[vk::push_constant]] ConstantBuffer<Constants> constants;
+
+// A level of lines is drawn fully while its lines are at least this many pixels apart on screen in
+// both directions, and not at all once they are this close or closer in either; it fades linearly in
+// between.
+static const float kFullSpacingPixels = 10.0;
+static const float kGoneSpacingPixels = 3.0;
 
 float4 gridVertex(uint vertexId : SV_VertexID) : SV_Position {
     // A triangle covering the viewport: (-1, -1), (3, -1), (-1, 3).
@@ -41,17 +52,32 @@ float4 unpackColor(uint packed) {
     return float4(srgbToLinear(color.rgb), color.a);
 }
 
-// How much of a line every `spacing` metres covers the pixel at `coord` (world x and z).
-float lineCoverage(float2 coord, float spacing) {
-    const float2 cells = coord / spacing;
-    const float2 width = max(fwidth(cells), 1e-6);
-    const float2 distance = abs(frac(cells - 0.5) - 0.5) / width;
-    return 1.0 - saturate(min(distance.x, distance.y));
+// The change of each component of `value` per pixel: the length of its screen gradient,
+// so a line of constant value is measured across, not along a pixel axis. Never zero.
+float2 perPixel(float2 value) {
+    const float2 x = ddx(value);
+    const float2 y = ddy(value);
+    return max(sqrt(x * x + y * y), 1e-6);
 }
 
-// How much of the line at value 0 of `value` (a world coordinate) covers the pixel.
-float axisCoverage(float value) {
-    return 1.0 - saturate(abs(value) / max(fwidth(value), 1e-6));
+// How much of a line about one pixel wide, where `value` is 0, covers the pixel; `step` is the
+// change of `value` per pixel (perPixel).
+float lineCoverage(float value, float step) {
+    return 1.0 - saturate(abs(value) / step);
+}
+
+// How much the lines every `spacing` metres cover the pixel at `coord` (world x and z). The level
+// fades out where its cells get smaller on screen than a few pixels across in either direction, so
+// neither family of its lines ever comes close enough together to alias.
+float gridCoverage(float2 coord, float spacing) {
+    const float2 cells = coord / spacing;
+    const float2 step = perPixel(cells);
+    // The signed distance to the nearest line, in cells.
+    const float2 offset = frac(cells + 0.5) - 0.5;
+    // The denser family's lines are 1 / step pixels apart on screen.
+    const float closest = 1.0 / max(step.x, step.y);
+    const float fade = saturate((closest - kGoneSpacingPixels) / (kFullSpacingPixels - kGoneSpacingPixels));
+    return max(lineCoverage(offset.x, step.x), lineCoverage(offset.y, step.y)) * fade;
 }
 
 // Straight-alpha `top` over `bottom`.
@@ -78,19 +104,21 @@ float4 gridPixel(float4 position : SV_Position, out float depth : SV_Depth) : SV
     depth = constants.right.w / along;
     const float2 world = constants.camera.xz + hit.xz;
 
-    const float minorFade = saturate(1.5 - max(fwidth(world.x), fwidth(world.y)) * 6.0);
     float4 color = unpackColor(constants.colors.x);
-    color.a *= lineCoverage(world, 1.0) * minorFade;
+    color.a *= gridCoverage(world, 1.0);
     float4 major = unpackColor(constants.colors.y);
-    major.a *= lineCoverage(world, 10.0);
+    major.a *= gridCoverage(world, 10.0);
     color = over(major, color);
+    // The axes are single lines, which cannot alias: they only fade with distance.
+    const float2 axisStep = perPixel(world);
     float4 axisX = unpackColor(constants.colors.z);
-    axisX.a *= axisCoverage(world.y);
+    axisX.a *= lineCoverage(world.y, axisStep.y);
     color = over(axisX, color);
     float4 axisZ = unpackColor(constants.colors.w);
-    axisZ.a *= axisCoverage(world.x);
+    axisZ.a *= lineCoverage(world.x, axisStep.x);
     color = over(axisZ, color);
-    color.a *= 1.0 - saturate(length(hit.xz) / constants.camera.w);
+    // A smooth fade to zero, with no kink where it ends, so no rim shows where the grid runs out.
+    color.a *= 1.0 - smoothstep(0.0, 1.0, length(hit.xz) / constants.camera.w);
     if (!hits) {
         discard;
     }
