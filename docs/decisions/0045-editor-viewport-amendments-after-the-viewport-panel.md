@@ -1,6 +1,7 @@
 # ADR-0045: Editor viewport amendments after the Viewport panel (amends 0042, 0043)
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0046](0046-editor-viewport-horizontal-field-of-view.md)
 - **Date:** 2026-11-26
 - **Related:** amends [ADR-0042](0042-editor-viewport.md) rules 4, 9, 11, 13, 15, 16, 19, 27, 28
   and 29, and [ADR-0043](0043-editor-ui-user-texture-state.md) rule 5 (the graph-import phase);
