@@ -44,6 +44,8 @@ public:
 
     [[nodiscard]] Transactions& transactions() noexcept { return m_transactions; }
 
+    [[nodiscard]] const Transactions& transactions() const noexcept { return m_transactions; }
+
     [[nodiscard]] UndoHistory& history() noexcept { return m_history; }
 
     [[nodiscard]] const UndoHistory& history() const noexcept { return m_history; }

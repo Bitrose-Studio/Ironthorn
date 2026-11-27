@@ -10,8 +10,10 @@
 #include "ith/editor_core/EditorChanges.h"
 #include "ith/editor_core/EditorDocument.h"
 #include "ith/editor_core/EditorSession.h"
+#include "ith/editor_core/Gizmo.h"
 #include "ith/editor_core/PanelRegistry.h"
 #include "ith/editor_core/Selection.h"
+#include "ith/editor_core/ViewportGizmo.h"
 #include "ith/editor_core/ViewportPick.h"
 #include "ith/editor_ui/Theme.h"
 #include "ith/editor_ui/ViewportShaders.h"
@@ -159,6 +161,78 @@ struct ViewportRendered {
     friend bool operator==(const ViewportRendered&, const ViewportRendered&) = default;
 };
 
+// The gizmo's strokes, in logical points: the arrows' line width (wider when highlighted), their
+// heads' length and half width, and the plane squares' outline.
+constexpr float kGizmoLineWidth = 2.0f;
+constexpr float kGizmoHighlightWidth = 3.0f;
+constexpr float kGizmoHeadLength = 14.0f;
+constexpr float kGizmoHeadHalfWidth = 5.0f;
+constexpr float kGizmoOutlineWidth = 1.0f;
+// How opaque a plane square's fill is, and a highlighted one's.
+constexpr float kGizmoPlaneFill = 0.35f;
+constexpr float kGizmoHighlightFill = 0.6f;
+
+// The theme colour as ImGui's vertex colour (srgbColor), its alpha times `opacity`.
+ImU32 vertexColor(ThemeColor color, float opacity) {
+    const std::array<float, 4> channels = srgbColor(color);
+    return ImGui::ColorConvertFloat4ToU32(
+        ImVec4(channels[0], channels[1], channels[2], channels[3] * std::clamp(opacity, 0.0f, 1.0f)));
+}
+
+// Draws `gizmo` (ADR-0042 rule 24) onto `list`, over the image whose top-left corner is `origin` in
+// ImGui coordinates; the layout is in image pixels, `scale` the framebuffer scale. `highlighted` is
+// drawn in the theme's gizmoHovered. Plane squares first, the arrows over them; handles fade with
+// their opacity and those at 0 aren't drawn.
+void drawGizmo(ImDrawList& list, const ViewportGizmo& gizmo, GizmoHandle highlighted, ImVec2 origin, ImVec2 scale,
+               float displayScale, const ThemeTokens& theme) {
+    const auto toUi = [origin, scale](Vec2 pixel) {
+        return ImVec2(origin.x + pixel.x / scale.x, origin.y + pixel.y / scale.y);
+    };
+    // Points to ImGui coordinates: the display scale gives pixels, the framebuffer scale coordinates.
+    const float points = displayScale / scale.x;
+    const std::array<ThemeColor, 3> axisColors{theme.gizmoAxisX, theme.gizmoAxisY, theme.gizmoAxisZ};
+    const GizmoLayout& layout = gizmo.layout;
+    for (std::size_t plane = 0; plane < 3; ++plane) {
+        const float opacity = layout.planeOpacity[plane];
+        if (!(opacity > 0.0f)) {
+            continue;
+        }
+        const std::array<std::size_t, 2> axes = gizmoPlaneAxes(plane);
+        const bool lit = highlighted == gizmoPlaneHandle(plane);
+        const ThemeColor color = lit ? theme.gizmoHovered : axisColors[3 - axes[0] - axes[1]];
+        const std::array<Vec2, 4>& corners = layout.planes[plane];
+        list.AddQuadFilled(toUi(corners[0]), toUi(corners[1]), toUi(corners[2]), toUi(corners[3]),
+                           vertexColor(color, opacity * (lit ? kGizmoHighlightFill : kGizmoPlaneFill)));
+        list.AddQuad(toUi(corners[0]), toUi(corners[1]), toUi(corners[2]), toUi(corners[3]),
+                     vertexColor(color, opacity), kGizmoOutlineWidth * points);
+    }
+    const ImVec2 center = toUi(layout.center);
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const float opacity = layout.axisOpacity[axis];
+        if (!(opacity > 0.0f)) {
+            continue;
+        }
+        const bool lit = highlighted == gizmoAxisHandle(axis);
+        const ImU32 color = vertexColor(lit ? theme.gizmoHovered : axisColors[axis], opacity);
+        const ImVec2 tip = toUi(layout.axisEnds[axis]);
+        const float dx = tip.x - center.x;
+        const float dy = tip.y - center.y;
+        const float length = std::sqrt(dx * dx + dy * dy);
+        if (!(length > 0.0f)) {
+            continue;
+        }
+        const ImVec2 along(dx / length, dy / length);
+        const ImVec2 across(-along.y, along.x);
+        // A head at most half the arrow, so a foreshortened arrow keeps its shaft.
+        const float head = std::min(kGizmoHeadLength * points, 0.5f * length);
+        const float halfWidth = kGizmoHeadHalfWidth * points * head / (kGizmoHeadLength * points);
+        const ImVec2 base(tip.x - along.x * head, tip.y - along.y * head);
+        list.AddLine(center, base, color, (lit ? kGizmoHighlightWidth : kGizmoLineWidth) * points);
+        list.AddTriangleFilled(tip, ImVec2(base.x + across.x * halfWidth, base.y + across.y * halfWidth),
+                               ImVec2(base.x - across.x * halfWidth, base.y - across.y * halfWidth), color);
+    }
+}
+
 ViewportRendered renderedKey(const ViewportState& state, const EditorChanges& changes) {
     return {.position = state.camera.position,
             .yaw = state.camera.yaw,
@@ -191,6 +265,9 @@ struct ViewportPanel::Instance {
     // At most one per instance: a newer click replaces it.
     std::optional<Pick> pick;
     std::optional<ViewportRendered> rendered;
+    // The highlighted handle of the gizmo the last draw() drew (None: no highlight), or std::nullopt
+    // when it drew none.
+    std::optional<GizmoHandle> gizmo;
     // Drawn in this frame: draw() sets it, newFrame() releases the target when it is still unset
     // and clears it.
     bool drawn = false;
@@ -451,6 +528,7 @@ void ViewportPanel::draw(std::string_view instanceId) {
     ViewportState& state = m_session->viewports().at(*index);
     Instance& instance = *m_instances[*index];
     instance.drawn = true;
+    instance.gizmo.reset();
     drawToolbar(instanceId, state);
 
     // The image fills the rest of the window, its target sized in pixels.
@@ -492,6 +570,28 @@ void ViewportPanel::draw(std::string_view instanceId) {
     state.imagePosition = {(origin.x - display.x) * scale.x, (origin.y - display.y) * scale.y};
     state.imageSize = {pixelWidth, pixelHeight};
     state.imageHovered = hovered;
+
+    // The translate gizmo over the image, clipped to it (ADR-0042 rule 24): the handle being dragged,
+    // or else the one under the pointer, is highlighted, hit-tested as the viewport consumer does.
+    if (instance.texture == 0) {
+        return;
+    }
+    const float displayScale = m_ui->displayScale();
+    const std::optional<ViewportGizmo> gizmo = viewportGizmo(*m_session, state, displayScale);
+    if (!gizmo.has_value()) {
+        return;
+    }
+    GizmoHandle highlighted = state.gizmoDrag;
+    if (highlighted == GizmoHandle::None && hovered && ImGui::IsMousePosValid()) {
+        const ImVec2 mouse = ImGui::GetMousePos();
+        highlighted = hitGizmo(gizmo->layout, {(mouse.x - origin.x) * scale.x, (mouse.y - origin.y) * scale.y},
+                               kGizmoGrabTolerance * displayScale);
+    }
+    instance.gizmo = highlighted;
+    ImDrawList& list = *ImGui::GetWindowDrawList();
+    list.PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
+    drawGizmo(list, *gizmo, highlighted, origin, scale, displayScale, m_ui->theme());
+    list.PopClipRect();
 }
 
 void ViewportPanel::newFrame() {
@@ -526,6 +626,9 @@ void ViewportPanel::readPicks(std::uint64_t open) {
         }
         const PickMode mode = instance.pick->mode;
         instance.pick.reset();
+        if (m_session->document().transactions().isOpen()) {
+            continue; // a gizmo drag began since the click: it wins, and selecting would be refused
+        }
         std::array<std::uint32_t, 2> texel{};
         std::memcpy(texel.data(), memory.data() + index * rhi::kTextureCopyOffsetAlignment, sizeof(texel));
         if (const Expected<void> applied = applyPick(*m_session, {.index = texel[0], .generation = texel[1]}, mode);
@@ -750,6 +853,11 @@ std::optional<rhi::TextureDesc> ViewportPanel::colorTarget(std::string_view inst
         return std::nullopt;
     }
     return m_instances[*index]->desc;
+}
+
+std::optional<GizmoHandle> ViewportPanel::drawnGizmo(std::string_view instance) const {
+    const std::optional<std::size_t> index = indexOf(instance);
+    return index.has_value() ? m_instances[*index]->gizmo : std::nullopt;
 }
 
 std::optional<rhi::TextureDesc> ViewportPanel::idTarget(std::string_view instance) const {

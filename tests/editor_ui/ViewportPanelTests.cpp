@@ -7,7 +7,9 @@
 // then draws; a scale set by command or typed into Details re-renders it at its new size; and the id
 // target and click picking (ADR-0042 rules 21 and 22): a click is copied in the next frame and
 // applied kFramesInFlight frames later, a newer click replaces one being read, and hidden viewports
-// and invalidate() treat picks as documented.
+// and invalidate() treat picks as documented; and the translate gizmo (ADR-0042 rules 24 to 26):
+// drawn only with the translate tool, a selection and outside game view, the hovered and the dragged
+// handle highlighted, with no scene render for itself, and a drag through the UI as one undo entry.
 
 #include "ith/editor_ui/ViewportPanel.h"
 
@@ -21,6 +23,8 @@
 #include "ith/editor_core/Keymap.h"
 #include "ith/editor_core/LayoutSession.h"
 #include "ith/editor_core/PanelRegistry.h"
+#include "ith/editor_core/Selection.h"
+#include "ith/editor_core/ViewportGizmo.h"
 #include "ith/editor_core/ViewportInput.h"
 #include "ith/editor_core/Viewports.h"
 #include "ith/editor_ui/DetailsPanel.h"
@@ -30,6 +34,7 @@
 #include "ith/editor_ui/ViewportShaders.h"
 #include "ith/foundation/Log.h"
 #include "ith/foundation/LogRingBuffer.h"
+#include "ith/foundation/Uuid.h"
 #include "ith/math/Transform.h"
 #include "ith/reflection/TypeRegistry.h"
 #include "ith/serialization/Json.h"
@@ -96,8 +101,7 @@ Event keyUp(Key key) {
 // A session with the Viewport panel on the null device, drawn in a fixed window at (100, 50) in
 // window coordinates; the viewport consumer sits under the UI's, as in the editor.
 struct ViewportFixture {
-    ViewportFixture()
-        : session(types()), viewportInput(session.viewports()), ui({.viewports = &viewportInput}, &viewportInput) {
+    ViewportFixture() : session(types()), viewportInput(session), ui({.viewports = &viewportInput}, &viewportInput) {
         Expected<std::unique_ptr<ViewportPanel>> created = ViewportPanel::create(session, *ui.ui, *ui.device,
                                                                                  {.shapesVertex = kShaderCode,
                                                                                   .shapesPixel = kShaderCode,
@@ -932,5 +936,155 @@ TEST_SUITE("editor_ui.viewport") {
         fixture.frame();
         CHECK_FALSE(fixture.panel->picking());
         CHECK_FALSE(selected());
+    }
+
+    TEST_CASE("the gizmo is drawn with the translate tool and a selection, and highlights the hovered handle") {
+        ViewportFixture fixture;
+        fixture.frame();
+        CHECK_FALSE(fixture.panel->drawnGizmo(kInstance).has_value()); // nothing selected
+        REQUIRE(
+            fixture.session.execute("ith.entity.create", addShapeArgs(Shape::Cube, fixture.state().camera)).hasValue());
+        fixture.frame();
+        CHECK(fixture.panel->drawnGizmo(kInstance) == GizmoHandle::None); // drawn, nothing under the pointer
+
+        // The pointer on the Y arrow, hit-tested as the viewport consumer does.
+        const std::optional<ViewportGizmo> gizmo =
+            viewportGizmo(fixture.session, fixture.state(), fixture.ui.ui->displayScale());
+        REQUIRE(gizmo.has_value());
+        const Vec2 arrow = fixture.state().imagePosition + 0.5f * (gizmo->layout.center + gizmo->layout.axisEnds[1]);
+        fixture.ui.events({mouseMoved(arrow.x, arrow.y)});
+        fixture.frame();
+        fixture.frame();
+        CHECK(fixture.panel->drawnGizmo(kInstance) == GizmoHandle::Y);
+        // The gizmo is UI: drawing and highlighting it re-render nothing.
+        CHECK_FALSE(fixture.scenePassesInLastFrame());
+
+        SUBCASE("not with the rotate or scale tool") {
+            REQUIRE(fixture.session.execute("ith.viewport.rotate_tool").hasValue());
+            fixture.frame();
+            CHECK_FALSE(fixture.panel->drawnGizmo(kInstance).has_value());
+            REQUIRE(fixture.session.execute("ith.viewport.scale_tool").hasValue());
+            fixture.frame();
+            CHECK_FALSE(fixture.panel->drawnGizmo(kInstance).has_value());
+        }
+        SUBCASE("not in game view") {
+            REQUIRE(fixture.session.execute("ith.viewport.game_view").hasValue());
+            fixture.frame();
+            CHECK_FALSE(fixture.panel->drawnGizmo(kInstance).has_value());
+        }
+        SUBCASE("not without a selection") {
+            REQUIRE(fixture.session.execute("ith.edit.select_none").hasValue());
+            fixture.frame();
+            CHECK_FALSE(fixture.panel->drawnGizmo(kInstance).has_value());
+        }
+        SUBCASE("not under a floating window, which keeps its clicks") {
+            fixture.overlay = true;
+            fixture.ui.events({mouseMoved(400.0f, 275.0f)});
+            fixture.frame();
+            fixture.frame();
+            CHECK(fixture.panel->drawnGizmo(kInstance) == GizmoHandle::None);
+        }
+    }
+
+    TEST_CASE("a drag on a gizmo handle through the UI moves the shape in one undo entry, highlighted while held") {
+        ViewportFixture fixture;
+        REQUIRE(
+            fixture.session.execute("ith.entity.create", addShapeArgs(Shape::Cube, fixture.state().camera)).hasValue());
+        const Uuid id = fixture.session.document().selection().entities().front();
+        const auto translation = [&fixture, id] {
+            const World& world = fixture.session.document().world();
+            return world.get<const LocalTransform>(world.findByStableId(id))->value.translation;
+        };
+        fixture.frame();
+        const Vec3 before = translation();
+        const std::size_t entries = fixture.session.document().history().cursor();
+        const std::optional<ViewportGizmo> gizmo =
+            viewportGizmo(fixture.session, fixture.state(), fixture.ui.ui->displayScale());
+        REQUIRE(gizmo.has_value());
+        const Vec2 arrow =
+            fixture.state().imagePosition + 0.5f * (gizmo->layout.center + gizmo->layout.axisEnds[1]); // Y
+        fixture.ui.events({mouseMoved(arrow.x, arrow.y)});
+        fixture.frame();
+
+        fixture.ui.events({press(MouseButton::Left, arrow.x, arrow.y)});
+        REQUIRE(fixture.viewportInput.gesture() == ViewportGesture::Gizmo);
+        fixture.ui.events({mouseMoved(arrow.x, arrow.y - 40.0f)});
+        static_cast<void>(fixture.viewportInput.update(1.0f / 60.0f));
+        const std::uint64_t renders = fixture.panel->renders();
+        fixture.frame();
+        CHECK(fixture.panel->drawnGizmo(kInstance) == GizmoHandle::Y);
+        CHECK(fixture.panel->renders() == renders + 1); // the preview changed a value: the scene redraws
+        const Vec3 dragged = translation();
+        CHECK(dragged.y > before.y + 0.05f);
+        CHECK(dragged.x == doctest::Approx(before.x));
+        CHECK(dragged.z == doctest::Approx(before.z));
+
+        fixture.ui.events({release(MouseButton::Left, arrow.x, arrow.y - 40.0f)});
+        fixture.frame();
+        CHECK_FALSE(fixture.viewportInput.holdsDrag());
+        CHECK_FALSE(fixture.state().click.has_value());
+        CHECK(fixture.session.document().history().cursor() == entries + 1);
+        CHECK(fixture.session.document().history().entries().back().name == "Translate");
+        REQUIRE(fixture.session.execute("ith.edit.undo").hasValue());
+        CHECK(translation() == before);
+    }
+
+    TEST_CASE("no stale highlight during an orbit or after Esc, and a waiting pick is dropped when a drag begins") {
+        ViewportFixture fixture;
+        REQUIRE(
+            fixture.session.execute("ith.entity.create", addShapeArgs(Shape::Cube, fixture.state().camera)).hasValue());
+        const std::vector<Uuid> selected = fixture.session.document().selection().entities();
+        fixture.frame();
+        const std::optional<ViewportGizmo> gizmo =
+            viewportGizmo(fixture.session, fixture.state(), fixture.ui.ui->displayScale());
+        REQUIRE(gizmo.has_value());
+        const Vec2 arrow =
+            fixture.state().imagePosition + 0.5f * (gizmo->layout.center + gizmo->layout.axisEnds[1]); // Y
+        const Vec2 corner = fixture.state().imagePosition + Vec2{10.0f, 10.0f};
+
+        SUBCASE("an orbit that passes over a handle highlights nothing") {
+            fixture.ui.events({mouseMoved(corner.x, corner.y)});
+            fixture.frame();
+            Event orbit = press(MouseButton::Left, corner.x, corner.y);
+            orbit.modifiers = KeyModifiers::Alt;
+            fixture.ui.events({orbit});
+            REQUIRE(fixture.viewportInput.gesture() == ViewportGesture::Orbit);
+            fixture.ui.events({mouseMoved(arrow.x, arrow.y)});
+            fixture.frame();
+            fixture.frame();
+            CHECK(fixture.panel->drawnGizmo(kInstance) == GizmoHandle::None);
+            fixture.ui.events({release(MouseButton::Left, arrow.x, arrow.y)});
+        }
+        SUBCASE("after Esc the dead drag, still held, highlights nothing") {
+            fixture.ui.events({mouseMoved(arrow.x, arrow.y)});
+            fixture.frame();
+            fixture.ui.events({press(MouseButton::Left, arrow.x, arrow.y), mouseMoved(arrow.x, arrow.y - 30.0f)});
+            static_cast<void>(fixture.viewportInput.update(1.0f / 60.0f));
+            fixture.frame();
+            CHECK(fixture.panel->drawnGizmo(kInstance) == GizmoHandle::Y);
+            fixture.session.document().transactions().cancelOpen(); // what Esc does through the keymap
+            static_cast<void>(fixture.viewportInput.update(1.0f / 60.0f));
+            fixture.frame();
+            CHECK(fixture.viewportInput.holdsDrag());
+            CHECK(fixture.panel->drawnGizmo(kInstance) == GizmoHandle::None);
+            fixture.ui.events({release(MouseButton::Left, arrow.x, arrow.y - 30.0f)});
+        }
+        SUBCASE("a pick copied before the drag began is dropped, not refused") {
+            fixture.state().click = ViewportClick{.position = {4.0f, 4.0f}, .mode = PickMode::Replace};
+            fixture.frame(); // copies the texel
+            REQUIRE(fixture.panel->picking());
+            fixture.ui.events({mouseMoved(arrow.x, arrow.y)});
+            fixture.frame(); // hovered; the pick waits for its copy's frame
+            REQUIRE(fixture.panel->picking());
+            fixture.ui.events({press(MouseButton::Left, arrow.x, arrow.y)});
+            REQUIRE(fixture.viewportInput.gesture() == ViewportGesture::Gizmo);
+            for (std::uint32_t frame = 0; frame < rhi::kFramesInFlight; ++frame) {
+                fixture.frame();
+            }
+            CHECK_FALSE(fixture.panel->picking());
+            CHECK(fixture.session.document().selection().entities() == selected); // empty space didn't clear
+            fixture.ui.events({release(MouseButton::Left, arrow.x, arrow.y)});
+        }
+        CHECK_FALSE(fixture.viewportInput.holdsDrag());
     }
 }

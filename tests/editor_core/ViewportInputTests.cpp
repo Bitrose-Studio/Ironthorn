@@ -114,7 +114,7 @@ struct Fixture {
     ith::EditorSession session{types()};
     ith::Keymap keymap;
     ith::KeymapConsumer shortcuts{session, keymap};
-    ith::ViewportConsumer viewports{session.viewports()};
+    ith::ViewportConsumer viewports{session};
     ith::Input input;
     ith::ConsumerId keymapId = ith::kNoConsumer;
     ith::ConsumerId viewportId = ith::kNoConsumer;
@@ -511,17 +511,24 @@ TEST_SUITE("editor_core.viewport_input") {
         CHECK_FALSE(click.has_value());
     }
 
-    TEST_CASE("losing focus with LMB held never picks: cancelClicks() drops the synthetic release's click") {
+    TEST_CASE(
+        "losing focus with LMB held never picks: focusLost() before routing drops the synthetic release's click") {
         Fixture fixture;
         const std::optional<ViewportClick>& click = fixture.session.viewports().at(0).click;
         fixture.events({press(MouseButton::Left, 200.0f, 200.0f)});
         REQUIRE(fixture.viewports.gesture() == ViewportGesture::Click);
         // Input releases held buttons on focus loss, at the pointer, before the focus-loss event: a
-        // click by itself, which the editor cancels when it sees WindowFocusLost.
+        // click by itself, unless the editor calls focusLost() before routing that batch.
+        fixture.viewports.focusLost();
         fixture.events({Event{.type = EventType::WindowFocusLost}});
         CHECK_FALSE(fixture.viewports.holdsDrag());
-        CHECK(click.has_value());
-        fixture.viewports.cancelClicks();
+        CHECK_FALSE(click.has_value());
+
+        // A real release earlier in the same batch is cancelled too: the batch counts as a whole.
+        fixture.events({Event{.type = EventType::WindowFocusGained}});
+        fixture.events({press(MouseButton::Left, 200.0f, 200.0f)});
+        fixture.viewports.focusLost();
+        fixture.events({release(MouseButton::Left, 200.0f, 200.0f), Event{.type = EventType::WindowFocusLost}});
         CHECK_FALSE(click.has_value());
 
         // Cancelled while still held, the press's release doesn't click either; every viewport's
@@ -530,7 +537,7 @@ TEST_SUITE("editor_core.viewport_input") {
         fixture.events({press(MouseButton::Left, 650.0f, 150.0f), release(MouseButton::Left, 650.0f, 150.0f)});
         REQUIRE(fixture.session.viewports().at(1).click.has_value());
         fixture.events({press(MouseButton::Left, 200.0f, 200.0f)});
-        fixture.viewports.cancelClicks();
+        fixture.viewports.focusLost();
         CHECK_FALSE(fixture.session.viewports().at(1).click.has_value());
         fixture.events({release(MouseButton::Left, 200.0f, 200.0f)});
         CHECK_FALSE(click.has_value());

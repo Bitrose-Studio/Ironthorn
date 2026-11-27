@@ -38,6 +38,7 @@ namespace ith {
 namespace {
 
 using detail::childrenOf;
+using detail::hasAncestorIn;
 using detail::invalidArgs;
 using detail::optionalString;
 using detail::targets;
@@ -189,17 +190,6 @@ void collectSubtree(const World& world, Entity entity, std::unordered_set<std::u
             collectSubtree(world, child, subtree);
         }
     }
-}
-
-// Whether an ancestor of `entity` is in `set`.
-bool hasAncestorIn(const World& world, Entity entity, const std::unordered_set<std::uint64_t>& set) {
-    for (const auto* link = world.get<const ChildOf>(entity); link != nullptr;
-         link = world.get<const ChildOf>(link->parent)) {
-        if (set.contains(link->parent.bits())) {
-            return true;
-        }
-    }
-    return false;
 }
 
 // The height `bottom` comes to rest at: the highest support at or below it (with the tolerance),

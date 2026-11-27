@@ -367,7 +367,7 @@ writes the same value to all of them.
 
 `ViewportPanel` (`ViewportPanel.h`) draws the editor world from editor core's `Viewports` store
 ([editor core](editor-core.md#viewports)), as [ADR-0042](../decisions/0042-editor-viewport.md)
-rules 8 and 13 to 22 decide. It is the panel `ith.viewport`, instances `ith.viewport.1` to
+rules 8 and 13 to 26 decide. It is the panel `ith.viewport`, instances `ith.viewport.1` to
 `ith.viewport.4`, docked in the centre; the engine's `Default.json` opens instance 1 in the central
 stack.
 
@@ -500,8 +500,29 @@ into the instance's `ViewportState::click` ([editor core](editor-core.md#viewpor
 A click on an instance without a rendered target is dropped. A pick already copied completes
 after its viewport is hidden: it reads the buffer, not the target. Clicks are only an LMB press
 and release on the image without Alt within 4 logical points (editor core); RMB, MMB and the
-Alt gestures never pick, and losing focus with LMB held never picks. A refused selection is logged
-in the category `Viewport`.
+Alt gestures never pick, and losing focus with LMB held never picks. A pick read while a transaction is open
+(a gizmo drag began after the click) is dropped: the drag wins, and the selection would be
+refused. A refused selection is logged in the category `Viewport`.
+
+**Translate gizmo** (ADR-0042 rules 24 to 26). When the instance shows a gizmo
+(`viewportGizmo()`, [editor core](editor-core.md#translate-gizmo): the Translate tool, a
+selection, not game view), `draw()` draws it over the image at the primary's pivot. It uses the
+window's draw list, after the image, clipped to it. So the gizmo is always on top of the scene and
+needs no scene render, while a floating window or a popup over the image (the snap-step list, for
+one) still covers it, as it covers the image's clicks. The geometry is editor core's layout in image
+pixels at the UI's display scale:
+
+- three arrows of 100 points, in the theme's `gizmoAxisX`, `gizmoAxisY` and `gizmoAxisZ`;
+- three plane squares, translucent, each in the colour of the axis normal to it;
+- the handle a drag holds (`ViewportState::gizmoDrag`), or else the one under the pointer while
+  the image is hovered with a valid mouse position, in `gizmoHovered`, hit-tested exactly as the
+  viewport consumer hit-tests a press. While the consumer holds another drag (orbit, pan, fly) or a
+  dead gizmo drag after Esc, the platform backend hides the mouse from ImGui, so nothing is
+  highlighted; the theme colours come from `srgbColor()`, shared with `applyTheme`.
+
+Handles fade as they turn end-on or edge-on and vanish when they can't be grabbed. The viewport
+consumer runs the drag itself; a preview changes the document, so the scene re-renders by the
+redraw rule. `drawnGizmo(instance)` tells tests whether a gizmo was drawn and what it highlighted.
 
 **Toolbar.** Above the image, every control runs a command and changes nothing itself:
 
@@ -595,7 +616,12 @@ passed and 1 when it failed.
   later with the tint redrawn in that frame, Ctrl and Shift on empty space keeping the selection, a
   newer click replacing one being read, a copied pick completing after its viewport is hidden, and
   clicks on hidden viewports, after `invalidate()`, with RMB or as a drag dropped, and UI frames
-  without a device frame not counting toward a pick).
+  without a device frame not counting toward a pick; and the translate gizmo: drawn with the
+  translate tool and a selection and not with the rotate or scale tool, in game view or without a
+  selection, the hovered arrow highlighted without a scene render, no highlight under a floating
+  window, and a drag through the UI highlighted while held, re-rendering the scene, as one
+  "Translate" undo entry; no highlight during an orbit over a handle or after Esc while the dead
+  drag is held, and a pick copied before a drag began dropped without changing the selection).
 - `editor_automation_null` and `editor_automation_gpu` (label `sample`, the second also `gpu`):
   `ironthorn_editor` on SDL's offscreen driver runs `tests/editor/open_edit_save_reopen.json` in a
   fresh project - create, rename, attach, undo, redo, save, new level, open, query - on the null
@@ -623,15 +649,17 @@ passed and 1 when it failed.
   angle and must fade out instead of aliasing. A picking test on each backend renders the default
   scene at framebuffer scale 2 and clicks the cube, Shift + clicks the sphere, Ctrl + clicks the
   cube and clicks empty space: the selection must be the cube, both, the sphere, then nothing. The
-  id target is never shown, so it changes no golden image. The helpers of
+  id target is never shown, so it changes no golden image. A fourth golden image shows the default
+  scene with the cube selected and the translate gizmo over it
+  (`golden/viewport_gizmo_<backend>.ppm`). The helpers of
   the golden tests are in `GoldenImage.h`.
 - `imgui_confined` and `imgui_confined_refuses_imgui_outside_editor_ui` (label `lint`).
 
 ## Not here yet
 
 - The Content Browser and the main toolbar (later P2 steps); asset pickers in Details.
-- In the viewport: the translate gizmo and the selection outline (ADR-0042 rules 23 to 26), and
-  marquee selection; the active viewport for Add Shape is always `ith.viewport.1`.
+- In the viewport: the rotate and scale gizmos and the gizmo's centre handle, the selection
+  outline, and marquee selection; the active viewport for Add Shape is always `ith.viewport.1`.
 - A shader cache for the UI and viewport shaders (with the shader cache of ADR-0011 rule 8).
 - File dialogs, and a Quit command with the Save / Don't Save / Cancel dialog.
 - Right-to-left and complex scripts, which ImGui can't shape (P4 brings shaped text).

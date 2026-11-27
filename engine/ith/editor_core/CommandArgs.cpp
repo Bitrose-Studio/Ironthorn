@@ -12,7 +12,9 @@
 #include "ith/serialization/TextArchive.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 namespace ith::detail {
@@ -164,6 +166,16 @@ Uuid stableIdOf(const World& world, Entity entity) {
 const std::vector<Entity>* childrenOf(const World& world, Entity entity) {
     const auto* children = world.get<const Children>(entity);
     return children != nullptr ? &children->entities : nullptr;
+}
+
+bool hasAncestorIn(const World& world, Entity entity, const std::unordered_set<std::uint64_t>& set) {
+    for (const auto* link = world.get<const ChildOf>(entity); link != nullptr;
+         link = world.get<const ChildOf>(link->parent)) {
+        if (set.contains(link->parent.bits())) {
+            return true;
+        }
+    }
+    return false;
 }
 
 namespace {

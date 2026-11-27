@@ -187,8 +187,9 @@ programmer error and leave the camera unchanged.
 `ViewportState` per viewport panel instance, `ith.viewport.1` to `ith.viewport.4`, whether the
 panel is open or not: the `camera`, the `gameView` flag and the image rectangle the panel reports
 (`imagePosition`, `imageSize` in window pixels; `aspect()` is 1 until the panel has drawn) and
-whether the image is hovered with nothing on top of it (`imageHovered`), and the last `click` on
-the image that the panel hasn't taken yet (see [Click picking](#click-picking)). Next to
+whether the image is hovered with nothing on top of it (`imageHovered`), the last `click` on
+the image that the panel hasn't taken yet (see [Click picking](#click-picking)), and the gizmo
+handle a drag in it holds (`gizmoDrag`, see [Translate gizmo](#translate-gizmo)). Next to
 them is one editor-wide state: the transform tool (translate at first), the gizmo space (world) and
 snapping (on, 0.1 m). Panels draw the store, the commands below change it and tests drive it
 directly. None of it dirties the level or makes an undo entry.
@@ -267,17 +268,19 @@ viewports', the keymap's (ADR-0042 rule 8 amends ADR-0029 rule 7). Each frame, a
 
 ```cpp
 ith::KeymapConsumer shortcuts(session, keymap);
-ith::ViewportConsumer viewportInput(session.viewports());
+ith::ViewportConsumer viewportInput(session);
 input.addConsumer({.window = id, .layer = ith::ConsumerLayer::Editor, .consumer = &shortcuts});
 input.addConsumer({.window = id, .layer = ith::ConsumerLayer::Editor, .consumer = &viewportInput});
 // ... EditorUi::create({..., .viewports = &viewportInput}) ...
 viewportInput.setPixelDensity(pixelDensity); // window pixels per window coordinate
 viewportInput.setDisplayScale(window.displayScale()); // the click slop's points to pixels
+if (/* the batch holds WindowFocusLost for the window */) {
+    viewportInput.focusLost(); // before routing: the synthetic release neither picks nor commits
+}
 input.processEvents(events, platform.pumpTimeNs());
 if (viewportInput.update(deltaSeconds)) {
     idle.requestFrame(); // a camera moved: keep drawing, also while a held W sends no events
 }
-// on WindowFocusLost for the window: viewportInput.cancelClicks();
 ```
 
 It routes by the image rectangles the panels reported to the `Viewports` store in the last frame.
@@ -293,7 +296,8 @@ Alt at the press decide the gesture:
 | Alt + RMB | Dolly toward the pivot |
 | Alt + LMB | Orbit around the pivot |
 | MMB | Pan |
-| LMB | A click candidate: a click picks ([Click picking](#click-picking)); the gizmo will start here |
+| LMB, with or without Alt, on a gizmo handle | A gizmo drag ([Translate gizmo](#translate-gizmo)); checked first |
+| LMB | A click candidate: a click picks ([Click picking](#click-picking)) |
 | The wheel, without a drag | Dolly by steps |
 
 **The letter-key rule.** While fly is active, the consumer takes every key press without Ctrl or
@@ -341,13 +345,16 @@ takes the click, reads the entity under it back from its id target, and applies 
 `kFramesInFlight` frames later, in the render phase: the viewport's tint changes in that frame, the
 Outliner and Details a frame later ([editor UI](editor-ui.md#viewport)).
 
-**Focus loss never picks.** On focus loss `Input` synthesises the release of every held button
-before it delivers `WindowFocusLost`; for a held LMB press that release would be a click. The
-application calls `cancelClicks()` when it sees `WindowFocusLost` for the window, before the panel
-renders: it drops every viewport's waiting click and the held press's candidate (ADR-0047 item 2).
+**Focus loss never picks or moves anything.** On focus loss `Input` synthesises the release of
+every held button before it delivers `WindowFocusLost`. For a held LMB press that release would be
+a click, and for a gizmo drag a commit. So when a batch of events holds `WindowFocusLost` for the
+window, the application calls `focusLost()` before `Input` routes the batch. It cancels a held
+gizmo drag (removing the copies of an Alt drag), and drops every viewport's waiting click and the
+held press's candidate (ADR-0047 item 2). The batch counts as a whole: a real release just before
+the focus loss in the same batch is cancelled too.
 
-The translate gizmo (ADR-0042 rule 25) will hit-test its handles at the press first. Only a press
-that misses them stays a click candidate.
+The translate gizmo hit-tests its handles at the press first ([Translate gizmo](#translate-gizmo)).
+Only a press that misses them, or lands on the pivot itself, stays a click candidate.
 
 `ViewportPick.h` holds the GPU-free half (ADR-0042 rules 21 and 22):
 
@@ -363,6 +370,102 @@ that misses them stays a click candidate.
 | A live entity with a stable id | Selects it alone | Toggles it | Adds it as primary |
 | A stale entity (despawned since the frame was drawn: `isAlive` fails) | Nothing | Nothing | Nothing |
 | An entity without a `StableId` (ADR-0037 rule 5) | Nothing | Nothing | Nothing |
+
+### Translate gizmo
+
+The translate gizmo ([ADR-0042](../decisions/0042-editor-viewport.md) rules 23 to 26) has two
+headless halves: the pure math in `Gizmo.h`, and the session side in `ViewportGizmo.h`, which the
+viewport consumer runs. The editor UI only draws it ([editor UI](editor-ui.md#viewport)).
+
+**The math** (`Gizmo.h`; pure, thread-safe). Pixels are image pixels: window pixels from the
+image's top-left corner.
+
+- `pickRay(camera, imageSize, pixel)` is the ray from the camera through a pixel, and
+  `projectToImage(camera, imageSize, point)` its inverse. Both use the viewport's projection: the
+  horizontal `fovX` across the image and the derived vertical angle up it
+  ([ADR-0046](../decisions/0046-editor-viewport-horizontal-field-of-view.md)).
+- `closestOnAxis(ray, origin, axis)` and `closestOnPlane(ray, origin, normal)` give the point an
+  axis line or a plane offers a ray. A ray within about half a degree of parallel, or one whose
+  point lies behind the camera, gives none.
+- `gizmoFrame(worldMatrix, space)` is the gizmo's origin and axes: the world's (`GizmoSpace::World`)
+  or the matrix's rotation with scale and shear removed (`Local`; a collapsed matrix falls back to
+  the world's axes).
+- `layoutGizmo(camera, imageSize, frame, arrowPixels)` places the handles on screen: three arrows
+  `arrowPixels` long when seen side-on (`kGizmoArrowLength`, 100 points, times the display
+  scale), and three plane squares (XY, YZ, XZ) spanning 0.2 to 0.45 of the arrow along their two
+  axes. Each handle has an opacity: an axis whose angle to the view direction has a sine below
+  `kGizmoHiddenFacing` (0.1), or a plane whose normal's cosine to it is below that, is hidden and
+  can't be grabbed; it fades in up to `kGizmoOpaqueFacing` (0.2). No layout when the origin is
+  behind the near plane.
+- `hitGizmo(layout, pixel, tolerance)` is the handle a press grabs: nothing within the tolerance of
+  the centre (there is no centre handle in P2, so a click on the pivot still picks), else the
+  nearest visible arrow within the tolerance (`kGizmoGrabTolerance`, 6 points, times the display
+  scale), else the first visible plane square that contains the pixel.
+- `grabGizmo(handle, frame, ray)` starts a drag at the point the press's ray grabs;
+  `dragGizmo(grab, ray)` is the world-space translation since then, along the axis or within the
+  plane. A ray that grabs no point gives none, so the drag keeps its last translation, and the
+  translation is clamped to `kGizmoMaxReach` (50) times the gizmo's distance from the camera.
+  Nothing explodes near the horizon.
+- `snapGizmo(delta, frame, step)` rounds each component along the frame's axes to the step, so
+  snapping happens in gizmo space.
+
+**The session side** (`ViewportGizmo.h`). `viewportGizmo(session, state, displayScale)` is the
+gizmo a viewport shows, or none: it needs the Translate tool, a live primary selected entity, no
+game view, an image with area, and a level that is neither playing nor being opened. It is also
+hidden while another interaction's transaction is open (a Details field being typed into), since
+a drag would be refused; a gizmo drag's own transaction keeps it shown. It sits at
+the primary's world position (`World::worldMatrixOf`, so it follows a drag at once) with the axes
+of `Viewports::gizmoSpace()`.
+
+`GizmoDrag` is one drag, one transaction named "Translate" (ADR-0037 rule 6, the Details
+pattern):
+
+```cpp
+ith::Expected<ith::GizmoDrag> drag = ith::GizmoDrag::begin(session, handle, gizmo.frame, pressRay, alt);
+drag->preview(ray); // whenever the pointer moved
+drag->commit();     // one undo entry if it moved; cancel() or Esc puts everything back
+```
+
+- `begin` opens the transaction. With Alt at the press it first runs the duplicate command's
+  function inside it, so the copies become the selection and are what moves; the registry's checks
+  for `ith.edit.duplicate` run before. That function runs outside the registry's depth counter, so
+  it must not run registry commands itself (recorded at `duplicate()`). `begin` refuses during
+  another interaction, while playing or opening, with an empty selection, and when the press grabs
+  nothing.
+- The moved entities are the selected roots: a selected entity whose ancestor is also selected
+  moves with it. An entity without a `LocalTransform` is skipped, and so is one whose parent's
+  matrix collapses a direction. That test is scale-invariant: the determinant of the parent's 3x3
+  with unit columns must be at least 1e-6, computed in double, so a tiny but uniform scale still
+  moves and a zero scale doesn't. Roots skipped for their parent are logged once per drag (Info,
+  `Gizmo`).
+- `preview` sets each root's `LocalTransform.translation` to its translation at the press plus the
+  world-space delta in its parent's space (the inverse of the parent's world 3x3), so it moves the
+  same in the world under rotated and scaled parents. The delta is snapped when the store's snapping
+  is on, at its current step. A delta equal to the last applied one applies nothing. If any root's
+  translation, at the press or moved, isn't finite, the whole frame is skipped and the last
+  position stays, so the roots never move apart.
+- `commit` records the entry only when a non-zero delta was applied. Otherwise (a press and
+  release without a move, nothing that can move, a drag back to the start) it cancels, so an Alt
+  press leaves no copies and no "Translate" entry.
+- Esc reaches the keymap consumer, which cancels the open transaction
+  (`Transactions::cancelOpen`): the world and the selection come back, the copies of an Alt drag
+  are removed, and `preview` and `commit` then do nothing.
+
+**In the consumer.** An LMB press on an image, with or without Alt, first hit-tests the handles of
+`viewportGizmo()` at `setDisplayScale()`. A hit starts the `Gizmo` gesture and `GizmoDrag::begin`;
+`ViewportState::gizmoDrag` names the handle while it is held, so the panel highlights it. A drag
+that begins drops every viewport's waiting click, which would otherwise select inside the drag's
+transaction and be refused. The pointer's motion is stored, and `update()` previews its latest
+position once per frame. The release previews its own position and commits. After Esc, the next
+`update()` clears `gizmoDrag`, and the drag stays held, moving nothing, until the release; a
+transaction opened or an undo made before that release is left alone. A drag that can't begin is
+logged as a warning in the `Gizmo` category (except a press that grabs no point of the handle, an
+expected fallback), and the press starts the gesture it would have started without the gizmo. A
+drag never clicks. `focusLost()` cancels a held drag ([Click picking](#click-picking)).
+
+**Not yet.** Each preview frame applies one patch per root, and `Transactions::merge` compares it
+with every earlier inverse of the drag, so a drag of many roots costs quadratic work per frame.
+Indexing the collected inverse by entity is follow-up work.
 
 ## View models
 
@@ -640,8 +743,31 @@ runner serves the headless tests and the editor's `--automation` run.
   orbit at pixel density 2 matching density 1; clicks: the press's position and modifiers (Ctrl,
   Shift, both), one per viewport, a newer one replacing the last, the slop (a drag past it, even
   back at the press, and a far release don't click; 4 pixels at display scale 1, 8 at 2, the
-  pixel density not counting), focus loss with LMB held dropped by `cancelClicks()`, and RMB,
+  pixel density not counting), focus loss with LMB held dropped by `focusLost()` before routing
+  (also a real release in the same batch), and RMB,
   MMB, the Alt gestures, presses during another drag and presses outside every image never clicking;
+- the gizmo math tests (`GizmoTests.cpp`): the pick ray and the projection against the viewport's
+  matrices and the horizontal field of view at wide and tall aspects; nearly parallel and behind
+  rays on axes and planes; the world and local frames (scale removed, a zero scale falling back);
+  the arrows' constant length on screen at any distance; end-on axes and edge-on planes hidden,
+  ungrabbable and fading in; the hit test's order, tolerance and empty centre; axis and plane
+  drags; the reach clamp toward the horizon; snapping in world and local frames;
+- the gizmo tests (`ViewportGizmoTests.cpp`), through a real `Input` with the keymap and viewport
+  consumers: where the gizmo shows (the primary's world position, display scale 2) and where not
+  (rotate and scale tools, game view, playing, no image, no selection); local space; a drag
+  previewed once per frame and one "Translate" entry on the release, with undo and redo; a press
+  and release without a move recording nothing; Esc restoring the world and recording nothing;
+  Alt duplicating and dragging the copies in one entry, and Esc removing them; presses off the
+  handles still clicking or orbiting, and the pivot clicking; a handle's place clicking with
+  another tool, in game view and from a consumer without the gizmo; snapping on and off; plane
+  drags; a child under a rotated, scaled parent and a selected child of a selected parent; a drag
+  released outside the image; the gizmo hidden during another interaction; an Alt press without a
+  move leaving no copy or entry (also repeated), and an Alt drag of a primary without a
+  `LocalTransform` recording nothing; redo of an Alt drag; several roots; focus loss cancelling a
+  plain and an Alt drag; waiting clicks dropped when a drag begins; after Esc, a new transaction, a
+  duplicate or an undo before the release left alone; a NaN root and an overflowing root skipping
+  the whole frame; a tiny-scale parent moving and a zero-scale one skipped; and `GizmoDrag`'s
+  refusals, its unchanged deltas and its cancel-on-destruction;
 - the picking tests (`ViewportPickTests.cpp`): an entity's texel and back (slot 0, the largest
   generation, the empty texel), replace, toggle and add on hits, empty space with each mode, and
   stale hits (a despawned entity, its reused slot, an unused slot) and entities without a stable id

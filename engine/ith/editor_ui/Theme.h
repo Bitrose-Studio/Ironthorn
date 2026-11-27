@@ -53,6 +53,12 @@ struct ThemeTokens {
     ThemeColor gridAxisX{0xD84545, 230};
     ThemeColor gridAxisZ{0x4A78E0, 230};
     ThemeColor viewportSelection{0xF0A030};
+    // The translate gizmo (ADR-0042 rule 24): its X, Y and Z handles (a plane square takes the
+    // colour of the axis normal to it), and the handle under the pointer or being dragged.
+    ThemeColor gizmoAxisX{0xE8463C};
+    ThemeColor gizmoAxisY{0x5CCB3E};
+    ThemeColor gizmoAxisZ{0x3E7CF0};
+    ThemeColor gizmoHovered{0xFFD94A};
 
     // The base type size, and the monospace size, in units.
     float fontSize = 14.0f;
@@ -82,6 +88,10 @@ struct ThemeTokens {
 [[nodiscard]] inline ThemeTokens defaultDarkTheme() {
     return {};
 }
+
+// The colour as its sRGB-encoded channels and alpha in 0..1, as ImGui's style and vertex colours take
+// them (the renderer decodes them, ADR-0029 rule 11).
+[[nodiscard]] std::array<float, 4> srgbColor(ThemeColor color);
 
 // The colour as linear RGB and alpha in 0..1: each sRGB channel decoded, the alpha scaled. For clear
 // colours of sRGB targets and colours shaders blend in linear space.

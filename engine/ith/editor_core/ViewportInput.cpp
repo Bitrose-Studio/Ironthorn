@@ -1,7 +1,11 @@
 #include "ith/editor_core/ViewportInput.h"
 
+#include "ith/editor_core/EditorSession.h"
+#include "ith/editor_core/Gizmo.h"
+#include "ith/editor_core/ViewportGizmo.h"
 #include "ith/editor_core/Viewports.h"
 #include "ith/foundation/Assert.h"
+#include "ith/foundation/Log.h"
 #include "ith/math/Types.h"
 #include "ith/platform_events/Event.h"
 
@@ -9,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <optional>
+#include <utility>
 
 namespace ith {
 
@@ -48,6 +53,7 @@ CameraInput inputFor(ViewportGesture gesture) noexcept {
             input.mmb = true;
             break;
         case ViewportGesture::Click:
+        case ViewportGesture::Gizmo:
             break;
     }
     return input;
@@ -74,15 +80,21 @@ bool withinSlop(Vec2 start, float x, float y, float scale) noexcept {
 
 } // namespace
 
+ViewportConsumer::ViewportConsumer(EditorSession& session) noexcept
+    : m_session(&session), m_viewports(&session.viewports()) {}
+
 InputReply ViewportConsumer::onInputEvent(const Event& event) {
     switch (event.type) {
         case EventType::MouseButtonDown:
             return onMouseButtonDown(event);
         case EventType::MouseButtonUp:
             if (m_drag.has_value() && event.mouseButton == m_drag->button) {
+                const Drag drag = *m_drag;
+                if (drag.gesture == ViewportGesture::Gizmo) {
+                    endGizmo(drag.viewport, Vec2{event.x, event.y});
+                }
                 // A click candidate that stayed within the slop picks (ADR-0042 rule 22); the panel
                 // takes the click in its next render.
-                const Drag drag = *m_drag;
                 m_drag.reset();
                 m_speedWheel = 0.0f;
                 if (drag.click.has_value() && withinSlop(drag.start, event.x, event.y, m_displayScale)) {
@@ -92,7 +104,11 @@ InputReply ViewportConsumer::onInputEvent(const Event& event) {
             return InputReply::NotConsumed; // Input ignores the reply to a release
         case EventType::MouseMoved:
             if (m_drag.has_value()) {
-                if (m_drag->gesture != ViewportGesture::Click) {
+                if (m_drag->gesture == ViewportGesture::Gizmo) {
+                    // Previewed once per frame, in update().
+                    m_gizmoPointer = Vec2{event.x, event.y};
+                    m_gizmoMoved = true;
+                } else if (m_drag->gesture != ViewportGesture::Click) {
                     CameraInput input = inputFor(m_drag->gesture);
                     // Fly's look motion is relative mode's raw motion; other drags move in window
                     // coordinates, the same on every display scale.
@@ -153,20 +169,80 @@ InputReply ViewportConsumer::onMouseButtonDown(const Event& event) {
     if (!viewport.has_value()) {
         return InputReply::NotConsumed;
     }
-    const std::optional<ViewportGesture> gesture =
-        gestureFor(event.mouseButton, hasModifiers(event.modifiers, KeyModifiers::Alt));
+    const bool alt = hasModifiers(event.modifiers, KeyModifiers::Alt);
+    // A press on a gizmo handle drags it, before it can be a click candidate or an orbit.
+    if (event.mouseButton == MouseButton::Left && beginGizmo(*viewport, Vec2{event.x, event.y}, alt)) {
+        return InputReply::Consumed;
+    }
+    const std::optional<ViewportGesture> gesture = gestureFor(event.mouseButton, alt);
     if (gesture.has_value()) {
         m_drag = Drag{
             .viewport = *viewport, .button = event.mouseButton, .gesture = *gesture, .start = Vec2{event.x, event.y}};
         m_speedWheel = 0.0f;
         if (*gesture == ViewportGesture::Click) {
-            // A candidate until its release (rule 22). The gizmo (rule 25) will hit-test its handles
-            // here first and start its drag instead.
+            // A candidate until its release (rule 22).
             m_drag->click = ViewportClick{.position = m_drag->start - m_viewports->at(*viewport).imagePosition,
                                           .mode = pickModeFor(event.modifiers)};
         }
     }
     return InputReply::Consumed;
+}
+
+bool ViewportConsumer::beginGizmo(std::size_t index, Vec2 press, bool alt) {
+    ViewportState& state = m_viewports->at(index);
+    const std::optional<ViewportGizmo> gizmo = viewportGizmo(*m_session, state, m_displayScale);
+    if (!gizmo.has_value()) {
+        return false;
+    }
+    const Vec2 pixel = press - state.imagePosition;
+    const GizmoHandle handle = hitGizmo(gizmo->layout, pixel, kGizmoGrabTolerance * m_displayScale);
+    if (handle == GizmoHandle::None) {
+        return false;
+    }
+    Expected<GizmoDrag> drag =
+        GizmoDrag::begin(*m_session, handle, gizmo->frame, pickRay(state.camera, state.imageSize, pixel), alt);
+    if (!drag) {
+        // A press that grabs no point of the handle (nearly parallel to it) is an expected fallback.
+        if (drag.error().code != "editor.gizmo.no_grab") {
+            ITH_LOG_WARNING(Gizmo, "{}", drag.error().message);
+        }
+        return false;
+    }
+    m_gizmo.emplace(std::move(*drag));
+    m_gizmoMoved = false;
+    m_drag = Drag{.viewport = index, .button = MouseButton::Left, .gesture = ViewportGesture::Gizmo, .start = press};
+    m_speedWheel = 0.0f;
+    state.gizmoDrag = handle;
+    // A click waiting to be picked would select during the drag's transaction, which refuses it.
+    for (std::size_t viewport = 0; viewport < kMaxViewports; ++viewport) {
+        m_viewports->at(viewport).click.reset();
+    }
+    return true;
+}
+
+void ViewportConsumer::endGizmo(std::size_t viewport, Vec2 release) {
+    // The release's own position counts, then one undo entry (ADR-0042 rule 25).
+    previewGizmo(release);
+    if (m_gizmo.has_value()) {
+        m_gizmo->commit();
+        m_gizmo.reset();
+    }
+    m_gizmoMoved = false;
+    m_viewports->at(viewport).gizmoDrag = GizmoHandle::None;
+}
+
+void ViewportConsumer::previewGizmo(Vec2 pointer) {
+    if (!m_gizmo.has_value() || !m_drag.has_value()) {
+        return;
+    }
+    const ViewportState& state = m_viewports->at(m_drag->viewport);
+    if (!hasImageArea(state.imageSize)) {
+        return; // the image is gone (a closed panel): nothing to aim through
+    }
+    const Ray ray = pickRay(state.camera, state.imageSize, pointer - state.imagePosition);
+    if (const Expected<void> previewed = m_gizmo->preview(ray); !previewed) {
+        ITH_LOG_WARNING(Gizmo, "{}", previewed.error().message);
+    }
 }
 
 InputReply ViewportConsumer::onKeyDown(const Event& event) {
@@ -201,7 +277,18 @@ bool* ViewportConsumer::flyKey(Key key) noexcept {
     }
 }
 
-bool ViewportConsumer::update(float deltaSeconds) noexcept {
+bool ViewportConsumer::update(float deltaSeconds) {
+    if (m_gizmo.has_value() && m_drag.has_value()) {
+        const std::size_t viewport = m_drag->viewport;
+        if (m_gizmoMoved) {
+            m_gizmoMoved = false;
+            previewGizmo(m_gizmoPointer);
+        }
+        if (m_gizmo.has_value() && !m_gizmo->active()) {
+            // Esc cancelled it: nothing is held any more, though the drag waits for its release.
+            m_viewports->at(viewport).gizmoDrag = GizmoHandle::None;
+        }
+    }
     const bool valid = std::isfinite(deltaSeconds) && deltaSeconds >= 0.0f;
     ITH_ASSERT_MSG(valid, "the viewport frame time must be finite and non-negative");
     const bool moving =
@@ -240,7 +327,15 @@ void ViewportConsumer::setDisplayScale(float scale) noexcept {
     }
 }
 
-void ViewportConsumer::cancelClicks() noexcept {
+void ViewportConsumer::focusLost() {
+    // The held gizmo drag is cancelled (its Alt copies removed); the release Input then synthesises
+    // finds its transaction ended and records nothing.
+    if (m_gizmo.has_value()) {
+        m_gizmo->cancel();
+        if (m_drag.has_value()) {
+            m_viewports->at(m_drag->viewport).gizmoDrag = GizmoHandle::None;
+        }
+    }
     for (std::size_t index = 0; index < kMaxViewports; ++index) {
         m_viewports->at(index).click.reset();
     }

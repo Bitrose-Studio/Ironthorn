@@ -53,6 +53,7 @@
 #include "ith/rhi_select/CreateDevice.h"
 #include "ith/shader_compiler/ShaderCompiler.h"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
@@ -457,11 +458,10 @@ struct StateWatch {
     }
 };
 
-// Applies an event of the editor's window: a new pixel size resizes the swapchain, a new display
-// scale rescales the UI, and a focus loss cancels viewport clicks (Input released the held buttons
-// just before it; that release must not pick, ADR-0047 item 2).
+// Applies an event of the editor's window: a new pixel size resizes the swapchain, and a new display
+// scale rescales the UI.
 void applyWindowEvent(const ith::Event& event, const ith::Window& window, RenderTarget& target, ith::EditorUi& ui,
-                      ith::DockLayout& dock, ith::ViewportConsumer& viewportInput) {
+                      ith::DockLayout& dock) {
     switch (event.type) {
         case ith::EventType::WindowPixelSizeChanged:
             target.resize({.width = event.width, .height = event.height});
@@ -470,11 +470,24 @@ void applyWindowEvent(const ith::Event& event, const ith::Window& window, Render
             ui.setDisplayScale(window.displayScale());
             dock.displayScaleChanged();
             break;
-        case ith::EventType::WindowFocusLost:
-            viewportInput.cancelClicks();
-            break;
         default:
             break;
+    }
+}
+
+// Readies the viewport consumer for routing the batch `events` of `window`: drags move cameras in
+// window coordinates and the click slop is in logical points, the same on every display scale; and a
+// focus loss in the batch cancels a held gizmo drag and the clicks before Input synthesises the
+// release of held buttons, which must neither pick nor commit (ADR-0047 item 2). The batch counts as
+// a whole, so a real release just before the focus loss in the same batch is cancelled too.
+void prepareViewportInput(ith::ViewportConsumer& viewportInput, const ith::Window& window,
+                          std::span<const ith::Event> events) {
+    viewportInput.setPixelDensity(pixelDensity(window));
+    viewportInput.setDisplayScale(window.displayScale());
+    if (std::ranges::any_of(events, [&window](const ith::Event& event) {
+            return event.type == ith::EventType::WindowFocusLost && event.window == window.id();
+        })) {
+        viewportInput.focusLost();
     }
 }
 
@@ -531,7 +544,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     ith::rg::ResourcePool pool(device);
     ith::Input input;
     ith::KeymapConsumer shortcuts(session, keymap);
-    ith::ViewportConsumer viewportInput(session.viewports());
+    ith::ViewportConsumer viewportInput(session);
     // The keymap consumer first, then the viewports': the UI's consumer, added last, sits above both,
     // and the viewports above the keymap (ADR-0029 rule 7, ADR-0042 rule 8).
     const ith::ConsumerId shortcutConsumer =
@@ -606,17 +619,14 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         const std::span<const ith::Event> events =
             timeout.count() == 0 ? platform.pumpEvents() : platform.waitEvents(timeout);
         const std::uint32_t jobsRun = jobs.runMainThreadJobs();
-        // Viewport drags move cameras in window coordinates, the same on every display scale.
-        viewportInput.setPixelDensity(pixelDensity(window));
-        // The click slop is in logical points, the same physical size on every platform.
-        viewportInput.setDisplayScale(window.displayScale());
+        prepareViewportInput(viewportInput, window, events);
         input.processEvents(events, platform.pumpTimeNs());
         for (const ith::Event& event : events) {
             if (event.type == ith::EventType::QuitRequested ||
                 (event.type == ith::EventType::WindowCloseRequested && event.window == window.id())) {
                 running = !mayClose(session, shell, closeWarned);
             } else if (event.window == window.id()) {
-                applyWindowEvent(event, window, target, ui, dock, viewportInput);
+                applyWindowEvent(event, window, target, ui, dock);
             }
         }
         applyInput(input, window);

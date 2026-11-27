@@ -1,6 +1,6 @@
 #pragma once
 
-// ith::ViewportPanel: the Viewport panel (ADR-0042 rules 8 and 13 to 20, ADR-0040 rule 3), drawn
+// ith::ViewportPanel: the Viewport panel (ADR-0042 rules 8 and 13 to 26, ADR-0040 rule 3), drawn
 // from editor_core's Viewports store: a toolbar, and the editor world rendered into a texture the
 // panel shows as an image.
 //
@@ -76,6 +76,17 @@
 // after the click; while a pick waits, picking() is true and the editor keeps drawing frames. A
 // click on an instance without a rendered target is dropped. A refused selection is logged as a
 // warning in the "Viewport" category.
+//
+// The translate gizmo (ADR-0042 rules 24 to 26): when the instance shows one (viewportGizmo(),
+// ViewportGizmo.h: the Translate tool, a selection, not game view), draw() draws it over the image,
+// on the window's draw list after the image and clipped to it, so it is always on top of the scene
+// and needs no scene render, while floating windows and popups still cover it. Its geometry is the
+// layout editor core computes in image pixels at the UI's display scale (arrows kGizmoArrowLength
+// points long): three arrows in the theme's gizmoAxisX, gizmoAxisY and gizmoAxisZ, and three plane
+// squares in the colour of the axis normal to each, translucent; handles fade as they turn end-on or
+// edge-on and vanish when they can't be grabbed. The handle a drag holds (ViewportState::gizmoDrag),
+// or else the one under the pointer while the image is hovered, hit-tested as the viewport consumer
+// hit-tests a press, is drawn in gizmoHovered. The viewport consumer runs the drag itself.
 //
 // The toolbar runs commands; nothing in it changes state directly: the transform tool
 // (ith.viewport.translate_tool, rotate_tool, scale_tool), snapping and its step
@@ -185,6 +196,10 @@ public:
 
     // The same for `instance`'s id target, which exists exactly when the colour target does.
     [[nodiscard]] std::optional<rhi::TextureDesc> idTarget(std::string_view instance) const;
+
+    // The handle highlighted in the translate gizmo `instance` drew in its last draw() (None when
+    // none was), or std::nullopt when it drew no gizmo.
+    [[nodiscard]] std::optional<GizmoHandle> drawnGizmo(std::string_view instance) const;
 
     // How many times addRenderPasses() added scene passes, over every instance, since creation.
     [[nodiscard]] std::uint64_t renders() const noexcept { return m_renders; }

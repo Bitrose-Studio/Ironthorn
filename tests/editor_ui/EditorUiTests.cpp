@@ -6,9 +6,11 @@
 #include "ith/editor_ui/EditorUi.h"
 
 #include "ith/editor_core/EditorCamera.h"
+#include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/ViewportInput.h"
 #include "ith/editor_core/Viewports.h"
 #include "ith/editor_ui/Theme.h"
+#include "ith/reflection/TypeRegistry.h"
 
 #include "AssertCapture.h"
 #include "EditorUiTestSupport.h"
@@ -283,12 +285,14 @@ TEST_SUITE("editor_ui.platform") {
     }
 
     TEST_CASE("over a viewport image the mouse goes on to the viewport consumer, and a held drag keeps it") {
-        Viewports viewports;
+        const TypeRegistry types;
+        EditorSession session(types);
+        Viewports& viewports = session.viewports();
         // Inside the ImGui window, which wants the mouse over all of it.
         viewports.at(0).imagePosition = {150.0f, 150.0f};
         viewports.at(0).imageSize = {200.0f, 200.0f};
         viewports.at(0).imageHovered = true;
-        ViewportConsumer viewportInput(viewports);
+        ViewportConsumer viewportInput(session);
         UiFixture fixture({.viewports = &viewportInput}, &viewportInput);
         fixture.events({mouseMoved(200.0f, 200.0f)});
         fixture.frame(drawWindow);
@@ -336,11 +340,13 @@ TEST_SUITE("editor_ui.platform") {
     }
 
     TEST_CASE("during a held viewport drag ImGui sees no presses, motion or wheel") {
-        Viewports viewports;
+        const TypeRegistry types;
+        EditorSession session(types);
+        Viewports& viewports = session.viewports();
         viewports.at(0).imagePosition = {150.0f, 150.0f};
         viewports.at(0).imageSize = {200.0f, 200.0f};
         viewports.at(0).imageHovered = true;
-        ViewportConsumer viewportInput(viewports);
+        ViewportConsumer viewportInput(session);
         UiFixture fixture({.viewports = &viewportInput}, &viewportInput);
         // A second window with a button and more lines than fit, so the wheel scrolls it.
         int clicks = 0;
@@ -404,11 +410,13 @@ TEST_SUITE("editor_ui.platform") {
     }
 
     TEST_CASE("losing focus during fly ends relative mode on the next frame") {
-        Viewports viewports;
+        const TypeRegistry types;
+        EditorSession session(types);
+        Viewports& viewports = session.viewports();
         viewports.at(0).imagePosition = {150.0f, 150.0f};
         viewports.at(0).imageSize = {200.0f, 200.0f};
         viewports.at(0).imageHovered = true;
-        ViewportConsumer viewportInput(viewports);
+        ViewportConsumer viewportInput(session);
         UiFixture fixture({.viewports = &viewportInput}, &viewportInput);
         fixture.events({press(MouseButton::Right, 200.0f, 200.0f)});
         REQUIRE(viewportInput.flying());

@@ -1,9 +1,9 @@
 # The editor's core (ADR-0029 rule 1, ADR-0037, ADR-0040, ADR-0042): the editor document and its
 # world, commands and their registry, transactions and the undo history, selection, change counters,
 # the keymap, the automation runner, the panel registry and layouts, the viewports (cameras, input
-# routing, click picking, tools, Focus, Snap to Floor, Add Shape), and the view models of the Outliner and Details
-# panels. Headless: no ImGui, no window, no GPU, so it is tested on its own and under sanitizers.
-# editor_ui draws its state and issues its commands.
+# routing, click picking, the translate gizmo, tools, Focus, Snap to Floor, Add Shape), and the view
+# models of the Outliner and Details panels. Headless: no ImGui, no window, no GPU, so it is tested
+# on its own and under sanitizers. editor_ui draws its state and issues its commands.
 ith_add_module(editor_core
     LAYER editor
     KIND editor
@@ -31,6 +31,8 @@ ith_add_module(editor_core
         EditorSession.h
         EditorSession.cpp
         FileCommands.cpp
+        Gizmo.h
+        Gizmo.cpp
         Keymap.h
         Keymap.cpp
         LayoutCommands.cpp
@@ -52,6 +54,8 @@ ith_add_module(editor_core
         UndoHistory.h
         UndoHistory.cpp
         ViewportCommands.cpp
+        ViewportGizmo.h
+        ViewportGizmo.cpp
         ViewportInput.h
         ViewportInput.cpp
         ViewportPick.h

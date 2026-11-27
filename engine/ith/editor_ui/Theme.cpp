@@ -14,10 +14,8 @@ namespace {
 // ImGui's style colours are sRGB-encoded channels in 0..1; the renderer decodes the vertex colours
 // they become (ADR-0029 rule 11).
 ImVec4 toImGui(ThemeColor color) {
-    constexpr float kScale = 1.0f / 255.0f;
-    return {static_cast<float>((color.rgb >> 16) & 0xFFu) * kScale,
-            static_cast<float>((color.rgb >> 8) & 0xFFu) * kScale, static_cast<float>(color.rgb & 0xFFu) * kScale,
-            static_cast<float>(color.alpha) * kScale};
+    const std::array<float, 4> channels = srgbColor(color);
+    return {channels[0], channels[1], channels[2], channels[3]};
 }
 
 ThemeColor withAlpha(ThemeColor color, std::uint8_t alpha) {
@@ -86,6 +84,13 @@ void setColors(ImGuiStyle& style, const ThemeTokens& theme) {
 }
 
 } // namespace
+
+std::array<float, 4> srgbColor(ThemeColor color) {
+    constexpr float kScale = 1.0f / 255.0f;
+    return {static_cast<float>((color.rgb >> 16) & 0xFFu) * kScale,
+            static_cast<float>((color.rgb >> 8) & 0xFFu) * kScale, static_cast<float>(color.rgb & 0xFFu) * kScale,
+            static_cast<float>(color.alpha) * kScale};
+}
 
 std::array<float, 4> linearColor(ThemeColor color) {
     const auto channel = [](std::uint32_t value) {

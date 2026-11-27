@@ -728,6 +728,9 @@ Entity toCopy(void* context, Entity entity) {
 // right after it; the selection becomes the copies. Children that aren't targets are not copied.
 // References between the targets (a selected child of a selected parent) point at the copies, so
 // selecting a parent and its child duplicates that hierarchy; references to other entities stay.
+// Invariant: this function must not run registry commands. A gizmo Alt drag (ViewportGizmo.cpp) calls
+// it directly inside its open transaction, outside the registry's depth counter, where the registry
+// would refuse a nested command as an open interaction.
 Expected<Value> duplicate(EditorSession& session, const Value& args) {
     constexpr std::string_view kCommand = "ith.edit.duplicate";
     Expected<std::vector<Entity>> entities = targets(session, kCommand, args);

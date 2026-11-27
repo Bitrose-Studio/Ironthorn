@@ -17,6 +17,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace ith {
@@ -67,6 +68,9 @@ optionalString(std::string_view command, const serialization::Value& args, std::
 [[nodiscard]] Uuid stableIdOf(const World& world, Entity entity);
 
 [[nodiscard]] const std::vector<Entity>* childrenOf(const World& world, Entity entity);
+
+// Whether an ancestor of `entity` is in `set` (entity handles' bits).
+[[nodiscard]] bool hasAncestorIn(const World& world, Entity entity, const std::unordered_set<std::uint64_t>& set);
 
 // Every entity in Outliner order: each root, then its subtree depth-first.
 [[nodiscard]] std::vector<Entity> outlinerOrder(const World& world);

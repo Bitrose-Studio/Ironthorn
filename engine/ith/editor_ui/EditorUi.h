@@ -8,7 +8,7 @@
 //
 //   ith::Input input;
 //   ith::KeymapConsumer shortcuts(session, keymap);
-//   ith::ViewportConsumer viewportInput(session.viewports());
+//   ith::ViewportConsumer viewportInput(session);
 //   input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &shortcuts});
 //   input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &viewportInput});
 //   ith::WindowUiHost host(platform, window);

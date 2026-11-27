@@ -9,7 +9,8 @@
 // grid is seen at a grazing angle (viewport_grazing_<backend>.ppm): its lines must fade out there
 // instead of aliasing into false curves, and the grid must not end on a visible rim. A fourth picks
 // by readback (ADR-0042 rules 21 and 22) at framebuffer scale 2: clicks select the cube, add the
-// sphere, toggle the cube out and clear on empty space.
+// sphere, toggle the cube out and clear on empty space. A fifth shows the default scene with the
+// cube selected and the translate gizmo over it (viewport_gizmo_<backend>.ppm, ADR-0042 rule 24).
 
 #include "ith/ecs/StableId.h"
 #include "ith/ecs/World.h"
@@ -307,6 +308,36 @@ Image renderGolden(rhi::Device& device, const Shot& shot) {
     return rendered.image;
 }
 
+// The default scene with the cube selected: tinted, with the translate gizmo at its pivot drawn over
+// the image by the UI (ADR-0042 rule 24). Selected in the first frame, so the second and third draw
+// the gizmo; the scene renders once.
+Image renderGizmo(rhi::Device& device) {
+    const Shot shot = defaultShot();
+    const ImVec2 full = fullWindow(shot);
+    const std::array frames{full, full, full};
+    const FrameHook hook = [](std::size_t frame, EditorSession& session) {
+        if (frame != 0) {
+            return;
+        }
+        std::optional<Uuid> cube;
+        session.document().mutableWorld().query<const ShapeRenderer, const StableId>().forEach(
+            [&](Entity, const ShapeRenderer& renderer, const StableId& id) {
+                if (renderer.shape == Shape::Cube) {
+                    cube = id.id;
+                }
+            });
+        REQUIRE(cube.has_value());
+        serialization::Value ids = serialization::Value::array();
+        ids.elements().push_back(serialization::Value::string(cube->toString()));
+        serialization::Value args = serialization::Value::object();
+        args.set("entities", std::move(ids));
+        REQUIRE(session.execute("ith.selection.set", args).hasValue());
+    };
+    const Rendered rendered = renderViewport(device, shot, frames, hook);
+    CHECK(rendered.renders == 1);
+    return rendered.image;
+}
+
 // Resizes the viewport and hides it across frames, so targets are destroyed while earlier frames
 // may still use them and released slots are reused, under the device's debug layers; then shows
 // it at full size again, which must give the golden image. Four renders: the first, the resize down,
@@ -430,6 +461,14 @@ TEST_SUITE("editor_ui_gpu.viewport") {
         checkGolden(renderResizedAndHidden(*device), "viewport_d3d12");
     }
 
+    TEST_CASE("the translate gizmo over the selected cube on WARP matches its golden image") {
+        std::optional<rhi::Device> device = softwareDevice(rhi::Backend::D3D12);
+        if (!device) {
+            return;
+        }
+        checkGolden(renderGizmo(*device), "viewport_gizmo_d3d12");
+    }
+
     TEST_CASE("clicks on WARP at framebuffer scale 2 pick the cube, add the sphere, toggle and clear") {
         std::optional<rhi::Device> device = softwareDevice(rhi::Backend::D3D12);
         if (!device) {
@@ -461,6 +500,14 @@ TEST_SUITE("editor_ui_gpu.viewport") {
             return;
         }
         checkGolden(renderResizedAndHidden(*device), "viewport_vulkan");
+    }
+
+    TEST_CASE("the translate gizmo over the selected cube on lavapipe matches its golden image") {
+        std::optional<rhi::Device> device = softwareDevice(rhi::Backend::Vulkan);
+        if (!device || !isLavapipe(*device)) {
+            return;
+        }
+        checkGolden(renderGizmo(*device), "viewport_gizmo_vulkan");
     }
 
     TEST_CASE("clicks on lavapipe at framebuffer scale 2 pick the cube, add the sphere, toggle and clear") {

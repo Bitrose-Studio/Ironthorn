@@ -25,6 +25,9 @@ namespace ith {
 
 struct Aabb;
 
+// The near plane of every viewport's projection, in metres (ADR-0042 rule 5).
+inline constexpr float kViewportNearPlane = 0.1f;
+
 // A default-constructed camera is the default camera of a level without a saved one (ADR-0042
 // rule 5).
 struct EditorCamera {

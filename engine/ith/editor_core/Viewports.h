@@ -36,6 +36,7 @@
 // Main thread only.
 
 #include "ith/editor_core/EditorCamera.h"
+#include "ith/editor_core/Gizmo.h"
 #include "ith/foundation/Uuid.h"
 #include "ith/math/Types.h"
 #include "ith/serialization/Document.h"
@@ -57,12 +58,6 @@ enum class ViewportTool : std::uint8_t {
     Scale,
 };
 
-// What the gizmo's axes follow (ADR-0042 rule 26).
-enum class GizmoSpace : std::uint8_t {
-    World, // the world axes
-    Local, // the primary selected entity's rotation
-};
-
 // The viewport panel's id; its instances are "ith.viewport.1" to "ith.viewport.4".
 inline constexpr std::string_view kViewportPanel = "ith.viewport";
 
@@ -71,9 +66,6 @@ inline constexpr std::string_view kDefaultViewport = "ith.viewport.1";
 
 // How many viewport instances there are (ADR-0040 rule 3).
 inline constexpr std::size_t kMaxViewports = 4;
-
-// The near plane of every viewport's projection, in metres (ADR-0042 rule 5).
-inline constexpr float kViewportNearPlane = 0.1f;
 
 // The snapping step a session starts with, in metres (ADR-0042 rule 26).
 inline constexpr float kDefaultSnapStep = 0.1f;
@@ -123,6 +115,10 @@ struct ViewportState {
     // a click's release (a newer click replaces it), and the panel takes it in its next render, reads
     // the entity under it back from the GPU and selects it (ADR-0042 rules 21 and 22).
     std::optional<ViewportClick> click;
+    // The translate gizmo's handle that a drag started in this viewport holds, so the panel
+    // highlights it; None without one. The viewport consumer sets it at the press and clears it when
+    // the drag ends or Esc cancels it (ADR-0042 rule 25).
+    GizmoHandle gizmoDrag = GizmoHandle::None;
 
     // The image's width / height; 1 while the image has no area.
     [[nodiscard]] float aspect() const noexcept {
