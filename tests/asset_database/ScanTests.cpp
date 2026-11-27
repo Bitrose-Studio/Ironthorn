@@ -396,7 +396,7 @@ TEST_SUITE("asset_database.scan") {
         CHECK(ith::isValidContentPath("CONSOLE.png"));
         CHECK(ith::isValidContentPath("COM0.png"));
         CHECK(ith::isValidContentPath("Ship.metadata"));
-        CHECK(ith::isValidContentPath(std::string(255, 'a')));
+        CHECK(ith::isValidContentPath(std::string(ith::kMaxContentNameSize, 'a')));
         for (const std::string_view path : {"",
                                             "/Ship.gltf",
                                             "Ship.gltf/",
@@ -425,7 +425,7 @@ TEST_SUITE("asset_database.scan") {
             CHECK_MESSAGE(!ith::isValidContentPath(path), path);
         }
         CHECK_FALSE(ith::isValidContentPath(std::string_view("a\tb")));
-        CHECK_FALSE(ith::isValidContentPath(std::string(256, 'a')));
+        CHECK_FALSE(ith::isValidContentPath(std::string(ith::kMaxContentNameSize + 1, 'a')));
         CHECK_FALSE(ith::isValidContentPath("Bad\xff\xfe.objects"));
         CHECK_FALSE(ith::isValidContentPath("\xed\xa0\x80.png")); // a surrogate in UTF-8
     }

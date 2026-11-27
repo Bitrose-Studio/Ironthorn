@@ -695,14 +695,15 @@ ith_add_test_suite(assets
     LIBRARIES ith::assets ith::serialization)
 
 # The asset database (tools only): sidecars, native headers, scan problems, move, rename and
-# delete, import and reimport with a test importer, and the derived-data cache. Each test works in
-# its own temporary project folder.
+# delete, folder operations, duplicate, copy-in and users, import and reimport with a test importer,
+# and the derived-data cache. Each test works in its own temporary project folder.
 if(IRONTHORN_BUILD_TOOLS)
     ith_add_test_suite(asset_database
         SOURCES
             asset_database/AssetTestSupport.h
             asset_database/DerivedDataCacheTests.cpp
             asset_database/ImportTests.cpp
+            asset_database/OperationTests.cpp
             asset_database/ScanTests.cpp
             asset_database/SidecarTests.cpp
         LIBRARIES ith::asset_database)

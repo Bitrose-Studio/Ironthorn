@@ -6,7 +6,8 @@ page shows how to use what exists today:
 
 - `assets` (core, runtime): `AssetId`, `SubAssetId` and the reflected reference types;
 - `asset_database` (editor layer, tools only): sidecars, native asset headers, the scan of a
-  project's `Content` folder, move, rename and delete, importers with import and non-destructive
+  project's `Content` folder, move, rename and delete, folder operations, duplicates, copies from
+  outside the project and finding an asset's users, importers with import and non-destructive
   reimport, and the local derived-data cache (DDC);
 - `asset_importers` (editor layer, tools only): the glTF 2.0 importer and the payloads of
   imported meshes and materials.
@@ -126,9 +127,11 @@ const auto moved = database.move(report->id, "Vehicles/Ship.gltf");
 
 - Paths are relative to `Content`, UTF-8, with `/` separators, and compared case sensitively.
   `isValidContentPath` refuses what some platform can't store: invalid UTF-8, `<>:"\|?*`, control
-  characters, segments ending in `.` or space, segments over 255 bytes, Windows device names
-  (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, also with an extension), `..`,
-  and names ending in `.meta` in any case.
+  characters, segments ending in `.` or space, segments over `kMaxContentNameSize` (209) bytes
+  (255 minus room for `.meta` and the temporary name of an atomic write, so every accepted name
+  can be written), Windows device names (`CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM1`
+  to `COM9`, `LPT1` to `LPT9`, `COM¹` to `COM³` and `LPT¹` to `LPT³`, also with an extension),
+  `..`, and names ending in `.meta` in any case.
 - Only ASCII letters are compared without case. `É.png` and `é.png` are two paths to the database
   but one file on Windows and macOS; avoid names that differ only in non-ASCII case.
 - Symbolic links: a link to a file is read as that file (a sidecar that is a link becomes a plain
@@ -160,6 +163,55 @@ const auto moved = database.move(report->id, "Vehicles/Ship.gltf");
   extension. Renaming a file to another case of its own name works. If a sidecar can't follow its
   file, the file is moved back; if even that fails, the error names both places and the record
   follows the file.
+- **Names.** A name is taken in a folder when `findCaseVariant(folder, name)` finds anything: an
+  entry of any kind (a hidden file or a sidecar included) with that name without ASCII case, or a
+  name the file system takes for an existing entry (another case outside ASCII on Windows, macOS
+  or a case-folding Linux folder, or a Windows short name such as `PROGRA~1`). Every operation
+  that creates something refuses a taken name with `asset.path_conflict`, and the Content Browser
+  checks names with the same function. So on Windows `Été.png` is taken by `été.png`, and a
+  case-only rename outside ASCII is refused; on Linux they are two names.
+- **Links.** A path whose parent folder is a link to a folder (or a Windows junction) fails with
+  `asset.invalid_path` in every operation that writes or deletes: links lead out of `Content`
+  and are never followed. On Windows a volume mounted in a folder is a reparse point, listed as a
+  link and refused the same way. A Linux bind or network mount is no link: it looks like a folder,
+  and `removeFolder` deletes what is in it. A listed name that can't address its entry (not valid
+  Unicode, or a Linux name holding `\`, which `file_system` takes for a separator) is never joined
+  into a path: `scan` and `removeFolder` report it and leave it alone. `move`, `remove` and
+  `assignNewId` also refuse an asset whose folder became a link after the scan.
+- **Folders.** `createFolder(path)` creates a folder with its parents. `moveFolder(from, to)`
+  renames the folder on disk in one move, so everything inside goes along (files the database
+  doesn't know too); every asset below keeps its id and its record changes path. A case-only
+  rename of the folder itself works; a target inside the folder fails with `asset.invalid_target`.
+  `removeFolder(path)` deletes every file below the folder, then the folders from the deepest up,
+  and goes on after a failure: the report lists what is still there with the reason, and a sidecar
+  left behind by its deleted file as an `OrphanSidecar`. Sidecars are deleted last, and a sidecar
+  `X.meta` only when its file `X` is gone (the file of exactly that name, or when there is none,
+  one in another ASCII case), so an asset whose file can't be deleted keeps its sidecar and its
+  record. Links inside are removed, not followed. On
+  Windows a read-only file (some version control systems check files out read-only) can't be
+  deleted and is reported; on POSIX it is deleted. Folder operations refuse results deeper than
+  `kMaxFolderDepth`, and keep `folders()` current; their arguments may be elements of
+  `folders()`.
+- **Copies.** `duplicate(id, newPath)` copies an asset (its file and sidecar) with a new random id
+  in the header or sidecar; everything else is copied unchanged. `copyIn(externalPath, targetPath,
+  replace)` copies a file from outside the project together with the files its importer reads
+  (`dependencies()`, to the same relative paths, only those that exist beside it and whose names
+  are free at the target). Beside the external file those names are looked up by the file system:
+  without case on Windows, exactly on Linux. A native asset is added to the database, with a new
+  id when the database has its id; its format must fit the extension (`asset.format_mismatch`).
+  `replace` overwrites the source of an imported asset (atomically, keeping its sidecar) and is
+  refused for anything else. `copyIn` doesn't import: call `import` (or `reimport`) next. Copies
+  read whole files into memory on the calling thread (the editor's main thread, so a large file
+  blocks it) and write them durably; on a failure the files written so far are deleted again.
+- **Checks before writes.** Every operation checks its target, then writes. The two steps are not
+  atomic: a file another program creates at the target in between is replaced by the atomic
+  write.
+- **Users.** `findUsers(ids)` reads every native asset and every sidecar in the database outside
+  `ids` and returns, for each id, the assets whose JSON refers to it, plus the files it couldn't
+  read. `collectAssetReferences(value)` finds the references in any JSON value: every object whose
+  `asset` member is a non-nil UUID string, the shape `AssetRef` and `SoftAssetRef` are written in
+  (a test pins it). The cost is one read and parse of each of those files, so it is meant for a
+  delete preview; a dependents index comes later.
 - `import` reads the source, takes the importer's output from the DDC when every input is
   unchanged, matches sub-assets and rewrites the sidecar only when it changed. A file moved
   outside the editor keeps its id when it is imported before a rescan; a copy whose original is
@@ -282,10 +334,14 @@ import to build the cache key, and `import()` only on a cache miss.
   versions and every error; native headers and extensions; source keys; import and reimport with a
   small text importer (reorder, rename, add, remove, unnamed objects, settings, importer versions,
   files moved or copied outside the editor, warnings, failures, files read besides the source and
-  references); scan problems; move, rename, delete, links and UTF-8 paths; size limits; DDC keys,
-  hits, misses, damaged and open entries; XXH3 known answers. POSIX-only cases cover unreadable folders and names that are not UTF-8, and
-  a Windows-only case a sidecar that can't be moved. Each test uses its own temporary project
-  folder and deletes it.
+  references); scan problems; move, rename, delete, links and UTF-8 paths; folder create, move and
+  delete (with failures part way), duplicate, copy-in with dependencies and rollback, users,
+  paths through links to folders, names the file system folds beyond ASCII case, the longest
+  name, and the reference shape of `AssetRef`; size limits; DDC keys, hits, misses, damaged and open
+  entries; XXH3 known answers. POSIX-only cases cover unreadable folders, names that are not UTF-8
+  and a folder delete stopped by a read-only folder; Windows-only cases a sidecar that can't be
+  moved, a folder that can't be moved, and a folder delete stopped by open files. Each test uses
+  its own temporary project folder and deletes it.
 - `asset_sidecar_fuzz` (`tests/asset_database/SidecarFuzz.cpp`) fuzzes the sidecar and native
   header readers and `replaceHeaderId`, and checks that whatever reads writes back the same value.
   It runs in the Clang ASan build.

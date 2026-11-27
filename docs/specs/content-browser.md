@@ -284,8 +284,11 @@ The last item added is the **primary item**.
   - it is empty;
   - it contains `/` or `\`;
   - the resulting content path fails `isValidContentPath` (control characters, `< > : " | ? *`,
-    a name ending in `.` or a space, a Windows device name such as `CON` or `com1.txt`, more than
-    255 bytes, a folder name ending in `.meta`);
+    a name ending in `.` or a space, a Windows device name such as `CON` or `com1.txt`, a name of
+    more than 209 bytes, a folder name ending in `.meta`). The name limit is the 255-byte name
+    limit of NTFS and ext4 less room for the `.meta` sidecar suffix (5 bytes) and the temporary
+    suffix of an atomic write (41 bytes), so an accepted name's sidecar and temporary file fit
+    too;
   - **another entry in the same folder has the same name without ASCII case**: any file on disk,
     a hidden one or a sidecar included, or any folder (`editor.content.exists`).
 - **A case-only rename of the same item is allowed** (`rock.png` to `Rock.png`); it is a
@@ -717,7 +720,7 @@ commands and queries through `Automation::run`, and the disk checked with `file_
 16. New Folder twice in one folder creates `New Folder` and `New Folder_2`, each selected with the
     inline rename pending (`prompt`).
 17. Rename refuses, with `editor.content.invalid_name` and nothing changed on disk: an empty name,
-    `a/b`, `a\b`, `a:b`, `name.`, `name `, `CON`, `com1.txt`, a name of 256 bytes, a folder named
+    `a/b`, `a\b`, `a:b`, `name.`, `name `, `CON`, `com1.txt`, a name of 210 bytes, a folder named
     `x.meta`.
 18. Rename refuses with `editor.content.exists` a name taken in the folder by a file, a folder,
     a hidden file (`notes.txt`) or a sidecar, in any ASCII case.
