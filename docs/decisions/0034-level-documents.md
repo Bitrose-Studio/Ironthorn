@@ -1,6 +1,7 @@
 # ADR-0034: Level documents
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0050](0050-editor-content-browser-browse-slice-as-built.md)
 - **Date:** 2026-11-22
 - **Related:** completes [ADR-0015](0015-asset-identity-and-reimport.md) rule 18 (levels),
   [ADR-0024](0024-asset-document-envelope-and-extension.md) (`.ithmap`),

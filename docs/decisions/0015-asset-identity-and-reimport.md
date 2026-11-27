@@ -3,7 +3,8 @@
 - **Status:** Accepted
 - **Amended by:** [ADR-0024](0024-asset-document-envelope-and-extension.md),
   [ADR-0033](0033-reflection-property-paths-and-patches.md),
-  [ADR-0034](0034-level-documents.md), [ADR-0049](0049-editor-content-browser-v1.md)
+  [ADR-0034](0034-level-documents.md), [ADR-0049](0049-editor-content-browser-v1.md),
+  [ADR-0050](0050-editor-content-browser-browse-slice-as-built.md)
 - **Date:** 2026-11-20
 - **Related:** [ADR-0008](0008-editor-familiar-to-unreal-developers.md) (Content Browser mirrors
   disk, no redirectors), [ADR-0010](0010-serialization.md) (JSON source, binary cooked data,
