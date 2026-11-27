@@ -313,6 +313,35 @@ void DetailsPanel::drawRow(std::size_t index) {
     }
 }
 
+void DetailsPanel::applyEdit(std::size_t index, const std::string& key, EditEvents events, const void* edited) {
+    if (events.changed && !events.activated && !m_model.editing() && m_refusedKey != key) {
+        // The press opens a drag edit and its release ends it, empty; ImGui then opens the text
+        // input with no new activation, so the typed value arrives as a change with no edit open
+        // and is set with one command.
+        events.set = true;
+    }
+    if (events.activated && !m_model.editing()) {
+        const Expected<void> begun = m_model.beginEdit(index);
+        if (!begun) {
+            m_refusedKey = key;
+        }
+        report(begun);
+    }
+    if (events.deactivated && m_refusedKey == key) {
+        m_refusedKey.clear();
+    }
+    const bool ours = m_model.editing() && m_model.editingKey() == key;
+    if (events.changed && ours) {
+        report(m_model.previewValue(edited));
+    }
+    if (events.set) {
+        report(m_model.setValue(index, edited));
+    }
+    if (events.deactivated && ours) {
+        m_model.commitEdit();
+    }
+}
+
 void DetailsPanel::drawValue(std::size_t index) {
     const DetailsRow row = m_model.rows()[index];
     const void* current = m_model.value(index);
@@ -325,18 +354,7 @@ void DetailsPanel::drawValue(std::size_t index) {
         ImGui::SetNextItemWidth(std::max(ImGui::GetContentRegionAvail().x - reset - remove, 1.0f));
         const EditEvents events = drawEditor(row, *row.type, edited.get(), row.mixed);
         m_values[row.key] = rectOfItem();
-        if (events.activated && !m_model.editing()) {
-            report(m_model.beginEdit(index));
-        }
-        if (events.changed && m_model.editing() && m_model.editingKey() == row.key) {
-            report(m_model.previewValue(edited.get()));
-        }
-        if (events.set) {
-            report(m_model.setValue(index, edited.get()));
-        }
-        if (events.deactivated && m_model.editing() && m_model.editingKey() == row.key) {
-            m_model.commitEdit();
-        }
+        applyEdit(index, row.key, events, edited.get());
     } else if (row.type->kind == TypeKind::DynamicArray) {
         if (row.mixed) {
             ImGui::TextDisabled("%s", kMultipleValues);

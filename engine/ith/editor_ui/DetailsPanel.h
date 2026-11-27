@@ -68,6 +68,9 @@ private:
     void drawAddComponent();
     void drawRow(std::size_t index);
     void drawValue(std::size_t index);
+    // Turns an inline editor's events into the model's edit calls for the row at `index`, keyed `key`;
+    // `edited` is the value the editor wrote.
+    void applyEdit(std::size_t index, const std::string& key, EditEvents events, const void* edited);
     EditEvents drawEditor(const DetailsRow& row, const TypeInfo& type, void* value, bool mixed);
     EditEvents drawRotation(const DetailsRow& row, Quat& value, bool mixed);
     EditEvents drawOptional(const DetailsRow& row, const TypeInfo& type, void* value, bool mixed);
@@ -79,6 +82,9 @@ private:
     // The text field being edited and its text, kept while it is active.
     std::string m_textKey;
     std::array<char, 1024> m_text{};
+    // The field whose press couldn't begin an edit (while playing, for one), until it is released:
+    // its drag changes nothing.
+    std::string m_refusedKey;
     // The rotation being dragged, kept as Euler degrees so the drag doesn't drift.
     std::string m_eulerKey;
     Vec3 m_euler{0.0f};

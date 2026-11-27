@@ -85,6 +85,8 @@ Expected<std::unique_ptr<EditorUi>> EditorUi::create(const EditorUiDesc& desc) {
     // NOLINTNEXTLINE(bugprone-signed-bitwise): ImGui's flags are int enums
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigInputTextCursorBlink = desc.caretBlink;
+    // A click on a drag field without moving types into it, as a drag scrubs it.
+    io.ConfigDragClickToInputText = true;
 
     // Fonts, read through the engine's file API and handed over from memory; the atlas doesn't own
     // the bytes. The icon font is merged into the text fonts.

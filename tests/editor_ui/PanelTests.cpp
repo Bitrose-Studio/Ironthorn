@@ -1,8 +1,9 @@
 // The Outliner and Details panels (ADR-0008, ADR-0040 rule 3), headless on the RHI's null device,
 // driven by mouse and key events through the platform backend and the keymap consumer: a click
 // selects, F2 renames in place, a drag reparents, a Details slider drag is one undo entry with a
-// live preview, Esc cancels it, and one drag edits every selected entity. Each panel is drawn in a
-// fixed window so the tests know where its rows are.
+// live preview, Esc cancels it, a drag that can't begin an edit changes nothing, a click types a
+// number into a field (a rotation in degrees, several entities at once), and one drag edits every
+// selected entity. Each panel is drawn in a fixed window so the tests know where its rows are.
 
 #include "ith/config/Config.h"
 #include "ith/ecs/Hierarchy.h"
@@ -14,6 +15,9 @@
 #include "ith/editor_core/PanelRegistry.h"
 #include "ith/editor_ui/DetailsPanel.h"
 #include "ith/editor_ui/OutlinerPanel.h"
+#include "ith/foundation/Log.h"
+#include "ith/foundation/LogRingBuffer.h"
+#include "ith/math/Math.h"
 #include "ith/reflection/TypeRegistry.h"
 #include "ith/serialization/Json.h"
 
@@ -22,6 +26,7 @@
 #include <doctest/doctest.h>
 #include <imgui.h>
 
+#include <cmath>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -303,6 +308,174 @@ TEST_SUITE("editor_ui.panels") {
         CHECK(fixture.entries() == before);
         // Esc reached the drag, not Select None.
         CHECK(fixture.session.document().selection().entities() == std::vector<Uuid>{idOf(1)});
+    }
+
+    TEST_CASE("a click on a Details number field types into it: Enter or a click away sets it, Esc drops it") {
+        constexpr std::string_view kScale = "ith::LocalTransform.value.scale";
+        PanelFixture fixture;
+        fixture.create(1, "Cube");
+        fixture.frames(3);
+        const UiRect scale = fixture.value(kScale);
+        const float x = scale.x + scale.width / 6.0f;
+        const float z = scale.x + scale.width * 5.0f / 6.0f;
+        const float y = scale.centerY();
+        const std::size_t before = fixture.entries();
+
+        // A click without moving opens the X field's text, all selected; "2" and Enter set it.
+        fixture.click(x, y);
+        fixture.frames(2);
+        REQUIRE(fixture.ui.ui->wantsTextInput());
+        fixture.step({.type = EventType::TextInput, .text = "2"});
+        fixture.key(Key::Enter);
+        fixture.frames(2);
+        CHECK_FALSE(fixture.ui.ui->wantsTextInput());
+        CHECK(fixture.transformOf(1).scale == Vec3{2.0f, 1.0f, 1.0f});
+        CHECK_FALSE(fixture.session.document().transactions().isOpen());
+        CHECK(fixture.entries() == before + 1);
+        CHECK(fixture.session.document().history().entries().back().name == "Set Property");
+
+        // Z: "4", then a click on empty space keeps it.
+        fixture.frames(30);
+        fixture.click(z, y);
+        fixture.frames(2);
+        REQUIRE(fixture.ui.ui->wantsTextInput());
+        fixture.step({.type = EventType::TextInput, .text = "4"});
+        fixture.click(scale.x, 650.0f);
+        fixture.frames(2);
+        CHECK_FALSE(fixture.ui.ui->wantsTextInput());
+        CHECK(fixture.transformOf(1).scale == Vec3{2.0f, 1.0f, 4.0f});
+        CHECK(fixture.entries() == before + 2);
+
+        // Enter without typing records nothing.
+        fixture.frames(30);
+        fixture.click(z, y);
+        fixture.frames(2);
+        REQUIRE(fixture.ui.ui->wantsTextInput());
+        fixture.key(Key::Enter);
+        fixture.frames(2);
+        CHECK(fixture.entries() == before + 2);
+
+        // Esc after typing drops the text; it reaches the field, not Select None.
+        fixture.frames(30);
+        fixture.click(z, y);
+        fixture.frames(2);
+        fixture.step({.type = EventType::TextInput, .text = "9"});
+        fixture.key(Key::Escape);
+        fixture.frames(2);
+        CHECK_FALSE(fixture.ui.ui->wantsTextInput());
+        CHECK(fixture.transformOf(1).scale.z == 4.0f);
+        CHECK_FALSE(fixture.session.document().transactions().isOpen());
+        CHECK(fixture.entries() == before + 2);
+        CHECK(fixture.session.document().selection().entities() == std::vector<Uuid>{idOf(1)});
+
+        REQUIRE(fixture.session.execute("ith.edit.undo").hasValue());
+        CHECK(fixture.transformOf(1).scale == Vec3{2.0f, 1.0f, 1.0f});
+    }
+
+    TEST_CASE("Ctrl + click on a Details number field types into it too") {
+        PanelFixture fixture;
+        fixture.create(1, "Cube");
+        fixture.frames(3);
+        const UiRect scale = fixture.value("ith::LocalTransform.value.scale");
+        const float x = scale.x + scale.width / 2.0f;
+        const float y = scale.centerY();
+        const std::size_t before = fixture.entries();
+        fixture.move(x, y);
+        fixture.step({.type = EventType::KeyDown, .key = Key::LeftControl, .modifiers = KeyModifiers::Control});
+        fixture.step({.type = EventType::MouseButtonDown,
+                      .modifiers = KeyModifiers::Control,
+                      .mouseButton = MouseButton::Left,
+                      .clicks = 1,
+                      .x = x,
+                      .y = y});
+        fixture.step({.type = EventType::MouseButtonUp,
+                      .modifiers = KeyModifiers::Control,
+                      .mouseButton = MouseButton::Left,
+                      .x = x,
+                      .y = y});
+        fixture.step({.type = EventType::KeyUp, .key = Key::LeftControl});
+        fixture.frames(2);
+        REQUIRE(fixture.ui.ui->wantsTextInput());
+        fixture.step({.type = EventType::TextInput, .text = "3"});
+        fixture.key(Key::Enter);
+        fixture.frames(2);
+        CHECK(fixture.transformOf(1).scale == Vec3{1.0f, 3.0f, 1.0f});
+        CHECK(fixture.entries() == before + 1);
+    }
+
+    TEST_CASE("degrees typed into the Rotation field set the rotation in one undo entry") {
+        PanelFixture fixture;
+        fixture.create(1, "Cube");
+        fixture.frames(3);
+        const UiRect rotation = fixture.value("ith::LocalTransform.value.rotation");
+        const float x = rotation.x + rotation.width / 6.0f;
+        const float y = rotation.centerY();
+        const std::size_t before = fixture.entries();
+        fixture.click(x, y);
+        fixture.frames(2);
+        REQUIRE(fixture.ui.ui->wantsTextInput());
+        fixture.step({.type = EventType::TextInput, .text = "90"});
+        fixture.key(Key::Enter);
+        fixture.frames(2);
+        const Quat expected = glm::angleAxis(glm::radians(90.0f), Vec3{1.0f, 0.0f, 0.0f});
+        CHECK(std::abs(glm::dot(fixture.transformOf(1).rotation, expected)) == doctest::Approx(1.0f));
+        CHECK(fixture.entries() == before + 1);
+        CHECK_FALSE(fixture.session.document().transactions().isOpen());
+    }
+
+    TEST_CASE("a number typed into a field with several entities selected sets all of them in one undo entry") {
+        PanelFixture fixture;
+        fixture.create(1, "Table");
+        fixture.create(2, "Lamp");
+        fixture.select({1, 2});
+        fixture.frames(3);
+        const UiRect scale = fixture.value("ith::LocalTransform.value.scale");
+        const float x = scale.x + scale.width / 6.0f;
+        const float y = scale.centerY();
+        const std::size_t before = fixture.entries();
+        fixture.click(x, y);
+        fixture.frames(2);
+        REQUIRE(fixture.ui.ui->wantsTextInput());
+        fixture.step({.type = EventType::TextInput, .text = "2"});
+        fixture.key(Key::Enter);
+        fixture.frames(2);
+        CHECK(fixture.transformOf(1).scale == Vec3{2.0f, 1.0f, 1.0f});
+        CHECK(fixture.transformOf(2).scale == Vec3{2.0f, 1.0f, 1.0f});
+        CHECK(fixture.entries() == before + 1);
+        REQUIRE(fixture.session.execute("ith.edit.undo").hasValue());
+        CHECK(fixture.transformOf(1).scale.x == 1.0f);
+        CHECK(fixture.transformOf(2).scale.x == 1.0f);
+    }
+
+    TEST_CASE("a Details drag that can't begin an edit (while playing) changes nothing and warns once") {
+        PanelFixture fixture;
+        fixture.create(1, "Table");
+        fixture.frames(3);
+        const UiRect translation = fixture.value(kTranslation);
+        const float x = translation.x + translation.width / 6.0f;
+        const float y = translation.centerY();
+        const std::size_t before = fixture.entries();
+        fixture.session.document().setPlaying(true);
+        LogRingBuffer log(64);
+        REQUIRE(addLogSink(log.sink()).hasValue());
+        fixture.press(x, y);
+        fixture.dragTo(x, y, x + 80.0f, y, 8);
+        fixture.release(x + 80.0f, y);
+        fixture.frames(2);
+        removeLogSink(log.sink());
+        fixture.session.document().setPlaying(false);
+        CHECK(fixture.transformOf(1).translation.x == 0.0f);
+        CHECK(fixture.entries() == before);
+        CHECK_FALSE(fixture.session.document().transactions().isOpen());
+        std::vector<LogEntry> entries;
+        static_cast<void>(log.read(0, entries));
+        std::size_t warnings = 0;
+        for (const LogEntry& entry : entries) {
+            if (entry.level == LogLevel::Warning && std::string_view(entry.category->name()) == "Details") {
+                ++warnings;
+            }
+        }
+        CHECK(warnings == 1);
     }
 
     TEST_CASE("one Details drag edits every selected entity in one undo entry") {

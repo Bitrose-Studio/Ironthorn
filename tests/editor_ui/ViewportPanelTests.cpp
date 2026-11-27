@@ -3,8 +3,8 @@
 // the image's size in pixels at any framebuffer scale, re-registered as a user texture; the scene is
 // rendered only when the camera, the world, the selection, the size or the game-view flag changed;
 // the image is reported in window pixels, with a zero size while it isn't drawn and no hover under a
-// floating window; the toolbar runs commands; and the Outliner's Add Shape places a shape the
-// viewport then draws.
+// floating window; the toolbar runs commands; the Outliner's Add Shape places a shape the viewport
+// then draws; and a scale set by command or typed into Details re-renders it at its new size.
 
 #include "ith/editor_ui/ViewportPanel.h"
 
@@ -20,6 +20,7 @@
 #include "ith/editor_core/PanelRegistry.h"
 #include "ith/editor_core/ViewportInput.h"
 #include "ith/editor_core/Viewports.h"
+#include "ith/editor_ui/DetailsPanel.h"
 #include "ith/editor_ui/DockLayout.h"
 #include "ith/editor_ui/EditorShell.h"
 #include "ith/editor_ui/OutlinerPanel.h"
@@ -28,6 +29,7 @@
 #include "ith/foundation/LogRingBuffer.h"
 #include "ith/math/Transform.h"
 #include "ith/reflection/TypeRegistry.h"
+#include "ith/serialization/Json.h"
 #include "ith/serialization/Value.h"
 #include "ith/shapes/ShapeMesh.h"
 #include "ith/shapes/ShapeRenderer.h"
@@ -629,6 +631,69 @@ TEST_SUITE("editor_ui.viewport") {
         World& world = fixture.session.document().mutableWorld();
         const Entity cube = world.findByStableId(*fixture.session.document().selection().primary());
         CHECK(world.get<const WorldTransform>(cube)->matrix[0].x == doctest::Approx(-1.0f));
+    }
+
+    TEST_CASE("a scale set by command or typed into Details re-renders the shape at its new size") {
+        ViewportFixture fixture;
+        DetailsPanel details(fixture.session);
+        registerDetails(fixture.session.panels(), details);
+        const auto draw = [&] {
+            fixture.drawWindow();
+            ImGui::SetNextWindowPos(ImVec2(760.0f, 50.0f));
+            ImGui::SetNextWindowSize(ImVec2(500.0f, 600.0f));
+            if (ImGui::Begin("Details###test.details")) {
+                fixture.session.panels().find("ith.details")->draw("ith.details");
+            }
+            ImGui::End();
+        };
+        const auto frames = [&](int count) {
+            for (int i = 0; i < count; ++i) {
+                fixture.ui.frame(draw);
+            }
+        };
+        const auto step = [&](const Event& event) {
+            fixture.ui.events({event});
+            frames(1);
+        };
+        REQUIRE(
+            fixture.session.execute("ith.entity.create", addShapeArgs(Shape::Cube, fixture.state().camera)).hasValue());
+        frames(3);
+        World& world = fixture.session.document().mutableWorld();
+        const Uuid id = *fixture.session.document().selection().primary();
+        const Entity cube = world.findByStableId(id);
+        const auto worldScaleX = [&] { return glm::length(Vec3(world.get<const WorldTransform>(cube)->matrix[0])); };
+        CHECK(worldScaleX() == doctest::Approx(1.0f));
+
+        // By command.
+        std::uint64_t renders = fixture.panel->renders();
+        REQUIRE(
+            fixture.session
+                .execute("ith.entity.set_property",
+                         *serialization::parseJson(R"({"ids": [")" + id.toString() +
+                                                   R"("], "path": "ith::LocalTransform.value.scale.x", "value": 2})"))
+                .hasValue());
+        frames(1);
+        CHECK(fixture.panel->renders() == renders + 1);
+        CHECK(worldScaleX() == doctest::Approx(2.0f));
+
+        // Typed into the Details field, as a user does: a click on X, "3", Enter.
+        const std::optional<UiRect> scale = details.valueRect("ith::LocalTransform.value.scale");
+        REQUIRE(scale.has_value());
+        const float x = scale->x + scale->width / 6.0f;
+        const float y = scale->centerY();
+        renders = fixture.panel->renders();
+        step(mouseMoved(x, y));
+        step(press(MouseButton::Left, x, y));
+        step(release(MouseButton::Left, x, y));
+        frames(1);
+        REQUIRE(fixture.ui.ui->wantsTextInput());
+        step({.type = EventType::TextInput, .text = "3"});
+        step(keyDown(Key::Enter));
+        step(keyUp(Key::Enter));
+        frames(2);
+        CHECK(world.get<const LocalTransform>(cube)->value.scale.x == 3.0f);
+        CHECK(fixture.panel->renders() > renders);
+        CHECK(worldScaleX() == doctest::Approx(3.0f));
     }
 
     TEST_CASE("an image larger than the largest texture gets a clamped target and one warning") {

@@ -348,6 +348,17 @@ Esc during a drag reaches the keymap, because the UI takes keys only while a tex
 It cancels the edit and the value goes back; the rest of the drag does nothing. Check boxes, combo
 boxes, pickers and text fields set their value with one command each.
 
+**Typing a number.** A click on a drag field without moving the mouse, or a Ctrl + click, turns
+the field into a text field with its whole value selected. A double click's second click lands in
+the text field that is already open, where it selects the word under the mouse. Enter or a click
+elsewhere sets the typed value with one Set Property command, for every selected entity; Esc drops
+the text. A rotation is typed in degrees. The value isn't previewed while it is typed.
+
+The press opens a drag edit and its release ends it, empty; ImGui then opens the text field with
+no new activation, so DetailsPanel sets a change that arrives while no edit is open. A press whose
+edit is refused (while playing, for one) is remembered until its release, so the drag that follows
+changes nothing and logs one warning instead of one per frame.
+
 **Multi-select.** Values that differ between the selected entities show "Multiple Values"; an edit
 writes the same value to all of them.
 
@@ -489,6 +500,10 @@ keymap's consumer:
 - F2 renames in place, Enter keeps the name, and Esc drops it without reaching Select None;
 - dragging a row onto another reparents it in one undo entry;
 - a translation drag previews live and becomes one undo entry, and Esc cancels a drag;
+- a click or Ctrl + click on a number field types into it: Enter or a click away sets the value in
+  one undo entry, Enter without typing records nothing, and Esc drops the text without reaching
+  Select None; typed degrees set a rotation, and a typed value sets every selected entity;
+- a drag whose edit is refused while playing changes nothing and logs one warning;
 - one drag edits two selected entities whose values differed.
 
 ## The editor application

@@ -1,0 +1,1 @@
+- A click on a number field in the Details panel now lets you type a value, which Enter or a click elsewhere sets. Before, a click without dragging did nothing, so a typed value such as a new scale was lost.
