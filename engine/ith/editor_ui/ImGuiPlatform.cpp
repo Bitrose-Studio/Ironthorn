@@ -489,4 +489,8 @@ void WindowUiHost::warpMouse(float x, float y) {
     m_window->warpMouse(x, y);
 }
 
+Expected<void> WindowUiHost::showOpenFileDialog(const OpenFileDialogDesc& desc) {
+    return m_platform->showOpenFileDialog(*m_window, desc);
+}
+
 } // namespace ith

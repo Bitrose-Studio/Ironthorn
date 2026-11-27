@@ -30,6 +30,9 @@ constexpr std::array<std::string_view, 13> kMenuOrder = {
     "ith.selection.set",
 };
 
+// The command of the status bar's Content Drawer button.
+constexpr std::string_view kContentDrawerCommand = "ith.content.toggle_drawer";
+
 std::size_t menuRank(std::string_view id) {
     return static_cast<std::size_t>(std::ranges::find(kMenuOrder, id) - kMenuOrder.begin());
 }
@@ -53,7 +56,9 @@ void drawMenu(EditorSession& session, const Keymap& keymap, EditorShellState& st
     }
 }
 
-void drawStatusBar(const EditorSession& session, const EditorShellState& state, float height) {
+// The status bar: the Content Drawer button (spec 3.16), the level's title and the last command's
+// result.
+void drawStatusBar(EditorSession& session, const Keymap& keymap, EditorShellState& state, float height) {
     const ImGuiStyle& style = ImGui::GetStyle();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos({viewport->WorkPos.x, viewport->WorkPos.y + viewport->WorkSize.y - height});
@@ -67,6 +72,20 @@ void drawStatusBar(const EditorSession& session, const EditorShellState& state, 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.WindowPadding.x, style.WindowPadding.y * 0.5f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     if (ImGui::Begin("Status bar###ith.status_bar", nullptr, kFlags)) {
+        // Toggled on the press, as Ctrl + Space is: a release would first close the drawer as a click
+        // outside it, then open it again.
+        const std::string drawer = iconText(icons::kFolders) + " Content Drawer";
+        ImGui::SmallButton(drawer.c_str());
+        if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+            runMenuCommand(session, kContentDrawerCommand, state);
+        }
+        const std::vector<Chord> chords = keymap.chordsOf(kContentDrawerCommand);
+        const std::string tooltip = "Show or hide the content drawer" +
+                                    (chords.empty() ? std::string() : " (" + chordLabel(chords.front()) + ")");
+        ImGui::SetItemTooltip("%s", tooltip.c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
         const std::string title = documentTitle(session);
         ImGui::TextUnformatted(title.c_str());
         ImGui::SameLine();
@@ -256,7 +275,7 @@ void drawEditorShell(EditorSession& session, const Keymap& keymap, EditorShellSt
     drawSaveLayoutDialog(session, state);
     const float statusHeight = ImGui::GetFrameHeight();
     dock.draw(statusHeight);
-    drawStatusBar(session, state, statusHeight);
+    drawStatusBar(session, keymap, state, statusHeight);
 }
 
 } // namespace ith

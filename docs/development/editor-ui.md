@@ -73,11 +73,18 @@ graph.execute(pool);
 - Keys, mouse buttons, the wheel and text become ImGui input events. Letters and digits follow the
   user's layout (`Event::layoutKey`), as editor shortcuts do, so Ctrl + Z in a text field is the
   key that prints Z; other keys are physical.
-- The clipboard, the IME's place, the cursor shape and relative mouse mode go through a `UiHost`.
-  `WindowUiHost` implements it over `ith::Platform` (`clipboardText`, `setClipboardText`,
-  `setCursor`, `setCursorVisible`) and `ith::Window` (`setTextInputArea`, `setRelativeMouseMode`);
-  failures are dropped, as on the offscreen driver, which has no system cursors. Tests implement
+- The clipboard, the IME's place, the cursor shape, relative mouse mode and the open-file dialog go
+  through a `UiHost`. `WindowUiHost` implements it over `ith::Platform` (`clipboardText`,
+  `setClipboardText`, `setCursor`, `setCursorVisible`, `showOpenFileDialog`) and `ith::Window`
+  (`setTextInputArea`, `setRelativeMouseMode`); failures are dropped, as on the offscreen driver,
+  which has no system cursors, except the dialog's, which goes back to the caller. Tests implement
   `UiHost` to record the calls.
+- Events that `Input` doesn't route, the operating system's drops (`DropBegin`, `DropPosition`,
+  `DropFile`, `DropComplete`) and the open-file dialog's results (`FileDialogFile`,
+  `FileDialogClosed`), reach the UI through `EditorUi::handleEvent`, which the application calls
+  for every pumped event of its window. It turns the positions into UI coordinates and hands them to
+  the Content Browser panel (`EditorUiDesc::contentBrowser`); without one, they are ignored
+  ([ADR-0049](../decisions/0049-editor-content-browser-v1.md) rule 26).
 - Relative mouse mode is on while the mouse is captured (Play In Editor) or a viewport flies
   ([ADR-0042](../decisions/0042-editor-viewport.md) rule 11); the backend asks the host only when
   the mode changes, and leaves the cursor alone while it is on. When fly ends it first warps the
@@ -273,8 +280,10 @@ idle rate, 10 frames per second while one of its windows has focus and 2 while n
 - the **dock space** over the rest of the window, where `ith::DockLayout` (`DockLayout.cpp`) builds
   the layout session's current layout with DockBuilder, draws every open panel and reads what the
   user arranges back into the layout session;
-- the **status bar**: the level's file name or "Untitled", with " *" for unsaved changes, and the
-  last menu command or its error.
+- the **status bar**: the **Content Drawer** button, which runs `ith.content.toggle_drawer` on the
+  press (a release would first close the open drawer as a click outside it), with the keymap's chord
+  in its tooltip; the level's file name or "Untitled", with " *" for unsaved changes; and the last
+  menu command or its error.
 
 ## Panels
 
@@ -290,7 +299,7 @@ ith::registerDetails(session.panels(), details); // "ith.details"
 ith::OutputLog log(history, ui.theme());
 ith::registerOutputLog(session.panels(), log);   // "ith.output_log"
 ith::registerViewport(session.panels(), **viewport); // "ith.viewport", instances 1 to 4
-ith::ContentBrowserPanel content(session);
+ith::ContentBrowserPanel content(session, &host); // made before the EditorUi: .contentBrowser = &content
 ith::registerContentBrowser(session, content);  // "ith.content_browser", and the Enter prompt
 // every frame, after drawEditorShell: content.drawDrawer();
 ```
@@ -571,10 +580,13 @@ variants.
 ([ADR-0049](../decisions/0049-editor-content-browser-v1.md) rules 4, 7 and 26). Both show the same
 state; the drawer is never in a layout.
 
-- **The browser.** A toolbar in the order of spec 3.1 (the search box, the type filter menu with
-  Problems, grid or list, the sort menu, Rescan), the folder tree and the asset view side by side
-  with a splitter, the path bar (`Content › Meshes › Rocks`, a click on a segment goes there) and a
-  status line (`<n> items`, `<m> selected`, and `<p> problems`, which shows the Problems filter).
+- **The browser.** A toolbar in the order of spec 3.1 (Import, Add with New Folder, the search box,
+  the type filter menu with Problems, grid or list, the sort menu, Rescan), the folder tree and the
+  asset view side by side with a splitter, the path bar (`Content › Meshes › Rocks`, a click on a
+  segment goes there) and a status line (`<n> items`, `<m> selected`, `<p> problems`, which shows
+  the Problems filter, and the last notice: a file operation's result, why one was refused, or
+  "Importing <n> files…"). An empty folder says "This folder is empty. Drop files here or use
+  Import."
   The tree and the asset view draw only their visible rows through list clippers; grid tiles show
   the type icon (chosen by category; folders and problem entries have their own), the label on two
   lines at most ending in "…", and a warning icon on items with problems; the tooltip names the
@@ -584,11 +596,68 @@ state; the drawer is never in a layout.
   a `##` in them.
 - **Input.** Clicks issue `ith.content.select` (Ctrl toggles, Shift selects the range from the
   anchor, Ctrl + Shift adds it, a click on empty space clears, a right click selects an unselected
-  item alone); a double-click opens (a folder becomes current, a level opens). The arrow keys,
-  Home and End move the focus item and select (Shift: the range; Left and Right in the grid only,
-  Up and Down by a row), and Ctrl + F goes to the search box: widget keys of the asset view, not
-  keymap bindings. Changes asked for while the rows are drawn run once the browser is drawn, so no
-  command rebuilds what is being iterated.
+  item alone; a plain click on one item of a larger selection selects it alone on the release
+  without a drag, so dragging it moves the whole selection); a double-click opens (a folder becomes
+  current, a level opens). The arrow keys, Home and End move the focus item and select (Shift: the
+  range; Left and Right in the grid only, Up and Down by a row), and Ctrl + F goes to the search
+  box: widget keys of the asset view, not keymap bindings. Changes asked for while the rows are
+  drawn run once the browser is drawn, so no command rebuilds what is being iterated. A refused
+  command is logged and shown in the status line.
+- **File operations** ([spec](../specs/content-browser.md) 3.7 to 3.13). Everything goes through
+  the `ith.content.*` commands; the panel draws the model's pending prompt, so F2, Delete and
+  Ctrl + D from the keymap, and scripts, show the same field and dialogs:
+  - the **inline rename field** over the item's label in the grid or the list, or on its tree row
+    when the asset view doesn't show it: the editable part with the extension after it, checked
+    with `checkContentName` as the user types (the reason under the field). Enter runs
+    `ith.content.rename` with the name; an invalid name, or one the command refuses (a taken name),
+    keeps the field open with the reason. Leaving the field commits a valid name and dismisses an
+    invalid one; Escape runs `ith.content.dismiss`. New Folder (Add, or a context menu) starts it on
+    the new folder;
+  - the **delete confirmation** ("Delete <n> items?"): the first 20 items with the assets inside
+    folders and the files the browser doesn't show, then "and <k> more"; each used asset with its
+    users, naming the open level and when only its unsaved changes use it; the files that couldn't
+    be read; "This can't be undone." Delete runs `ith.content.delete` with the previewed items and
+    `confirmed`; Cancel has the keyboard focus, so Enter cancels, and Escape cancels too;
+  - the **import conflicts**, one file at a time ("File <k> of <n>"): Replace (greyed unless the
+    conflict allows it), Keep Both or Skip, with "Apply to all remaining"; the last answer runs
+    `ith.content.import` again with the answers in `choices`, keyed by each conflict's `file` as the
+    command reported it; Cancel and Escape dismiss and import nothing;
+  - **context menus**: on items Rename, Duplicate, Delete, Reimport (greyed unless the selection
+    holds an imported asset) and a problem entry's fix (Import for "Not imported", Assign New Id for
+    a duplicate id); on a tree folder New Folder, Rename and Delete; on the asset view's empty space
+    New Folder and Import…;
+  - **drag and drop** between the browser's own widgets: items and tree folders onto folder items,
+    tree folders and path bar segments run `ith.content.move`. A target that can't take the drag
+    (a folder into itself or below it; a drag holding a problem entry or the Content folder) isn't
+    highlighted, the cursor shows "not allowed" and the drag's tooltip says why.
+- **Import.** The Import button (and Import… in the empty-space menu) shows the platform's open-file
+  dialog through `UiHost::showOpenFileDialog`: several files, the filter "Importable files" with the
+  importers' extensions (`ImporterRegistry::extensions()`) and `ithasset`, `ithmap`, each also in
+  upper case for zenity, then "All files"; it starts in the folder the last chosen files came from.
+  The files go to the folder that was current when Import was pressed. When the dialog can't be
+  shown (no host, one already open, `platform.dialog_busy`, or a `FileDialogClosed` with an error)
+  the error is logged and the status line says to drop files onto the browser instead. **Drops from
+  the operating system** arrive through `EditorUi::handleEvent`: while a drag hovers the window, the
+  folder item, tree folder or path bar segment under it is highlighted, else the whole panel or
+  drawer; the drop imports into that folder, else the current folder, by the rectangles of the last
+  frame; a drop anywhere else is ignored. Every import is queued: the next frame draws "Importing
+  <n> files…", and the frame after runs `ith.content.import` before drawing (ADR-0049 rule 11); the
+  editor asks for frames while one is queued.
+  - **Refused, never lost.** Files that arrive while a question of the browser is open (the delete
+    or conflict dialog, the unsaved-changes question, a pending rename), or while another import is
+    queued, are not imported: the status line says why and the log has a warning. Import is
+    refused the same way while a question is open, and a drag over the browser isn't highlighted
+    then.
+  - **Drops without a position.** When Windows can't start its drag and drop service (OLE), SDL
+    reports dropped files at 0, 0 with no `DropPosition`. Such a drop goes into the current folder
+    when the browser was drawn in the last frame; otherwise the status line asks to open the
+    browser and drop again, and the log says why.
+  - **The drag cursor.** While files from the operating system hover the window, its cursor always
+    shows "copy", also outside the browser where a drop does nothing: SDL answers every drag with
+    copy.
+  - **As built:** ADR-0049 rule 26 has `EditorUi` hit-test drops; `EditorUi::handleEvent` only
+    turns the positions into UI coordinates, and the panel, which knows where its folders were
+    drawn, hit-tests them.
 - **Unsaved changes.** Opening a level (double-click, or Enter as the prompt of `ith.content.open`)
   while the open one is dirty asks Save / Don't Save / Cancel first, then runs the command with
   `unsaved`; Escape cancels.
@@ -597,8 +666,9 @@ state; the drawer is never in a layout.
   bar, not dockable and without saved settings. It starts at 40 % of the window, its top edge
   resizes it (150 pixels at display scale 1 to 80 % of the window, kept as session state when the
   drag ends), and it takes the keyboard focus when it opens. A click outside it closes it unless one
-  of its popups is open; Escape with nothing selected closes it (`ith.content.dismiss`), and so does
-  opening a level from it.
+  of its popups or dialogs is open; Escape with nothing selected closes it (`ith.content.dismiss`),
+  and so does opening a level from it. `drawDrawer()` also draws the delete and conflict dialogs and
+  the drop highlight, and runs a queued import, also while the drawer is closed.
 - **Focus.** `drawDrawer()` also reports whether the panel or the drawer (child windows included)
   had the keyboard focus this frame (`ContentBrowserModel::setKeyboardFocus`), which the keymap
   reads to choose the Content context, and where each was drawn (`setScreenRects`). Between frames
@@ -641,7 +711,26 @@ from it, its height clamped and the layout unchanged; and 2 000 items drawn by t
 and rows only, with idle frames rebuilding nothing; a click on a tile and Delete in one batch of
 events sparing the level; Escape closing the filter menu or the unsaved-changes question without
 running a shortcut; the list sorting by its Name and Type headers with a `##` in a name; and the
-drawer closing when the panel is opened.
+drawer closing when the panel is opened. For the file operations: the empty-folder text; the inline
+rename from F2 (Enter renaming with the id kept, an invalid and a taken name keeping the field open,
+Escape cancelling), from Add > New Folder (leaving the field commits, Escape keeps the default) and
+on a tree folder's row; the delete dialog's text (users, the open level and its unsaved changes,
+unreadable files, "and 2 more" past 20 items), Enter on the focused Cancel, Escape, Delete, and the
+drawer staying open behind it; Import through the recording host (its filters, `allowMany`, the
+start folder of the next dialog), the import queued a frame with its notice, the conflicts asked one
+file at a time with Replace greyed for native assets, Skip, then Apply to all with Keep Both, and
+Escape importing nothing; a dialog refused at once or failing later saying to drop files, a
+cancelled dialog, results without a dialog ignored, and a panel without a host; operating-system
+drops onto a folder tile (with its highlight), empty space, a tree folder, a path bar segment and
+the drawer, and drops outside, from another window or without files ignored; dragging a selection
+onto a folder and a tree folder refused below itself (the "not allowed" cursor and the reason in the
+tooltip); the context menus (Reimport greyed for native assets, Duplicate, New Folder, Import…);
+and the status bar's Content Drawer button; files refused while the delete dialog is open (a drop,
+Import, a dialog result) with the dialog staying open, a dialog result and a drop in one batch
+(the second refused with its notice), drops without a position (Windows without OLE) with and
+without a browser on screen, a drop at display scale 2, and a dialog file with an unusable name
+(POSIX) not becoming the next start folder. What a frame drew is read from ImGui's log buffer
+(`drawnText` in `EditorUiTestSupport.h`, which depends on ImGui internals of the pinned version).
 
 ## The editor application
 
@@ -659,7 +748,9 @@ of the project with its asset database (the glTF importer registered; `Content/`
 Details, Content Browser and Output Log panels and the content drawer (the
 UI and viewport shaders compiled from Slang for the device at start-up), then runs the
 loop of ADR-0035 rule 22: events (waiting while idle), main-thread jobs, input routing, the UI
-frame, rendering. Where the window has no native handle (SDL's `offscreen` driver) it draws into an offscreen texture; where no GPU device
+frame, rendering; a queued import of the Content Browser also asks for frames. The drops and the
+open-file dialog's results of its window go to `EditorUi::handleEvent`. Where the window has no
+native handle (SDL's `offscreen` driver) it draws into an offscreen texture; where no GPU device
 can be created it renders on the null device. Closing the window quits after a running save has
 finished. With unsaved changes the first close is refused with a message in the status bar, and a
 second close discards them, until the Save / Don't Save / Cancel dialog exists.
@@ -707,11 +798,12 @@ passed and 1 when it failed.
   Never on a desktop. Not in Release, where the editor isn't built.
 - `editor_ui_gpu` (label `gpu`, built with the shader compiler): a golden screenshot of the
   shell in the Default layout (menu bar; the Outliner above Details on the right and the Output Log
-  under the empty central area, all of an untitled level; status bar), 1280 x 720 at display scale 1,
-  with a fixed time step and no caret blink, on WARP (`golden/shell_d3d12.ppm`) and on lavapipe
-  (`golden/shell_vulkan.ppm`), the UI shader compiled at run time. A pixel differs when a channel
-  differs by more than 8 of 255, and the shot fails when more than 0.5% of the pixels differ; the
-  rendered image is then written next to the test executable (`shell_<backend>.actual.ppm`). The
+  under the empty central area, all of an untitled level; the status bar with its Content Drawer
+  button), 1280 x 720 at display scale 1, with a fixed time step and no caret blink, on WARP
+  (`golden/shell_d3d12.ppm`) and on lavapipe (`golden/shell_vulkan.ppm`), the UI shader compiled
+  at run time. A pixel differs when a channel differs by more than 8 of 255, and the shot fails
+  when more than 0.5% of the pixels differ; the rendered image is then written next to the test
+  executable (`shell_<backend>.actual.ppm`). The
   golden images in `tests/editor_ui_gpu/golden` are uncompressed binary PPM stored with Git LFS
   (`*.ppm` in `.gitattributes`); `ITH_UPDATE_GOLDEN=1` rewrites them, on Windows for WARP and in a
   Linux container with Ubuntu 24.04's `mesa-vulkan-drivers` for lavapipe. A backend without its
@@ -735,11 +827,12 @@ passed and 1 when it failed.
 
 ## Not here yet
 
-- The Content Browser's file operations, import, drops and dialogs, and the Content Drawer button in
-  the status bar, which changes the shell's golden images (step 12, slice 2); and the main
-  toolbar (a later P2 step); asset pickers in Details.
+- In the Content Browser, with the keyboard focus in the folder tree, F2 and Delete act on the
+  content selection instead of the current folder (spec 3.8 and 3.11); the tree folder's context
+  menu renames and deletes it.
+- The main toolbar (a later P2 step); asset pickers in Details.
 - In the viewport: the rotate and scale gizmos and the gizmo's centre handle, the selection
   outline, and marquee selection; the active viewport for Add Shape is always `ith.viewport.1`.
 - A shader cache for the UI and viewport shaders (with the shader cache of ADR-0011 rule 8).
-- File dialogs, and a Quit command with the Save / Don't Save / Cancel dialog.
+- Save and folder dialogs, and a Quit command with the Save / Don't Save / Cancel dialog.
 - Right-to-left and complex scripts, which ImGui can't shape (P4 brings shaped text).

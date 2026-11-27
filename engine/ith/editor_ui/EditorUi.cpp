@@ -1,5 +1,6 @@
 #include "ith/editor_ui/EditorUi.h"
 
+#include "ith/editor_ui/ContentBrowserPanel.h"
 #include "ith/editor_ui/ImGuiPlatform.h"
 #include "ith/editor_ui/ImGuiRenderer.h"
 #include "ith/file_system/FileSystem.h"
@@ -143,6 +144,8 @@ Expected<std::unique_ptr<EditorUi>> EditorUi::create(const EditorUiDesc& desc) {
         return makeUnexpected(renderer.error());
     }
     ui->m_renderer = std::move(*renderer);
+    ui->m_contentBrowser = desc.contentBrowser;
+    ui->m_window = desc.window;
     ui->m_platform =
         std::make_unique<UiPlatformBackend>(*desc.input, desc.window, desc.host, desc.viewports, desc.content);
     return ui;
@@ -223,6 +226,36 @@ void EditorUi::addRenderPasses(rg::RenderGraph& graph, rg::Texture target, std::
     m_frameEnded = false;
     m_renderer->prepare(frameSlot);
     m_renderer->addPasses(graph, target, load, clearColor);
+}
+
+void EditorUi::handleEvent(const Event& event) {
+    assertThread();
+    if (m_contentBrowser == nullptr || event.window != m_window || m_window == kNoWindow) {
+        return;
+    }
+    const Vec2 at = m_platform->toUi(event.x, event.y);
+    switch (event.type) {
+        case EventType::DropBegin:
+            m_contentBrowser->dragEntered();
+            break;
+        case EventType::DropPosition:
+            m_contentBrowser->dragMoved(at.x, at.y);
+            break;
+        case EventType::DropFile:
+            m_contentBrowser->fileDropped(event.text, at.x, at.y);
+            break;
+        case EventType::DropComplete:
+            m_contentBrowser->dropEnded();
+            break;
+        case EventType::FileDialogFile:
+            m_contentBrowser->dialogFileChosen(event.text);
+            break;
+        case EventType::FileDialogClosed:
+            m_contentBrowser->dialogClosed(event.text);
+            break;
+        default:
+            break;
+    }
 }
 
 void EditorUi::setDisplayScale(float displayScale) {

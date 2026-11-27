@@ -21,9 +21,9 @@
   Reimport runs the importer again; Fix imports a file that has no sidecar, or gives an unresolved
   duplicate a new id.
 - With the Content Browser focused, F2 and Delete start a rename or a delete, and Ctrl + D
-  duplicates. The panel's rename field and its dialogs come next. Escape cancels a pending rename or
-  dialog before it clears the selection. These keys never reach the level while the browser has the
-  focus, even when a keymap layer unbinds the content commands.
+  duplicates. Escape cancels a pending rename or dialog before it clears the selection. These keys
+  never reach the level while the browser has the focus, even when a keymap layer unbinds the
+  content commands.
 - On Windows, a file that another program holds open can't be renamed, moved, replaced or deleted.
   Such an operation fails with an error that names the file.
 - `AssetDatabase::importers()` returns the importer registry that the database uses.

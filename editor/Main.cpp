@@ -544,8 +544,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     const ith::Keymap keymap = ith::Keymap::load(config, session.commands(), warnings);
     warnings.insert(warnings.end(), config.warnings().begin(), config.warnings().end());
     for (const ith::Error& warning : warnings) {
-        // Commands of later editor work (the content file operations, Play In Editor) are bound before
-        // they exist.
+        // Commands of later editor work (Play In Editor) are bound before they exist.
         if (warning.code == "editor.keymap.unknown_command") {
             continue;
         }
@@ -577,6 +576,8 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     const ith::Expected<std::string> executable = ith::fs::executableDirectory();
     const std::string fonts = executable ? ith::fs::joinPath(*executable, "fonts") : std::string("fonts");
     ith::WindowUiHost host(platform, window);
+    // Before the UI, which hands it the drops and the open-file dialog's results (ADR-0049 rule 26).
+    ith::ContentBrowserPanel contentBrowser(session, &host);
     ith::Expected<std::unique_ptr<ith::EditorUi>> created =
         ith::EditorUi::create({.device = &device,
                                .targetFormat = kTargetFormat,
@@ -588,6 +589,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
                                .host = &host,
                                .viewports = &viewportInput,
                                .content = &session.content(),
+                               .contentBrowser = &contentBrowser,
                                .displayScale = window.displayScale()});
     if (!created) {
         input.removeConsumer(viewportConsumer);
@@ -621,7 +623,6 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     ith::registerOutliner(session, outliner);
     ith::DetailsPanel details(session);
     ith::registerDetails(session.panels(), details);
-    ith::ContentBrowserPanel contentBrowser(session);
     ith::registerContentBrowser(session, contentBrowser);
     ith::OutputLog outputLog(logHistory, ui.theme());
     ith::registerOutputLog(session.panels(), outputLog);
@@ -654,6 +655,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
                 running = !mayClose(session, shell, closeWarned);
             } else if (event.window == window.id()) {
                 applyWindowEvent(event, window, target, ui, dock);
+                ui.handleEvent(event); // drops and the open-file dialog's results, for the Content Browser
             }
         }
         applyInput(input, window);
@@ -664,7 +666,8 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         const bool cameraMoved = viewportInput.update(deltaSeconds);
 
         const bool changed = watch.changed(session, logHistory);
-        if (!events.empty() || jobsRun > 0 || changed || cameraMoved) {
+        // A queued import runs two frames after it was queued: it never waits on the idle rate.
+        if (!events.empty() || jobsRun > 0 || changed || cameraMoved || contentBrowser.importPending()) {
             idle.requestFrame();
         }
 

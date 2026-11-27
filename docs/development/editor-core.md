@@ -565,8 +565,8 @@ where the entity already is runs nothing.
 ([ADR-0049](../decisions/0049-editor-content-browser-v1.md), the
 [spec](../specs/content-browser.md)), the view model the Content Browser panel and the content
 drawer share: browsing (ADR-0049 rule 27) and the file operation and import commands (rule 28). The
-UI of the file operations (inline rename, the delete and conflict dialogs, drops and the file
-dialog) comes with the panel's next step.
+panel draws their prompts (the inline rename, the delete and conflict dialogs) and turns drops and
+the file dialog's results into `ith.content.import` ([editor UI](editor-ui.md#content-browser)).
 
 ```cpp
 session.execute("ith.content.rescan");                                 // scan Content/, build the items

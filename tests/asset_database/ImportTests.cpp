@@ -420,6 +420,14 @@ TEST_SUITE("asset_database.import") {
         CHECK(rewritten.find("note") == std::string::npos);
     }
 
+    TEST_CASE("the registry lists the extensions of its importers in the order they were added") {
+        ith::ImporterRegistry importers;
+        CHECK(importers.extensions().empty());
+        importers.add(std::make_unique<ObjectsImporter>(nullptr, 1));
+        CHECK(importers.extensions() == std::vector<std::string_view>{".objects"});
+        CHECK(importers.findForPath("Folder/A.OBJECTS") != nullptr);
+    }
+
     TEST_CASE("files larger than the limit are refused before they are read") {
         const TempProject project;
         project.write("Big.bin", std::string(100, 'x'));

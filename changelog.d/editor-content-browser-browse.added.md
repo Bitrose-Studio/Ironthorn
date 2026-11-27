@@ -7,12 +7,12 @@
   a status line. Click, Ctrl, Shift and the arrow keys select; double-click or Enter goes into a
   folder or opens a level, asking about unsaved changes first; Rescan reads the disk again after
   outside changes, and the open level follows its file when it was moved. A new level saved into
-  `Content` shows at once. File operations and import come next.
+  `Content` shows at once.
 - While the Content Browser has the keyboard focus, Ctrl + A, Escape, Enter (also on the keypad) and
   Alt + Up act on the browser instead of the level (the keymap's new Content context), and the
   arrows, Home, End and Ctrl + F only move in the browser; elsewhere they work as before. F2, Delete
-  and Ctrl + D do nothing while the browser has the focus, until its file operations arrive. A click
-  into the browser counts at once, also for a key pressed right after it.
+  and Ctrl + D act on the browser too. A click into the browser counts at once, also for a key
+  pressed right after it.
 - While a menu or a dialog is open, its keys never also run a shortcut: Escape closes the menu only.
 - The keymap id `ith.content_browser.open_drawer` is now `ith.content.toggle_drawer`. Input methods
   that take Ctrl + Space (fcitx5, IBus, the Chinese IMEs on Windows) hide it from the editor; rebind

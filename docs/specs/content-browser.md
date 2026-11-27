@@ -1,12 +1,13 @@
 # Spec: Content Browser v1
 
 - **Status:** Settled by [ADR-0049](../decisions/0049-editor-content-browser-v1.md) (Accepted
-  2026-11-27); the browse slice (ADR-0049 rule 27) and the commands of the file operations and
-  import (`ith.content.*`, tested headless) are implemented; the panel's side of them is not yet:
-  the inline rename field, the delete and import-conflict dialogs, drag-and-drop moves, their menu
-  and toolbar entries, the handling of operating-system drops and of the open-file dialog (the
-  platform delivers both, ADR-0051), and the Content Drawer button in the status bar (3.16; it
-  changes the shell's golden images). The ADR settles the
+  2026-11-27); the Content Browser v1 is implemented except one point: with the keyboard focus in
+  the folder tree, F2 and Delete act on the content selection instead of the current folder (3.8,
+  3.11). Implemented: the browse slice (ADR-0049 rule 27), the commands of the file operations and
+  import (`ith.content.*`, tested headless), and the panel's side of them (the inline rename field,
+  the delete and import-conflict dialogs, drag-and-drop moves, their menu and toolbar entries,
+  operating-system drops and the open-file dialog, and the Content Drawer button in the status bar;
+  ADR-0052 item 6). The ADR settles the
   open questions (section 6) and the spec follows it where it differs from the first draft (its
   rules 3, 6, 10, 11 and 12)
 - **Date:** 2026-11-27
@@ -278,6 +279,9 @@ The last item added is the **primary item**.
 
 - F2, or Rename in the context menu, starts an **inline rename** of the primary item (or the
   selected tree folder when the tree has focus).
+  *Not implemented yet:* with the focus in the folder tree, F2 renames the primary item of the
+  content selection, not the current folder; Rename in the tree folder's context menu renames the
+  folder.
 - The field holds the editable part: a folder's name, a native asset's name without its
   extension, an imported file's name without its last extension. The extension is shown after
   the field and can't be changed (`asset.extension_changed` makes it part of the type).
@@ -360,6 +364,8 @@ The last item added is the **primary item**.
 
 - Delete, or Delete in the context menu, acts on the selection (or the selected tree folder when
   the tree has focus). It always asks first, because it can't be undone.
+  *Not implemented yet:* with the focus in the folder tree, Delete acts on the content selection,
+  not the current folder; Delete in the tree folder's context menu deletes the folder.
 - **What is deleted:**
   - an asset: its file and its sidecar;
   - a problem entry: its file (an orphan sidecar: the sidecar; a file without a sidecar: the file;

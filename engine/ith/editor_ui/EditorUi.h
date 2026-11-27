@@ -59,11 +59,12 @@ namespace ith {
 class UiPlatformBackend;
 class UiRenderer;
 class ContentBrowserModel;
+class ContentBrowserPanel;
 class ViewportConsumer;
 
-// What the platform backend needs from the window it runs in: the clipboard, the IME's place and
-// the cursor (ADR-0029 rule 6). WindowUiHost implements it over ith::Platform and ith::Window; tests
-// implement it to record the calls.
+// What the UI needs from the window it runs in: the clipboard, the IME's place, the cursor
+// (ADR-0029 rule 6) and the open-file dialog (ADR-0049 rule 26). WindowUiHost implements it over
+// ith::Platform and ith::Window; tests implement it to record the calls.
 class UiHost {
 public:
     UiHost() = default;
@@ -88,12 +89,19 @@ public:
     // Moves the cursor to `x`, `y` in window pixels: where a fly started, just before relative mode
     // turns off.
     virtual void warpMouse(float x, float y) = 0;
+    // Shows the operating system's open-file dialog over the window and returns at once, as
+    // Platform::showOpenFileDialog does: the chosen paths arrive later as FileDialogFile events and
+    // then FileDialogClosed, which the application hands to EditorUi::handleEvent. Fails when the
+    // dialog can't be started ("platform.dialog_busy" while one is open). The strings of `desc` need
+    // to live only for the call.
+    virtual Expected<void> showOpenFileDialog(const OpenFileDialogDesc& desc) = 0;
 };
 
 // A UiHost over the application's Platform and one of its windows. Failures are dropped: the
 // offscreen driver has no system cursors, and an unreadable clipboard pastes nothing. The first
 // failed relative-mode switch is logged as a warning (category "EditorUi") with the platform's
-// message; later ones are not, as the UI asks again only when the mode changes.
+// message; later ones are not, as the UI asks again only when the mode changes. The open-file
+// dialog's failure is returned to the caller.
 class WindowUiHost final : public UiHost {
 public:
     WindowUiHost(Platform& platform, Window& window) noexcept : m_platform(&platform), m_window(&window) {}
@@ -106,6 +114,8 @@ public:
     void setRelativeMouseMode(bool enabled) override;
     // Window::warpMouse.
     void warpMouse(float x, float y) override;
+    // Platform::showOpenFileDialog over the window.
+    Expected<void> showOpenFileDialog(const OpenFileDialogDesc& desc) override;
 
 private:
     Platform* m_platform;
@@ -157,6 +167,10 @@ struct EditorUiDesc {
     // click into the browser and a key in the same batch of events reach the Content context
     // (ADR-0049 rule 4). Null: no Content Browser. Must outlive the EditorUi.
     ContentBrowserModel* content = nullptr;
+    // The Content Browser panel, which handleEvent() hands the operating system's drops and the
+    // open-file dialog's results (ADR-0049 rule 26). Null: those events are ignored. Must outlive
+    // the EditorUi.
+    ContentBrowserPanel* contentBrowser = nullptr;
     ThemeTokens theme = defaultDarkTheme();
     float displayScale = 1.0f;
     // Off draws the text cursor without blinking, for reproducible images.
@@ -297,6 +311,19 @@ public:
                          rhi::LoadOp load = rhi::LoadOp::Load,
                          const std::array<float, 4>& clearColor = {0.0f, 0.0f, 0.0f, 1.0f});
 
+    // Hands the UI an event Input doesn't route (ADR-0049 rule 26): the operating system's drops
+    // (DropBegin, DropPosition, DropFile, DropComplete) and the open-file dialog's results
+    // (FileDialogFile, FileDialogClosed) of the UI's window go to the Content Browser
+    // (EditorUiDesc::contentBrowser), with positions turned from window pixels into UI coordinates by
+    // the last frame's pixel ratio (pixels per window coordinate, from the UiFrameInput of the last
+    // newFrame; a display-scale change applies from the next frame). The browser hit-tests a drop
+    // against where it was drawn in the last frame and imports into the folder under it; a drop
+    // elsewhere is ignored. Every other event,
+    // events of other windows (a DropBegin without a window included), and every event when there is
+    // no Content Browser, are ignored. Call it for each pumped event, outside a UI frame. Main thread
+    // (asserted).
+    void handleEvent(const Event& event);
+
     // Applies the theme again at a new display scale (WindowDisplayScaleChanged). Fonts follow
     // without rebuilding the atlas.
     void setDisplayScale(float displayScale);
@@ -329,6 +356,8 @@ private:
     std::unique_ptr<Fonts> m_fonts;
     std::unique_ptr<UiPlatformBackend> m_platform;
     std::unique_ptr<UiRenderer> m_renderer;
+    ContentBrowserPanel* m_contentBrowser = nullptr;
+    WindowId m_window = kNoWindow;
     ThemeTokens m_theme;
     float m_displayScale = 1.0f;
     std::thread::id m_thread;

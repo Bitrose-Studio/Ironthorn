@@ -52,6 +52,8 @@ ith_add_module(editor_ui
         math
         reflection
         assets
+        asset_database
+        level
         ecs
         shapes
         editor_core

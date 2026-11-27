@@ -66,6 +66,11 @@ public:
 
     [[nodiscard]] ConsumerId consumer() const noexcept { return m_consumer; }
 
+    // A position in window pixels as UI coordinates, by the last frame's sizes.
+    [[nodiscard]] Vec2 toUi(float x, float y) const noexcept {
+        return Vec2{x / m_pixelsPerUnitX, y / m_pixelsPerUnitY};
+    }
+
     // For the ImGui callbacks.
     [[nodiscard]] UiHost* host() const noexcept { return m_host; }
 

@@ -133,6 +133,11 @@ public:
     // case, or null.
     [[nodiscard]] const Importer* findForPath(std::string_view path) const;
 
+    // Every extension the registered importers read, lowercase with the dot (".gltf"): importers in
+    // the order they were added, each importer's extensions in its own order. Valid as long as the
+    // importers are.
+    [[nodiscard]] std::vector<std::string_view> extensions() const;
+
 private:
     // The importer of a lowercase extension such as ".png", or null.
     [[nodiscard]] const Importer* findForExtension(std::string_view extension) const noexcept;

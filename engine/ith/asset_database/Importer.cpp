@@ -82,6 +82,15 @@ const Importer* ImporterRegistry::findForPath(std::string_view path) const {
     return findForExtension(extension);
 }
 
+std::vector<std::string_view> ImporterRegistry::extensions() const {
+    std::vector<std::string_view> result;
+    for (const std::unique_ptr<Importer>& importer : m_importers) {
+        const std::span<const std::string_view> own = importer->extensions();
+        result.insert(result.end(), own.begin(), own.end());
+    }
+    return result;
+}
+
 const Importer* ImporterRegistry::findForExtension(std::string_view extension) const noexcept {
     for (const std::unique_ptr<Importer>& importer : m_importers) {
         const std::span<const std::string_view> extensions = importer->extensions();

@@ -14,6 +14,8 @@
 #include "ith/rhi/NullDevice.h"
 
 #include <doctest/doctest.h>
+#include <imgui.h>
+#include <imgui_internal.h> // drawnText: ImGui's log buffer
 
 #include <array>
 #include <cstddef>
@@ -71,6 +73,20 @@ public:
         mouseCalls.push_back("warp");
     }
 
+    Expected<void> showOpenFileDialog(const OpenFileDialogDesc& desc) override {
+        ++dialogs;
+        dialogFilters.clear();
+        for (const FileDialogFilter& filter : desc.filters) {
+            dialogFilters.emplace_back(std::string(filter.name), std::string(filter.patterns));
+        }
+        dialogFolder = std::string(desc.defaultFolder);
+        dialogAllowMany = desc.allowMany;
+        if (dialogError.has_value()) {
+            return makeUnexpected(*dialogError);
+        }
+        return {};
+    }
+
     std::string clipboard;
     int clipboardReads = 0;
     std::optional<TextInputArea> textInputArea;
@@ -82,6 +98,13 @@ public:
     std::optional<std::pair<float, float>> warpedTo;
     // The relative-mode switches and warps, in order.
     std::vector<std::string> mouseCalls;
+    // The open-file dialogs asked for, the last one's filters (name, patterns), start folder and
+    // whether it allowed several files; the error the next ones fail with, if any.
+    int dialogs = 0;
+    std::vector<std::pair<std::string, std::string>> dialogFilters;
+    std::string dialogFolder;
+    bool dialogAllowMany = false;
+    std::optional<Error> dialogError;
 };
 
 // A consumer below the UI that records what reaches it.
@@ -221,5 +244,22 @@ struct UiFixture {
     std::string lastGraph;
     std::uint64_t timeNs = 1'000'000'000;
 };
+
+// The text one UI frame of `fixture` draws through ImGui's text widgets while `draw` runs (labels
+// drawn straight into a draw list are not in it). It depends on ImGui internals of the pinned
+// version: the log-to-buffer mode and GImGui->LogBuffer of imgui_internal.h, which LogFinish clears,
+// so the buffer is read before it. Logging also unclips items, so list clippers draw every row in
+// this frame.
+template <typename Draw>
+std::string drawnText(UiFixture& fixture, Draw&& draw) {
+    std::string text;
+    fixture.frame([&text, &draw] {
+        ImGui::LogToBuffer();
+        draw();
+        text = GImGui->LogBuffer.c_str();
+        ImGui::LogFinish();
+    });
+    return text;
+}
 
 } // namespace ith::test::ui

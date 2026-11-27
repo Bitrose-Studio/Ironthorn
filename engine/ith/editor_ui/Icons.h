@@ -51,12 +51,16 @@ inline constexpr Icon kList{"list", 0xE106};
 inline constexpr Icon kFilter{"filter", 0xE0DC};
 inline constexpr Icon kSort{"arrow-down-up", 0xE046};
 inline constexpr Icon kChevronRight{"chevron-right", 0xE06F};
+inline constexpr Icon kImport{"import", 0xE22F};
+inline constexpr Icon kFolderPlus{"folder-plus", 0xE0D9};
+inline constexpr Icon kFolders{"folders", 0xE33F};
 
 // Every icon above, for the codepoint check.
-inline constexpr std::array kAll{kFilePlus, kFolderOpen,   kSave,     kSaveAll, kUndo,  kRedo,        kTrash, kCopy,
-                                 kPencil,   kSelectAll,    kCircleX,  kPlus,    kReset, kSearch,      kClose, kFolder,
-                                 kFile,     kFileQuestion, kFileText, kMap,     kBox,   kImage,       kMusic, kWarning,
-                                 kRefresh,  kGrid,         kList,     kFilter,  kSort,  kChevronRight};
+inline constexpr std::array kAll{kFilePlus, kFolderOpen,   kSave,      kSaveAll,      kUndo,     kRedo,  kTrash,
+                                 kCopy,     kPencil,       kSelectAll, kCircleX,      kPlus,     kReset, kSearch,
+                                 kClose,    kFolder,       kFile,      kFileQuestion, kFileText, kMap,   kBox,
+                                 kImage,    kMusic,        kWarning,   kRefresh,      kGrid,     kList,  kFilter,
+                                 kSort,     kChevronRight, kImport,    kFolderPlus,   kFolders};
 
 } // namespace icons
 

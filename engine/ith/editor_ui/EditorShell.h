@@ -7,7 +7,9 @@
 // when open) and the layout commands: Load Layout, Save Layout As (a dialog asks for the name and
 // confirms an overwrite), Set as Default, Delete Layout (user layouts) and Reset Layout. A command
 // that can't run now is shown disabled with its reason as the tooltip; one that fails reports its
-// error in the status bar.
+// error in the status bar. The status bar starts with the Content Drawer button, which runs
+// ith.content.toggle_drawer on the press (docs/specs/content-browser.md 3.16), then shows the level's
+// title and the last command's result.
 
 #include "ith/foundation/Expected.h"
 #include "ith/serialization/Value.h"

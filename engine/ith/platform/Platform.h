@@ -77,9 +77,10 @@ struct FileDialogFilter {
     std::string_view name;
     // The file extensions it shows, without dots, separated by semicolons: "png;jpg;jpeg"; or "*"
     // for every file. Never empty (asserted). Only letters, digits, '-', '_' and '.' are allowed in
-    // an extension; the dialog reports any other pattern as an error (FileDialogClosed). zenity
-    // matches extensions case-sensitively; the Windows dialog and the desktop portal don't, so
-    // list both cases ("png;PNG") where it matters.
+    // an extension; the dialog reports any other pattern as an error (FileDialogClosed). The Windows
+    // dialog ignores case, and SDL builds case-insensitive globs for zenity; for the desktop portal
+    // SDL passes "*.<pattern>" as it is, so whether case matters depends on the portal's backend.
+    // List both cases ("png;PNG") where it matters.
     std::string_view patterns;
 };
 
