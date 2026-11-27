@@ -1,7 +1,8 @@
 # ADR-0049: Editor Content Browser v1 (amends 0015, 0037)
 
 - **Status:** Accepted
-- **Amended by:** [ADR-0050](0050-editor-content-browser-browse-slice-as-built.md)
+- **Amended by:** [ADR-0050](0050-editor-content-browser-browse-slice-as-built.md),
+  [ADR-0051](0051-platform-open-file-dialog-as-built.md)
 - **Date:** 2026-11-27
 - **Related:** amends [ADR-0037](0037-editor-commands-transactions-selection-and-automation.md)
   rule 4 (a focus context for shortcuts) and
