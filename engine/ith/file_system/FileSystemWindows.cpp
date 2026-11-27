@@ -438,6 +438,15 @@ Expected<std::string> readFile(std::string_view path, std::size_t maxSize) {
         }
         return windowsError("can't open", native->utf8, error);
     }
+    // Only a file on a disk: not a pipe, a console or another device.
+    const DWORD type = GetFileType(file.get());
+    // FILE_TYPE_UNKNOWN is a failure only when GetFileType sets an error; an unknown type sets none.
+    if (const DWORD typeError = type == FILE_TYPE_UNKNOWN ? GetLastError() : NO_ERROR; typeError != NO_ERROR) {
+        return windowsError("can't get the type of", native->utf8, typeError);
+    }
+    if (type != FILE_TYPE_DISK) {
+        return pathError("fs.unsupported", "can't read", native->utf8, "it is not a regular file");
+    }
     LARGE_INTEGER size{};
     if (GetFileSizeEx(file.get(), &size) == FALSE) {
         return windowsError("can't get the size of", native->utf8, GetLastError());

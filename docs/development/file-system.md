@@ -49,7 +49,7 @@ Three roots are recognized: `/`, a drive root `C:/` and a UNC root `//server/sha
 
 | Function | What it does |
 |---|---|
-| `readFile(path, maxSize)` | The whole file. The size is checked before anything is allocated (`fs.too_large`). On Windows the file is opened with read, write and delete sharing, so a reader never blocks a replacement, and an open that races a replacement in progress is tried again (see below). |
+| `readFile(path, maxSize)` | The whole file. The size is checked before anything is allocated (`fs.too_large`). Only a regular file is read, at once, without waiting for a FIFO's writer: on POSIX a FIFO, a socket or a device fails with `fs.unsupported`, and an open held up by another process's write lease with `fs.busy`; on Windows a handle that is not a disk file (a pipe, a console, a device) fails with `fs.unsupported`, while an AF_UNIX socket file already fails to open, with `fs.io`. On Windows the file is opened with read, write and delete sharing, so a reader never blocks a replacement, and an open that races a replacement in progress is tried again (see below). |
 | `writeFileAtomic(path, bytes, options)` | Readers see the old file or the new one, never a partial one. See below. |
 | `fileInfo(path)` | Kind, size and modification time (nanoseconds since 1970 UTC), or `nullopt` when nothing is there. A final link is reported as a link, with its target's kind and size. |
 | `listDirectory(path)` | One level: name, kind, size and `validName`. |
@@ -141,13 +141,13 @@ they implement the functions.
 | `fs.not_found` | The file, or a directory on the way, doesn't exist. |
 | `fs.already_exists` | `move` onto an existing name. |
 | `fs.access_denied` | Permissions, a read-only medium. |
-| `fs.busy` | Another program holds the file (Windows), after the retries of an atomic write. |
+| `fs.busy` | Another program holds the file (Windows), after the retries of an atomic write; on POSIX, `readFile` of a file under another process's write lease. |
 | `fs.not_a_directory`, `fs.is_a_directory` | The path names the other kind. |
 | `fs.not_empty` | `remove` of a directory with entries. |
 | `fs.invalid_path` | Not UTF-8, a NUL byte, an empty path, a path without a file name, a name too long. |
 | `fs.too_large` | `readFile` above `maxSize`. |
 | `fs.no_space` | The disk or quota is full. |
-| `fs.unsupported` | The platform or file system can't do it. |
+| `fs.unsupported` | The platform or file system can't do it; `readFile` of something other than a regular file (on Windows an AF_UNIX socket file is `fs.io`). |
 | `fs.io` | Anything else, and the test faults. |
 
 The message names the path and gives the operating system's text, for example

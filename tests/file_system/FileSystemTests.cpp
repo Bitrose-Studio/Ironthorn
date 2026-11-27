@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -29,7 +30,9 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
 #endif
 
@@ -235,6 +238,40 @@ TEST_SUITE("file_system.files") {
             CHECK(missing.error().message.find("none.bin") != std::string::npos);
         }
         CHECK(fs::readFile(directory.path(), 100).error().code == "fs.is_a_directory");
+    }
+
+    TEST_CASE("readFile refuses what is not a regular file at once: a FIFO without a writer, a socket, a device") {
+#ifdef _WIN32
+        // The NUL device opens as a character device, not a disk file.
+        const ith::Expected<std::string> device = fs::readFile("NUL", 100);
+#else
+        const TempDirectory directory;
+        const std::string fifo = directory.path("pipe");
+        REQUIRE(::mkfifo(fifo.c_str(), 0600) == 0);
+        // Without the non-blocking open this waits for a writer forever.
+        const ith::Expected<std::string> device = fs::readFile(fifo, 100);
+        const ith::Expected<std::string> null = fs::readFile("/dev/null", 100);
+        REQUIRE_FALSE(null.hasValue());
+        CHECK(null.error().code == "fs.unsupported");
+
+        // A bound AF_UNIX socket: open() fails with ENXIO.
+        const std::string socketPath = directory.path("socket");
+        sockaddr_un address{};
+        address.sun_family = AF_UNIX;
+        REQUIRE(socketPath.size() < sizeof(address.sun_path));
+        std::memcpy(static_cast<void*>(address.sun_path), socketPath.c_str(), socketPath.size() + 1);
+        const int listener = ::socket(AF_UNIX, SOCK_STREAM, 0);
+        REQUIRE(listener >= 0);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): the sockets API takes a sockaddr
+        REQUIRE(::bind(listener, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0);
+        const ith::Expected<std::string> socketRead = fs::readFile(socketPath, 100);
+        ::close(listener);
+        REQUIRE_FALSE(socketRead.hasValue());
+        CHECK(socketRead.error().code == "fs.unsupported");
+#endif
+        REQUIRE_FALSE(device.hasValue());
+        CHECK(device.error().code == "fs.unsupported");
+        CHECK(device.error().message.find("not a regular file") != std::string::npos);
     }
 
     TEST_CASE("temporary file names are recognized") {

@@ -291,9 +291,22 @@ Expected<std::string> readFile(std::string_view path, std::size_t maxSize) {
     if (!native) {
         return native;
     }
-    const FileDescriptor file(::open(native->c_str(), O_RDONLY | O_CLOEXEC));
+    // Non-blocking, so opening a FIFO doesn't wait for a writer; only a regular file is read, and
+    // reads block as usual again.
+    const FileDescriptor file(::open(native->c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK));
     if (!file.valid()) {
-        return posixError("can't open", *native, errno);
+        const int error = errno;
+        if (error == ENXIO) { // a socket, or a device without a driver
+            return pathError("fs.unsupported", "can't read", *native, "it is not a regular file");
+        }
+        bool wouldBlock = error == EAGAIN;
+#if EWOULDBLOCK != EAGAIN
+        wouldBlock = wouldBlock || error == EWOULDBLOCK;
+#endif
+        if (wouldBlock) { // a write lease another process holds
+            return pathError("fs.busy", "can't open", *native, "another process holds it");
+        }
+        return posixError("can't open", *native, error);
     }
     struct stat status{};
     if (::fstat(file.get(), &status) != 0) {
@@ -301,6 +314,13 @@ Expected<std::string> readFile(std::string_view path, std::size_t maxSize) {
     }
     if (S_ISDIR(status.st_mode)) {
         return pathError("fs.is_a_directory", "can't read", *native, "it is a directory");
+    }
+    if (!S_ISREG(status.st_mode)) {
+        return pathError("fs.unsupported", "can't read", *native, "it is not a regular file");
+    }
+    const int flags = ::fcntl(file.get(), F_GETFL);
+    if (flags == -1 || ::fcntl(file.get(), F_SETFL, flags & ~O_NONBLOCK) == -1) {
+        return posixError("can't read", *native, errno);
     }
     const auto size = static_cast<std::uint64_t>(status.st_size);
     if (size > maxSize) {

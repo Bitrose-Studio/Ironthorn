@@ -94,9 +94,13 @@ inline constexpr std::string_view kTemporaryMarker = ".tmp-";
 [[nodiscard]] bool isTemporaryFileName(std::string_view path) noexcept;
 
 // The whole file as bytes, following symbolic links. Fails with "fs.too_large" when the file is
-// larger than `maxSize` (checked before anything is allocated), "fs.is_a_directory", or the
-// codes above. On Windows the file is opened with read, write and delete sharing, so a reader
-// never blocks an atomic replacement or a rename by another thread or process. The POSIX rename
+// larger than `maxSize` (checked before anything is allocated), "fs.is_a_directory", or the codes
+// above. Only a regular file is read, at once, without waiting for a FIFO's writer: on POSIX a FIFO,
+// a socket or a device fails with "fs.unsupported", and an open held up by another process's write
+// lease with "fs.busy"; on Windows a handle that is not a disk file (a pipe, a console, a device)
+// fails with "fs.unsupported", while an AF_UNIX socket file already fails to open, with "fs.io".
+// On Windows the file is opened with read, write and delete sharing, so a reader never blocks an
+// atomic replacement or a rename by another thread or process. The POSIX rename
 // of a concurrent writeFileAtomic can make the name delete-pending or missing for a moment, so an
 // open that fails with not found, access denied or a sharing violation is tried once more, then for
 // up to a second while the writer's temporary file "<name>.tmp-<uuid>" exists, and for up to 50 ms
