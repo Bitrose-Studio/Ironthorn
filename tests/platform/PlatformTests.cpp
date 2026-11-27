@@ -633,7 +633,11 @@ TEST_CASE("Platform asserts its preconditions") {
         const ith::test::AssertCapture capture;
         // SDL is called off the main thread here only because the main thread is blocked in
         // join() meanwhile, so nothing runs concurrently.
-        std::thread([&] { static_cast<void>(window.size()); }).join();
+        // SDL frees the thread-local data of threads it didn't create only through SDL_CleanupTLS.
+        std::thread([&] {
+            static_cast<void>(window.size());
+            SDL_CleanupTLS();
+        }).join();
         CHECK(capture.count() == 1);
         CHECK(capture.lastMessage().find("thread that created the Platform") != std::string::npos);
     }

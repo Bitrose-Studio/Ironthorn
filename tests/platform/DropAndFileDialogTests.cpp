@@ -253,6 +253,8 @@ TEST_CASE("A file dialog result from another thread ends waitEvents") {
         std::this_thread::sleep_for(100ms);
         const std::array<const char*, 2> files{"/home/user/a.png", nullptr};
         ith::detail::finishOpenFileDialog(files.data());
+        // SDL frees the thread-local data of threads it didn't create only through SDL_CleanupTLS.
+        SDL_CleanupTLS();
     });
     // While the dialog is open each wait ends after 50 ms at most; the result ends one of them.
     const auto start = std::chrono::steady_clock::now();
@@ -418,8 +420,11 @@ TEST_CASE("showOpenFileDialog asserts its preconditions") {
         const ith::test::AssertCapture capture;
         // SDL is called off the main thread here only because the main thread is blocked in join()
         // meanwhile, so nothing runs concurrently.
+        // SDL frees the thread-local data of threads it didn't create (here its error buffer) only
+        // through SDL_CleanupTLS.
         std::thread([&] {
             static_cast<void>(platform.showOpenFileDialog(window, {.filters = kInvalidFilters}));
+            SDL_CleanupTLS();
         }).join();
         CHECK(capture.count() >= 1);
         CHECK(capture.lastMessage().find("thread that created the Platform") != std::string::npos);
