@@ -419,7 +419,10 @@ the image reads after them:
   the theme's `viewportSelection`. Depth is reversed (greater-equal). Nothing is culled, so a
   mirrored shape (a negative scale) draws, its normals flipped by the sign of its determinant.
 - `ViewportGrid` draws the grid as one fullscreen triangle. Each pixel casts its view ray at
-  y = 0 and writes the hit's depth, so the grid is depth-tested against the shapes. It has minor
+  y = 0 and writes the hit's depth, so the grid is depth-tested against the shapes. The rays span
+  the same angles as the shapes' projection: the camera's horizontal `fovX` across the image and
+  `verticalFov(fovX, aspect)` up it, with the aspect of the image, not of the panel with its
+  toolbar ([ADR-0046](../decisions/0046-editor-viewport-horizontal-field-of-view.md)). It has minor
   lines every metre and major lines every 10 m; the X axis (z = 0) and the Z axis (x = 0) have
   their own colours. Every line is about one pixel wide on screen, antialiased with the screen
   gradient of the world coordinates. Each level (minor, major) fades out as its cells shrink on
@@ -439,7 +442,8 @@ draw list, the panel runs `propagateTransforms` on the editor world. That writes
 **The redraw rule** (ADR-0042 rule 16). An instance renders only when something it shows changed
 since its last render:
 
-- the camera's position, yaw, pitch or field of view (not its speed step or pivot);
+- the camera's position, yaw, pitch or horizontal field of view (not its speed step or pivot; a
+  resize changes the derived vertical angle and is covered by the target's size);
 - the entities, their values or the open level (`EditorChanges`);
 - the selection, except in game view, which doesn't show it;
 - its target's size;

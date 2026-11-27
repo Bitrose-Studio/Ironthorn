@@ -25,10 +25,12 @@
 // The tool, the gizmo space, snapping and the game-view flags are session state and are not saved.
 //
 // The file is an ith.editor_viewports document, version 1; its data holds the cameras by level
-// asset id, then by viewport instance id:
+// asset id, then by viewport instance id. A camera's missing field keeps its default, and a field
+// the camera doesn't have is ignored silently: a camera written with the vertical "fovY" of before
+// ADR-0046 keeps its position, yaw and pitch and gets the default fovX:
 //
 //   {"levels": {"<level id>": {"ith.viewport.1": {"position": {"x": 0, "y": 2, "z": 5}, "yaw": 0,
-//                                                  "pitch": 0, "fovY": 1.5707964, "speedStep": 4,
+//                                                  "pitch": 0, "fovX": 1.5707964, "speedStep": 4,
 //                                                  "pivot": {"x": 0, "y": 0, "z": 0}}, ...}}}
 //
 // Main thread only.

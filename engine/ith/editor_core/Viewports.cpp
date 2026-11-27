@@ -46,8 +46,8 @@ bool isFinite(const Vec3& v) {
 // A camera the controller can use: what updateCamera and focus keep.
 bool isValid(const EditorCamera& camera) {
     return isFinite(camera.position) && isFinite(camera.pivot) && std::isfinite(camera.yaw) &&
-           std::isfinite(camera.pitch) && std::abs(camera.pitch) < kHalfPi && std::isfinite(camera.fovY) &&
-           camera.fovY > 0.0f && camera.fovY < kPi && camera.speedStep >= 1 && camera.speedStep <= 8;
+           std::isfinite(camera.pitch) && std::abs(camera.pitch) < kHalfPi && std::isfinite(camera.fovX) &&
+           camera.fovX > 0.0f && camera.fovX < kPi && camera.speedStep >= 1 && camera.speedStep <= 8;
 }
 
 Unexpected<Error> invalidFile(std::string_view source, const std::string& message) {
@@ -80,6 +80,7 @@ Expected<CameraMap> parseCameras(std::string_view text, std::string_view source)
             if (!index.has_value()) {
                 continue;
             }
+            // Fields the camera doesn't have, such as the vertical fovY before ADR-0046, are ignored.
             EditorCamera camera;
             if (Expected<void, serialization::Error> read =
                     serialization::fromValue(viewport.value, typeOf<EditorCamera>(), &camera);

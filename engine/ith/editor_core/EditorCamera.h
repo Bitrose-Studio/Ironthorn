@@ -1,7 +1,7 @@
 #pragma once
 
 // ith::EditorCamera: the camera of one editor viewport, without any UI (ADR-0042 rules 2, 5 to 7,
-// 12 and 27).
+// 12 and 27, with ADR-0046's horizontal field of view).
 //
 //   ith::EditorCamera camera;
 //   ith::CameraInput input;
@@ -38,9 +38,10 @@ struct EditorCamera {
     // Kept in (-pi/2, pi/2) by updateCamera, so looking up or down never flips the camera.
     ITH_FIELD()
     float pitch = -kPi / 6.0f;
-    // The full vertical field of view; 90 degrees by default.
+    // The full horizontal field of view, in (0, pi); 90 degrees by default (ADR-0046). The
+    // vertical angle follows from the image's aspect (verticalFov) and is never stored.
     ITH_FIELD()
-    float fovY = kHalfPi;
+    float fovX = kHalfPi;
     // An index in the speed table 0.5, 1, 2, 4, 8, 16, 32, 64 m/s, from 1 through 8.
     ITH_FIELD()
     int speedStep = 4;
@@ -90,15 +91,22 @@ void updateCamera(EditorCamera& camera, const CameraInput& input, float deltaSec
 // `camera.pitch` must be in the clamp range maintained by updateCamera.
 [[nodiscard]] Mat4 viewMatrix(const EditorCamera& camera) noexcept;
 
-// A reversed-depth, infinite-far-plane perspective matrix. Preconditions (asserted): fovY in
-// (0, pi), aspect > 0 and nearZ > 0. At the near plane depth is 1, approaching 0 in the distance.
+// The full vertical field of view of an image `aspect` (width over height) wide that shows the
+// full horizontal angle `fovX`: 2 * atan(tan(fovX / 2) / aspect), in (0, pi). Preconditions
+// (asserted): fovX finite and in (0, pi), aspect finite and > 0; invalid input returns fovX.
+[[nodiscard]] float verticalFov(float fovX, float aspect) noexcept;
+
+// A reversed-depth, infinite-far-plane perspective matrix with the camera's fovX across the image
+// and verticalFov(fovX, aspect) up it. Preconditions (asserted): fovX in (0, pi), aspect > 0 and
+// nearZ > 0. At the near plane depth is 1, approaching 0 in the distance.
 [[nodiscard]] Mat4 projectionMatrix(const EditorCamera& camera, float aspect, float nearZ) noexcept;
 
 // Frames non-empty world-space bounds at the viewport's width/height aspect. Keeps yaw and pitch,
 // moves the pivot to the bounds' centre and backs away along the view direction until their
-// enclosing sphere fits with a 10% margin. This conservative fit also covers every bounds corner;
-// a point is viewed from one metre. Preconditions (asserted): non-empty bounds, finite aspect > 0
-// and fovY in (0, pi). Invalid input leaves the camera unchanged.
+// enclosing sphere fits with a 10% margin in both directions: the smaller of fovX and
+// verticalFov(fovX, aspect) limits the distance. This conservative fit also covers every bounds
+// corner; a point is viewed from one metre. Preconditions (asserted): non-empty bounds, finite
+// aspect > 0 and fovX in (0, pi). Invalid input leaves the camera unchanged.
 void focus(EditorCamera& camera, const Aabb& bounds, float aspect) noexcept;
 
 } // namespace ith

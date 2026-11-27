@@ -68,7 +68,7 @@ Shot defaultShot() {
     shot.camera.position = {3.6742346f, 3.0f, 3.6742346f};
     shot.camera.yaw = 0.25f * kPi;
     shot.camera.pitch = -kPi / 6.0f;
-    shot.camera.fovY = kHalfPi;
+    shot.camera.fovX = kHalfPi;
     return shot;
 }
 

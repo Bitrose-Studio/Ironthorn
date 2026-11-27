@@ -137,7 +137,7 @@ struct ViewportRendered {
     Vec3 position{0.0f};
     float yaw = 0.0f;
     float pitch = 0.0f;
-    float fovY = 0.0f;
+    float fovX = 0.0f;
     // EditorChanges' structure, values and document counters, summed.
     std::uint64_t document = 0;
     // EditorChanges' selection counter; 0 in game view.
@@ -151,7 +151,7 @@ ViewportRendered renderedKey(const ViewportState& state, const EditorChanges& ch
     return {.position = state.camera.position,
             .yaw = state.camera.yaw,
             .pitch = state.camera.pitch,
-            .fovY = state.camera.fovY,
+            .fovX = state.camera.fovX,
             .document = changes.structure() + changes.values() + changes.document(),
             .selection = state.gameView ? 0 : changes.selection(),
             .gameView = state.gameView};
@@ -559,12 +559,14 @@ bool ViewportPanel::addScenePasses(rg::RenderGraph& graph, const Instance& insta
     if (state.gameView) {
         return true;
     }
-    const float tanY = std::tan(0.5f * camera.fovY);
+    // The projection's angles (ADR-0046): fovX across the image, the derived vertical angle up it.
+    const float tanX = std::tan(0.5f * camera.fovX);
+    const float tanY = std::tan(0.5f * verticalFov(camera.fovX, aspect));
     const Vec3 right(rowOf(view, 0));
     const Vec3 up(rowOf(view, 1));
     const Vec3 forward = -Vec3(rowOf(view, 2));
     const GridConstants grid{
-        .right = Vec4(right * (tanY * aspect), kViewportNearPlane),
+        .right = Vec4(right * tanX, kViewportNearPlane),
         .up = Vec4(up * tanY, static_cast<float>(width)),
         .forward = Vec4(forward, static_cast<float>(height)),
         .camera = Vec4(camera.position, kGridFadeDistance + kGridFadePerHeight * std::abs(camera.position.y)),

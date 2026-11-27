@@ -119,10 +119,16 @@ changes. The log behind it keeps the last 4,096 bumps; a panel that fell further
 ## Editor camera
 
 `EditorCamera` is the camera state of one viewport ([ADR-0042](../decisions/0042-editor-viewport.md)
-rules 2 and 5). It is plain view state, not an entity, and changing it does not dirty the document or
-make an undo entry. Its default is six metres back-right and above the origin, looking at the origin
-with yaw 45 degrees and pitch −30 degrees, a 90-degree vertical field of view and the origin as its
+rules 2 and 5, amended by [ADR-0046](../decisions/0046-editor-viewport-horizontal-field-of-view.md)).
+It is plain view state, not an entity, and changing it does not dirty the document or make an undo
+entry. Its default is six metres back-right and above the origin, looking at the origin with yaw 45
+degrees and pitch −30 degrees, a 90-degree horizontal field of view (`fovX`) and the origin as its
 orbit pivot. All angles in the API are radians.
+
+The camera stores only the horizontal angle. The vertical one follows from the image's aspect
+(width over height) each time it is needed and is never stored:
+`verticalFov(fovX, aspect) = 2 * atan(tan(fovX / 2) / aspect)`. At 90 degrees across, a 1280x460
+image is about 39.5 degrees tall, a square one 90 degrees and a 640x960 one about 112.6 degrees.
 
 ```cpp
 #include "ith/editor_core/EditorCamera.h"
@@ -163,12 +169,13 @@ scaled by 0.001 times the pivot distance per pixel (using one metre when the dis
 does not track the cursor exactly.
 
 `viewMatrix` follows the right-handed, +Y-up, −Z-forward convention. `projectionMatrix` delegates to
-`perspectiveReversedInfinite`, so near depth is 1, distant depth approaches 0 and there is no far
-plane. Use the viewport's 0.1 m near plane.
+`perspectiveReversedInfinite` with `verticalFov(fovX, aspect)`, so the image is `fovX` wide at any
+aspect; near depth is 1, distant depth approaches 0 and there is no far plane. Use the viewport's
+0.1 m near plane.
 
 `focus` keeps yaw and pitch, moves the pivot to the world bounds' centre and backs away until the
-bounds fit at the supplied width/height aspect. For `radius = length(bounds.halfExtents())` and
-`limitingHalfFov = min(fovY / 2, atan(tan(fovY / 2) * aspect))`, the pivot distance is
+bounds fit at the supplied width/height aspect, in both directions. For `radius = length(bounds.halfExtents())` and
+`limitingHalfFov = min(fovX, verticalFov(fovX, aspect)) / 2`, the pivot distance is
 `max(1 m, 1.1 * radius / sin(limitingHalfFov))`. This enclosing-sphere fit has a 10% margin and
 conservatively includes every corner; point bounds are viewed from one metre. Empty bounds are a
 programmer error and leave the camera unchanged.
@@ -201,9 +208,11 @@ and a level whose cameras are all the default gets no entry until they change. T
 first time it is needed and written atomically, only when what it would hold changed. A missing
 file, as in a fresh project, simply means default cameras. An unreadable file (another format, a
 newer version, a camera with a speed step outside 1–8 or a pitch outside (−π/2, π/2)) means default
-cameras and one warning in the `EditorViewports` log category; the next save replaces it. The tool,
-the gizmo space, snapping and the game-view flags are session state and are not saved. Follow-up:
-pruning the entries of levels that no longer exist.
+cameras and one warning in the `EditorViewports` log category; the next save replaces it. A
+camera's missing field keeps its default and a field it doesn't have is ignored silently, so a
+camera written with the vertical `fovY` of before ADR-0046 keeps its position, yaw and pitch and
+gets the default `fovX`. The tool, the gizmo space, snapping and the game-view flags are session
+state and are not saved. Follow-up: pruning the entries of levels that no longer exist.
 
 The Viewport commands ([ADR-0042](../decisions/0042-editor-viewport.md) rule 29) are bound in
 `Keymap.json`. Those that take a `"viewport"` argument use `ith::kDefaultViewport`

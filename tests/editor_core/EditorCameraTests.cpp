@@ -1,7 +1,8 @@
-// The editor viewport camera (ADR-0042): its defaults, fly speed table and axes, mouse look, pitch
-// limits and yaw wrapping, pivot tracking, speed-step and dolly wheel gestures, orbit and pan,
-// world-bounds focus and its tightness, matrices and asserted preconditions. Input is injected
-// directly; no UI or platform is involved.
+// The editor viewport camera (ADR-0042, ADR-0046): its defaults, the vertical angle derived from
+// the horizontal one, fly speed table and axes, mouse look, pitch limits and yaw wrapping, pivot
+// tracking, speed-step and dolly wheel gestures, orbit and pan, world-bounds focus and its
+// tightness, matrices and asserted preconditions. Input is injected directly; no UI or platform is
+// involved.
 
 #include "ith/editor_core/EditorCamera.h"
 
@@ -69,7 +70,7 @@ TEST_SUITE("editor_core.camera") {
         CHECK(same(camera.position, ith::Vec3(3.6742346f, 3.0f, 3.6742346f)));
         CHECK(camera.yaw == doctest::Approx(0.25f * ith::kPi));
         CHECK(camera.pitch == doctest::Approx(-ith::kPi / 6.0f));
-        CHECK(camera.fovY == doctest::Approx(ith::kHalfPi));
+        CHECK(camera.fovX == doctest::Approx(ith::kHalfPi));
         CHECK(camera.speedStep == 4);
         CHECK(same(camera.pivot, ith::Vec3(0.0f)));
         CHECK(glm::length(camera.position) == doctest::Approx(6.0f).epsilon(kEpsilon));
@@ -329,8 +330,8 @@ TEST_SUITE("editor_core.camera") {
             CHECK(camera.yaw == doctest::Approx(0.7f));
             CHECK(camera.pitch == doctest::Approx(-0.3f));
             CHECK(camera.speedStep == 6);
-            const float verticalHalfFov = 0.5f * camera.fovY;
-            const float horizontalHalfFov = std::atan(std::tan(verticalHalfFov) * aspect);
+            const float horizontalHalfFov = 0.5f * camera.fovX;
+            const float verticalHalfFov = std::atan(std::tan(horizontalHalfFov) / aspect);
             const float limitingHalfFov = std::min(verticalHalfFov, horizontalHalfFov);
             const float expectedDistance =
                 std::max(1.0f, 1.1f * glm::length(worldBounds.halfExtents()) / std::sin(limitingHalfFov));
@@ -356,6 +357,43 @@ TEST_SUITE("editor_core.camera") {
         ith::focus(pointCamera, point, 1.0f);
         CHECK(same(pointCamera.pivot, point.center()));
         CHECK(same(pointCamera.position, ith::Vec3(1.0f, 2.0f, 4.0f)));
+    }
+
+    TEST_CASE("the vertical angle follows from the horizontal one and the image aspect") {
+        // ADR-0046's table: 90 degrees across 1280x460, 640x400, a square and 640x960.
+        struct Case {
+            float aspect;
+            float degrees;
+        };
+
+        for (const Case& c : {Case{1280.0f / 460.0f, 39.53f}, Case{640.0f / 400.0f, 64.01f}, Case{1.0f, 90.0f},
+                              Case{640.0f / 960.0f, 112.62f}}) {
+            CAPTURE(c.aspect);
+            const float fovY = ith::verticalFov(ith::kHalfPi, c.aspect);
+            CHECK(glm::degrees(fovY) == doctest::Approx(c.degrees).epsilon(1e-3));
+            CHECK(std::tan(0.5f * fovY) * c.aspect == doctest::Approx(1.0f).epsilon(kEpsilon));
+        }
+        for (const float fovX : {0.01f, 1.0f, 3.1f}) {
+            for (const float aspect : {0.25f, 1.0f, 4.0f}) {
+                CAPTURE(fovX);
+                CAPTURE(aspect);
+                const float fovY = ith::verticalFov(fovX, aspect);
+                CHECK(fovY > 0.0f);
+                CHECK(fovY < ith::kPi);
+                CHECK((aspect > 1.0f ? fovY < fovX : aspect < 1.0f ? fovY > fovX : fovY == doctest::Approx(fovX)));
+            }
+        }
+
+        // The projection shows fovX across the image's width and the derived angle up its height.
+        for (const float aspect : {0.5f, 1.0f, 2.5f}) {
+            CAPTURE(aspect);
+            const ith::EditorCamera camera{.fovX = 1.2f};
+            const ith::Mat4 projection = ith::projectionMatrix(camera, aspect, 0.1f);
+            const float halfX = std::tan(0.5f * camera.fovX);
+            const float halfY = std::tan(0.5f * ith::verticalFov(camera.fovX, aspect));
+            CHECK(project(projection, ith::Vec3(halfX * 3.0f, 0.0f, -3.0f)).ndc.x == doctest::Approx(1.0f));
+            CHECK(project(projection, ith::Vec3(0.0f, halfY * 3.0f, -3.0f)).ndc.y == doctest::Approx(1.0f));
+        }
     }
 
     TEST_CASE("view and projection follow the coordinate and reversed depth conventions") {
@@ -398,20 +436,30 @@ TEST_SUITE("editor_core.camera") {
         CHECK(capture.count() == 2);
         ith::focus(camera, ith::Aabb{}, 0.0f);
         CHECK(capture.count() == 3);
-        camera.fovY = 0.0f;
+        camera.fovX = 0.0f;
         ith::focus(camera, ith::Aabb{}, 1.0f);
         CHECK(capture.count() == 4);
+        camera.fovX = ith::kPi;
+        ith::focus(camera, ith::Aabb{}, 1.0f);
+        CHECK(capture.count() == 5);
         CHECK(same(camera.position, position));
         CHECK(same(camera.pivot, pivot));
 
-        camera.fovY = ith::kHalfPi;
+        // The derived vertical angle asserts its input, and then the projection does too.
+        camera.fovX = ith::kHalfPi;
         static_cast<void>(ith::projectionMatrix(camera, 0.0f, 0.1f));
-        CHECK(capture.count() == 5);
-        static_cast<void>(ith::projectionMatrix(camera, 1.0f, 0.0f));
-        CHECK(capture.count() == 6);
-        camera.fovY = 0.0f;
-        static_cast<void>(ith::projectionMatrix(camera, 1.0f, 0.1f));
         CHECK(capture.count() == 7);
+        static_cast<void>(ith::projectionMatrix(camera, 1.0f, 0.0f));
+        CHECK(capture.count() == 8);
+        camera.fovX = 0.0f;
+        static_cast<void>(ith::projectionMatrix(camera, 1.0f, 0.1f));
+        CHECK(capture.count() == 10);
+
+        CHECK(ith::verticalFov(ith::kHalfPi, 0.0f) == ith::kHalfPi);
+        CHECK(ith::verticalFov(ith::kHalfPi, std::nanf("")) == ith::kHalfPi);
+        CHECK(ith::verticalFov(-1.0f, 1.0f) == -1.0f);
+        CHECK(ith::verticalFov(ith::kPi, 1.0f) == ith::kPi);
+        CHECK(capture.count() == 14);
     }
 #endif
 }

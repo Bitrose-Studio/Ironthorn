@@ -35,6 +35,7 @@
 #include <ostream> // doctest prints std::string operands through an ostream
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -115,7 +116,7 @@ EditorCamera movedCamera(float x) {
     return EditorCamera{.position = {x, 2.0f, 5.0f},
                         .yaw = 0.5f,
                         .pitch = -0.25f,
-                        .fovY = 1.2f,
+                        .fovX = 1.2f,
                         .speedStep = 6,
                         .pivot = {x, 0.0f, 0.0f}};
 }
@@ -186,7 +187,7 @@ TEST_SUITE("editor_core.viewports") {
         CHECK(same(camera.position, Vec3(3.6742346f, 3.0f, 3.6742346f)));
         CHECK(camera.yaw == doctest::Approx(0.25f * ith::kPi));
         CHECK(camera.pitch == doctest::Approx(-ith::kPi / 6.0f));
-        CHECK(camera.fovY == doctest::Approx(ith::kHalfPi));
+        CHECK(camera.fovX == doctest::Approx(ith::kHalfPi));
         CHECK(camera.speedStep == 4);
         CHECK(same(camera.pivot, Vec3(0.0f)));
 
@@ -285,17 +286,42 @@ TEST_SUITE("editor_core.viewports") {
         }
         const std::string valid = R"({"format": "ith.editor_viewports", "version": 1, "data": {"levels": {")" +
                                   level.toString() + R"(": {"ith.viewport.1": {"speedStep": 7}}}}})";
-        {
-            REQUIRE(ith::fs::writeFileAtomic(file, valid).hasValue());
+        const std::string speedStep = R"("speedStep": 7)";
+        const auto withStep = [&](std::string_view replacement) {
+            return valid.substr(0, valid.find(speedStep)) + std::string(replacement) +
+                   valid.substr(valid.find(speedStep) + speedStep.size());
+        };
+        // A missing field keeps its default; the horizontal field of view is read (ADR-0046).
+        for (const auto& [text, fovX] :
+             {std::pair{valid, ith::kHalfPi}, std::pair{withStep(R"("speedStep": 7, "fovX": 1.25)"), 1.25f}}) {
+            CAPTURE(text);
+            REQUIRE(ith::fs::writeFileAtomic(file, text).hasValue());
             ViewportWarnings warnings;
             Viewports viewports(file);
             viewports.restoreLevel(level);
             CHECK(warnings.count() == 0);
             CHECK(viewports.find("ith.viewport.1")->camera.speedStep == 7);
+            CHECK(viewports.find("ith.viewport.1")->camera.fovX == doctest::Approx(fovX));
         }
-        const std::string speedStep = R"("speedStep": 7)";
-        const std::string badStep = valid.substr(0, valid.find(speedStep)) + R"("speedStep": 12)" +
-                                    valid.substr(valid.find(speedStep) + speedStep.size());
+        // A camera saved with the vertical fovY of before ADR-0046 loads silently: its position, yaw
+        // and pitch are kept, fovY is ignored and fovX is the default.
+        {
+            REQUIRE(ith::fs::writeFileAtomic(
+                        file, withStep(R"("speedStep": 7, "position": {"x": 1, "y": 2, "z": 3}, "yaw": 0.5, )"
+                                       R"("pitch": -0.25, "fovY": 1.2)"))
+                        .hasValue());
+            ViewportWarnings warnings;
+            Viewports viewports(file);
+            viewports.restoreLevel(level);
+            CHECK(warnings.count() == 0);
+            const EditorCamera& camera = viewports.find("ith.viewport.1")->camera;
+            CHECK(same(camera.position, Vec3(1.0f, 2.0f, 3.0f)));
+            CHECK(camera.yaw == doctest::Approx(0.5f));
+            CHECK(camera.pitch == doctest::Approx(-0.25f));
+            CHECK(camera.speedStep == 7);
+            CHECK(camera.fovX == doctest::Approx(ith::kHalfPi));
+        }
+        const std::string badStep = withStep(R"("speedStep": 12)");
         for (const std::string& bad :
              {std::string("not json"), std::string(R"({"format": "ith.editor_layout", "version": 1, "data": {}})"),
               std::string(R"({"format": "ith.editor_viewports", "version": 2, "data": {"levels": {}}})"),

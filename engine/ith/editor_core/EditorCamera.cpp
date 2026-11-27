@@ -120,8 +120,19 @@ Mat4 viewMatrix(const EditorCamera& camera) noexcept {
     return glm::lookAt(camera.position, camera.position + forward, kWorldUp);
 }
 
+float verticalFov(float fovX, float aspect) noexcept {
+    const bool validFov = std::isfinite(fovX) && fovX > 0.0f && fovX < kPi;
+    ITH_ASSERT_MSG(validFov, "the horizontal field of view must be finite and in (0, pi)");
+    const bool validAspect = std::isfinite(aspect) && aspect > 0.0f;
+    ITH_ASSERT_MSG(validAspect, "the camera aspect ratio must be finite and positive");
+    if (!validFov || !validAspect) {
+        return fovX;
+    }
+    return 2.0f * std::atan(std::tan(0.5f * fovX) / aspect);
+}
+
 Mat4 projectionMatrix(const EditorCamera& camera, float aspect, float nearZ) noexcept {
-    return perspectiveReversedInfinite(camera.fovY, aspect, nearZ);
+    return perspectiveReversedInfinite(verticalFov(camera.fovX, aspect), aspect, nearZ);
 }
 
 void focus(EditorCamera& camera, const Aabb& bounds, float aspect) noexcept {
@@ -129,15 +140,13 @@ void focus(EditorCamera& camera, const Aabb& bounds, float aspect) noexcept {
     ITH_ASSERT_MSG(nonEmpty, "camera focus needs non-empty world bounds");
     const bool validAspect = std::isfinite(aspect) && aspect > 0.0f;
     ITH_ASSERT_MSG(validAspect, "the camera aspect ratio must be finite and positive");
-    const bool validFov = std::isfinite(camera.fovY) && camera.fovY > 0.0f && camera.fovY < kPi;
-    ITH_ASSERT_MSG(validFov, "the vertical field of view must be finite and in (0, pi)");
+    const bool validFov = std::isfinite(camera.fovX) && camera.fovX > 0.0f && camera.fovX < kPi;
+    ITH_ASSERT_MSG(validFov, "the horizontal field of view must be finite and in (0, pi)");
     if (!nonEmpty || !validAspect || !validFov) {
         return;
     }
 
-    const float verticalHalfFov = 0.5f * camera.fovY;
-    const float horizontalHalfFov = std::atan(std::tan(verticalHalfFov) * aspect);
-    const float limitingHalfFov = std::min(verticalHalfFov, horizontalHalfFov);
+    const float limitingHalfFov = 0.5f * std::min(camera.fovX, verticalFov(camera.fovX, aspect));
     const float radius = glm::length(bounds.halfExtents());
     const float sphereDistance = kFocusMargin * radius / std::sin(limitingHalfFov);
     const float distance = std::max(kMinimumFocusDistance, sphereDistance);
