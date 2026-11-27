@@ -153,6 +153,27 @@ inline constexpr std::string_view kTemporaryMarker = ".tmp-";
 // Fails with "fs.not_found" when `from` or the parent of `to` is missing, or the codes above.
 [[nodiscard]] Expected<void> move(std::string_view from, std::string_view to);
 
+// The part of `path` below the folder `folder` as the operating system sees it: "" when they name
+// the same folder, the rest of the path ('/'-separated) when `path` is inside it, nullopt otherwise
+// (also for paths that are not valid UTF-8). Both paths are normalized first, so ".." is collapsed
+// lexically, as by every function here. Then the longest part of each path that exists is resolved:
+// on Windows through the file's final path (GetFinalPathNameByHandleW), so another case, 8.3 short
+// names, junctions and symbolic links compare right; on POSIX through realpath, so symbolic links
+// do. The part that doesn't exist is appended as given, so a target that doesn't exist yet works; a
+// dangling link, or one that can't be opened, counts as not existing: its parent is resolved and its
+// name appended. A relative path resolves against the working directory, also when its first name
+// doesn't exist. Names then compare as the file system does by default: on Windows without case
+// (ordinal, case-insensitive), elsewhere byte for byte; a case-folding Linux folder is not detected.
+// The rest keeps the resolved spelling of what exists, so it has the case on disk. Costs one open
+// (Windows) or one realpath (POSIX) per prefix tried.
+[[nodiscard]] std::optional<std::string> pathInside(std::string_view path, std::string_view folder);
+
+// True when the raw `path` (before normalization) names an entry no function here can address: on
+// POSIX a name that holds '\', which every function here reads as a separator, so the path would
+// lead somewhere else; never on Windows, where '\' is a separator. A path that comes from outside
+// the engine (a drop, a dialog) is checked with this before it is used.
+[[nodiscard]] bool hasUnusableName(std::string_view path) noexcept;
+
 // The directory of the running executable, absolute and normalized.
 [[nodiscard]] Expected<std::string> executableDirectory();
 

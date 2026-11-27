@@ -2,7 +2,9 @@
 add_library(ith_test_support STATIC
     support/TestMain.cpp
     support/AssertCapture.h
-    support/AssertCapture.cpp)
+    support/AssertCapture.cpp
+    support/Junction.h
+    support/Junction.cpp)
 add_library(ith::test_support ALIAS ith_test_support)
 target_include_directories(ith_test_support PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/support")
 target_link_libraries(ith_test_support PUBLIC ith::build_options ith::foundation doctest::doctest)

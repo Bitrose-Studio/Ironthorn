@@ -56,6 +56,8 @@ Three roots are recognized: `/`, a drive root `C:/` and a UNC root `//server/sha
 | `createDirectories(path)` | The directory and its missing parents; an existing one is fine. |
 | `remove(path)` | A file, a link or an empty directory (`fs.not_empty` otherwise). |
 | `move(from, to)` | Never replaces an existing target (`fs.already_exists`), except a rename that changes only the case of the same file. |
+| `pathInside(path, folder)` | Whether `path` is `folder` or inside it as the operating system sees it, and the rest of the path. See below. |
+| `hasUnusableName(path)` | True for a raw path that no function here can address: on POSIX a name holding `\`. |
 | `executableDirectory()`, `userConfigDirectory()`, `userCacheDirectory()` | Known folders, absolute and normalized. |
 
 Kinds are `File`, `Directory`, `FileLink`, `DirectoryLink` (symbolic links; on Windows junctions
@@ -126,6 +128,20 @@ is allowed when both names are the same file (same volume and file id on Windows
 inode on POSIX); on POSIX it goes through a temporary name, because `rename` does nothing for two
 names of one file.
 
+### Inside a folder
+
+`pathInside` normalizes both paths (so `..` collapses lexically), resolves the longest existing part
+of each, then appends the rest as given; a relative path whose first name doesn't exist resolves
+against the working directory, and a dangling link counts as its parent plus its name. On Windows it
+uses `GetFinalPathNameByHandleW` (normalized, else the opened name) on a handle opened without access
+rights, so another case, 8.3 short names, junctions and links compare right. On POSIX it uses
+`realpath`, so links do. Names then compare as the file system does by default: without case on Windows
+(`CompareStringOrdinal`), byte for byte elsewhere. A Linux folder that folds case is not detected.
+The rest that `pathInside` returns has the spelling on disk for the part that exists. Callers use
+it to tell whether a path is in the project's `Content` folder and to get its content path. A path
+from outside the engine (a drop, a dialog) goes through `hasUnusableName` first: on Linux `\` is a
+valid name character, but every function here reads it as a separator.
+
 ### Known folders
 
 | Function | Windows | Linux |
@@ -188,6 +204,10 @@ Tests, tools and samples are not checked.
 - `fileInfo`, `listDirectory`, links (skipped on Windows without the symbolic-link privilege),
   `createDirectories`, `remove`, and `move` with an existing target refused and a case-only
   rename;
+- `pathInside`: the same folder, a path inside it with its rest, a target that doesn't exist yet, a
+  sibling with the same start, a missing folder right below `/` or `C:/`, a relative path whose first
+  name doesn't exist; on Windows the drive letter and folders in another case, an 8.3 short name and
+  a junction; on POSIX a symbolic link to a folder and a dangling one; `hasUnusableName`;
 - the known folders, with and without the XDG variables on Linux.
 
 The Linux cases run in CI and in a Linux container; durability across a real power loss is not

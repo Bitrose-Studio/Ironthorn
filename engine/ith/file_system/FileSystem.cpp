@@ -5,7 +5,11 @@
 #include "ith/foundation/StringUtils.h"
 #include "ith/foundation/Uuid.h"
 
+#include <algorithm>
+#include <optional>
 #include <ranges>
+#include <string>
+#include <utility>
 
 namespace ith::fs {
 namespace {
@@ -51,6 +55,61 @@ bool isTemporaryFileName(std::string_view path) noexcept {
 Expected<void> createDirectories(std::string_view path) {
     std::vector<std::string> created;
     return detail::createDirectoriesTracked(path, created);
+}
+
+namespace {
+
+// `path` (normalized) with its longest existing prefix resolved (detail::resolvedPath) and the rest
+// appended as given. A relative path whose first name doesn't exist is resolved against the working
+// directory ("."); `path` itself when nothing resolves.
+std::string resolvedPrefix(const std::string& path) {
+    // The part of `path` after `existing`, which is followed by a '/' unless it is a root ("/", "C:/").
+    const auto rest = [&path](std::string_view existing) {
+        const std::size_t skip = existing.ends_with('/') ? existing.size() : existing.size() + 1;
+        return std::string_view(path).substr(std::min(skip, path.size()));
+    };
+    std::string_view existing = path;
+    while (!existing.empty()) {
+        if (std::optional<std::string> resolved = detail::resolvedPath(std::string(existing))) {
+            return existing.size() == path.size() ? std::move(*resolved) : joinPath(*resolved, rest(existing));
+        }
+        const std::string_view parent = parentPath(existing);
+        if (parent == existing) {
+            break;
+        }
+        existing = parent;
+    }
+    if (!isAbsolutePath(path)) {
+        if (std::optional<std::string> directory = detail::resolvedPath(".")) {
+            return joinPath(*directory, path);
+        }
+    }
+    return path;
+}
+
+} // namespace
+
+std::optional<std::string> pathInside(std::string_view path, std::string_view folder) {
+    if (path.empty() || folder.empty() || !isValidUtf8(path) || !isValidUtf8(folder)) {
+        return std::nullopt;
+    }
+    const std::string resolvedPath = resolvedPrefix(normalizePath(path));
+    const std::string resolvedFolder = resolvedPrefix(normalizePath(folder));
+    const std::optional<std::size_t> matched = detail::matchedPrefix(resolvedPath, resolvedFolder);
+    if (!matched.has_value()) {
+        return std::nullopt;
+    }
+    if (*matched == resolvedPath.size()) {
+        return std::string();
+    }
+    // A root ("C:/", "/") ends in its separator; any other folder is followed by one.
+    if (resolvedFolder.ends_with('/')) {
+        return resolvedPath.substr(*matched);
+    }
+    if (resolvedPath[*matched] != '/') {
+        return std::nullopt; // "a/bc" is not inside "a/b"
+    }
+    return resolvedPath.substr(*matched + 1);
 }
 
 #ifndef ITH_SHIPPING

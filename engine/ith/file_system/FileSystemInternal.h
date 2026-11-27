@@ -5,6 +5,8 @@
 #include "ith/file_system/FileSystem.h"
 #include "ith/foundation/Expected.h"
 
+#include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -41,5 +43,14 @@ inline constexpr int kFaultBeforeRename = 3;
 
 // createDirectories(path), adding the directories it created to `created`, outermost first.
 [[nodiscard]] Expected<void> createDirectoriesTracked(std::string_view path, std::vector<std::string>& created);
+
+// The final path of the existing entry at `path` (normalized), links followed, normalized and
+// without a "\\?\" prefix; nullopt when it doesn't exist or can't be resolved. pathInside's
+// platform part.
+[[nodiscard]] std::optional<std::string> resolvedPath(const std::string& path);
+
+// The number of bytes at the start of `text` that equal `prefix` as the file system compares names
+// (Windows: ordinal without case; POSIX: bytes), or nullopt when `text` doesn't start with it.
+[[nodiscard]] std::optional<std::size_t> matchedPrefix(std::string_view text, std::string_view prefix);
 
 } // namespace ith::fs::detail

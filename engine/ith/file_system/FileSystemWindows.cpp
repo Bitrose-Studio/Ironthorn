@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -704,7 +705,76 @@ Expected<void> makeDirectory(std::string_view path) {
     return {};
 }
 
+namespace {
+
+// The final path of the open `entry` with `flags` (FILE_NAME_NORMALIZED or FILE_NAME_OPENED), or
+// empty when Windows can't give it.
+std::wstring finalPathOf(HANDLE entry, DWORD flags) {
+    std::wstring buffer(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD length =
+            GetFinalPathNameByHandleW(entry, buffer.data(), static_cast<DWORD>(buffer.size()), flags | VOLUME_NAME_DOS);
+        if (length == 0) {
+            return {};
+        }
+        if (length < buffer.size()) {
+            buffer.resize(length);
+            return buffer;
+        }
+        buffer.resize(length); // the size needed, with the terminating NUL
+    }
+}
+
+} // namespace
+
+std::optional<std::string> resolvedPath(const std::string& path) {
+    const Expected<NativePath> native = nativePath(path);
+    if (!native) {
+        return std::nullopt;
+    }
+    // No access is asked, so files other programs hold open resolve too; directories need the flag.
+    const FileHandle entry(CreateFileW(native->wide.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                       nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+    if (!entry.valid()) {
+        return std::nullopt;
+    }
+    // The normalized name can fail where the opened one doesn't (some network and virtual file
+    // systems); the opened name still has the volume, long names and the target of links.
+    std::wstring final = finalPathOf(entry.get(), FILE_NAME_NORMALIZED);
+    if (final.empty()) {
+        final = finalPathOf(entry.get(), FILE_NAME_OPENED);
+    }
+    if (final.empty()) {
+        return std::nullopt;
+    }
+    bool valid = true;
+    const std::string utf8 = toUtf8(final, &valid);
+    if (!valid) {
+        return std::nullopt;
+    }
+    std::string storage;
+    return normalizePath(withoutVerbatimPrefix(utf8, storage));
+}
+
+std::optional<std::size_t> matchedPrefix(std::string_view text, std::string_view prefix) {
+    const std::wstring wideText = toWide(std::string(text));
+    const std::wstring widePrefix = toWide(std::string(prefix));
+    if (widePrefix.size() > wideText.size()) {
+        return std::nullopt;
+    }
+    const int units = static_cast<int>(widePrefix.size());
+    if (units > 0 && CompareStringOrdinal(wideText.data(), units, widePrefix.data(), units, TRUE) != CSTR_EQUAL) {
+        return std::nullopt;
+    }
+    // Case pairs can differ in UTF-8 length, so the bytes matched are those of `text`'s own units.
+    return toUtf8(wideText.substr(0, widePrefix.size())).size();
+}
+
 } // namespace detail
+
+bool hasUnusableName(std::string_view /*path*/) noexcept {
+    return false; // '\' is a separator here
+}
 
 Expected<std::string> executableDirectory() {
     std::wstring buffer(MAX_PATH, L'\0');

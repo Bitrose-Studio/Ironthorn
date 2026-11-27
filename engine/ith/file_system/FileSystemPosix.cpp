@@ -22,6 +22,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -29,6 +31,11 @@ namespace ith::fs {
 namespace {
 
 using detail::pathError;
+
+// Frees what the C library allocated with malloc (realpath's result).
+struct FreeDeleter {
+    void operator()(char* text) const noexcept { std::free(text); }
+};
 
 // Closes a file descriptor.
 class FileDescriptor {
@@ -537,7 +544,26 @@ Expected<void> makeDirectory(std::string_view path) {
     return {};
 }
 
+std::optional<std::string> resolvedPath(const std::string& path) {
+    const std::unique_ptr<char, FreeDeleter> resolved(::realpath(path.c_str(), nullptr));
+    if (resolved == nullptr) {
+        return std::nullopt;
+    }
+    return normalizePath(resolved.get());
+}
+
+std::optional<std::size_t> matchedPrefix(std::string_view text, std::string_view prefix) {
+    if (!text.starts_with(prefix)) {
+        return std::nullopt;
+    }
+    return prefix.size();
+}
+
 } // namespace detail
+
+bool hasUnusableName(std::string_view path) noexcept {
+    return path.find('\\') != std::string_view::npos; // every function here reads it as a separator
+}
 
 Expected<std::string> executableDirectory() {
 #ifdef __linux__

@@ -7,6 +7,8 @@
 #include "ith/file_system/Path.h"
 #include "ith/foundation/Uuid.h"
 
+#include "Junction.h"
+
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -733,6 +735,139 @@ TEST_SUITE("file_system.known_folders") {
         restore("XDG_CONFIG_HOME", config);
         restore("XDG_CACHE_HOME", cache);
         restore("HOME", home);
+    }
+#endif
+}
+
+TEST_SUITE("file_system.inside") {
+    TEST_CASE("pathInside: the same folder, inside it with the rest, and not inside") {
+        const TempDirectory directory;
+        REQUIRE(fs::createDirectories(directory.path("Content/Levels")).hasValue());
+        REQUIRE(fs::writeFileAtomic(directory.path("Content/Levels/Main.ithmap"), "x").hasValue());
+        REQUIRE(fs::createDirectories(directory.path("Contents")).hasValue());
+        const std::string content = directory.path("Content");
+        CHECK(fs::pathInside(content, content) == std::string());
+        CHECK(fs::pathInside(content + "/", content) == std::string());
+        CHECK(fs::pathInside(directory.path("Content/Levels/Main.ithmap"), content) ==
+              std::string("Levels/Main.ithmap"));
+        // What doesn't exist yet is appended as given.
+        CHECK(fs::pathInside(directory.path("Content/New/Level.ithmap"), content) == std::string("New/Level.ithmap"));
+        CHECK(fs::pathInside(directory.path("Content/Levels/../Levels/Main.ithmap"), content) ==
+              std::string("Levels/Main.ithmap"));
+        // A sibling whose name starts the same is not inside, nor is the parent.
+        CHECK_FALSE(fs::pathInside(directory.path("Contents"), content).has_value());
+        CHECK_FALSE(fs::pathInside(directory.path("Contents/x"), content).has_value());
+        CHECK_FALSE(fs::pathInside(directory.path(), content).has_value());
+        CHECK_FALSE(fs::pathInside("", content).has_value());
+        CHECK_FALSE(fs::pathInside("\xff", content).has_value());
+    }
+
+    TEST_CASE("pathInside: a missing folder right below a root keeps its whole name") {
+#ifdef _WIN32
+        std::error_code error;
+        const std::u8string temporary = std::filesystem::temp_directory_path(error).generic_u8string();
+        REQUIRE_FALSE(error);
+        const std::string root = std::string(temporary.begin(), temporary.begin() + 3); // "C:/"
+        REQUIRE(root.size() == 3);
+#else
+        const std::string root = "/";
+#endif
+        const std::string missing = "ith-missing-" + ith::Uuid::generate().toString();
+        CHECK(fs::pathInside(root + missing + "/x", root) == missing + "/x");
+        CHECK(fs::pathInside(root + missing, root) == missing);
+        // Against a sibling that doesn't exist either: compared by name, not inside.
+        CHECK_FALSE(fs::pathInside(root + missing + "/x", root + missing + "-other").has_value());
+        CHECK(fs::pathInside(root + missing + "/x", root + missing) == std::string("x"));
+    }
+
+    TEST_CASE("pathInside: a relative path whose first name doesn't exist resolves against the working directory") {
+        const std::string missing = "ith-missing-" + ith::Uuid::generate().toString();
+        std::error_code error;
+        const std::u8string current = std::filesystem::current_path(error).generic_u8string();
+        REQUIRE_FALSE(error);
+        const std::string working(current.begin(), current.end());
+        CHECK(fs::pathInside(missing + "/x", working) == missing + "/x");
+        CHECK(fs::pathInside(working + "/" + missing + "/x", ".") == missing + "/x");
+    }
+
+#ifdef _WIN32
+    TEST_CASE("pathInside on Windows: another case of the drive and folders, 8.3 short names and junctions") {
+        const TempDirectory directory;
+        REQUIRE(fs::createDirectories(directory.path("Content/A Long Folder Name/Levels")).hasValue());
+        const std::string content = directory.path("Content");
+        REQUIRE((content.size() > 2 && content[1] == ':'));
+        const auto withDrive = [](std::string path, char (*change)(char)) {
+            path[0] = change(path[0]);
+            return path;
+        };
+        const std::string lowerDrive =
+            withDrive(content, [](char c) { return static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c); });
+        const std::string upperDrive =
+            withDrive(content, [](char c) { return static_cast<char>(c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c); });
+        CHECK(fs::pathInside(lowerDrive + "/A Long Folder Name", upperDrive) == std::string("A Long Folder Name"));
+        CHECK(fs::pathInside(upperDrive + "/a long folder name/LEVELS", lowerDrive) ==
+              std::string("A Long Folder Name/Levels")); // the case on disk
+        CHECK(fs::pathInside(directory.path("CONTENT/a long folder name/missing/x"), content) ==
+              std::string("A Long Folder Name/missing/x"));
+
+        // An 8.3 short name, when the volume makes them.
+        const std::wstring longName = nativeOf(directory.path("Content/A Long Folder Name")).wstring();
+        std::wstring shortName(MAX_PATH, L'\0');
+        DWORD length = GetShortPathNameW(longName.c_str(), shortName.data(), static_cast<DWORD>(shortName.size()));
+        if (length > shortName.size()) {
+            shortName.resize(length); // the size needed, with the terminating NUL
+            length = GetShortPathNameW(longName.c_str(), shortName.data(), static_cast<DWORD>(shortName.size()));
+        }
+        shortName.resize(length < shortName.size() ? length : 0);
+        const std::u8string shortUtf8 = std::filesystem::path(shortName).generic_u8string();
+        const std::string shortPath(shortUtf8.begin(), shortUtf8.end());
+        if (shortPath.empty() || shortPath == directory.path("Content/A Long Folder Name")) {
+            MESSAGE("the volume makes no 8.3 names; skipped");
+        } else {
+            CHECK(fs::pathInside(shortPath + "/Levels", content) == std::string("A Long Folder Name/Levels"));
+            CHECK(fs::pathInside(shortPath, directory.path("Content/A Long Folder Name")) == std::string());
+        }
+
+        // A junction to a folder inside Content: a path through it is inside, by the target's name.
+        if (!ith::test::makeJunction(directory.path("Junction"), directory.path("Content/A Long Folder Name"))) {
+            MESSAGE("junctions can't be made here; skipped");
+        } else {
+            CHECK(fs::pathInside(directory.path("Junction/Levels"), content) ==
+                  std::string("A Long Folder Name/Levels"));
+            CHECK(fs::pathInside(directory.path("Junction/New.ithmap"), content) ==
+                  std::string("A Long Folder Name/New.ithmap"));
+        }
+        CHECK_FALSE(fs::hasUnusableName(R"(C:\a\b)"));
+    }
+#else
+    TEST_CASE("pathInside on POSIX: a symbolic link to a folder, case kept apart") {
+        const TempDirectory directory;
+        REQUIRE(fs::createDirectories(directory.path("Content/Levels")).hasValue());
+        std::error_code error;
+        std::filesystem::create_directory_symlink(nativeOf(directory.path("Content/Levels")),
+                                                  nativeOf(directory.path("Link")), error);
+        REQUIRE_FALSE(error);
+        CHECK(fs::pathInside(directory.path("Link/Main.ithmap"), directory.path("Content")) ==
+              std::string("Levels/Main.ithmap"));
+        CHECK(fs::pathInside(directory.path("Link"), directory.path("Content/Levels")) == std::string());
+        // A dangling link counts as its parent plus its name.
+        std::filesystem::create_directory_symlink(nativeOf(directory.path("Gone")),
+                                                  nativeOf(directory.path("Dangling")), error);
+        REQUIRE_FALSE(error);
+        CHECK(fs::pathInside(directory.path("Dangling/x"), directory.path()) == std::string("Dangling/x"));
+        // Case matters here, unless the folder folds case (which pathInside doesn't detect).
+        if (fs::fileInfo(directory.path("content")).valueOr(std::nullopt).has_value()) {
+            MESSAGE("the folder folds case; the case check is skipped");
+        } else {
+            CHECK_FALSE(fs::pathInside(directory.path("content/Levels"), directory.path("Content")).has_value());
+        }
+    }
+
+    TEST_CASE("hasUnusableName: a name holding a backslash on POSIX") {
+        CHECK(fs::hasUnusableName(R"(/home/a\b/file.png)"));
+        CHECK(fs::hasUnusableName(R"(a\b)"));
+        CHECK_FALSE(fs::hasUnusableName("/home/a/b/file.png"));
+        CHECK_FALSE(fs::hasUnusableName(""));
     }
 #endif
 }
