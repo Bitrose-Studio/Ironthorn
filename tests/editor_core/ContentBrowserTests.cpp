@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <ostream> // doctest prints std::string operands through an ostream
@@ -349,6 +350,52 @@ TEST_SUITE("editor_core.content_browser") {
         fails(*typed.session, "ith.content.set_view", R"({"sortBy": "size"})", "editor.command.invalid_args");
         fails(*typed.session, "ith.content.set_view", R"({"mode": "tiles"})", "editor.command.invalid_args");
         fails(*typed.session, "ith.content.set_view", R"({"descending": 1})", "editor.command.invalid_args");
+    }
+
+    TEST_CASE("sorting more items than a small-range sort handles: descending is the exact reverse of each group") {
+        // 40 assets written in a scrambled order (13 is coprime with 40), half of them levels, and
+        // three folders: name order is Item1 to Item40, type order the levels before the materials.
+        Project p;
+        std::vector<std::string> byName;
+        std::vector<std::string> levels;
+        std::vector<std::string> materials;
+        for (int n = 1; n <= 40; ++n) {
+            byName.push_back("Item" + std::to_string(n));
+            (n % 2 == 0 ? levels : materials).push_back(byName.back());
+        }
+        for (int step = 0; step < 40; ++step) {
+            const int n = step * 13 % 40 + 1;
+            const std::string name = "Many/Item" + std::to_string(n);
+            if (n % 2 == 0) {
+                p.native(name + ".ithmap", "ith.level");
+            } else {
+                p.native(name + ".ithasset");
+            }
+        }
+        for (const std::string_view name : {"Many/F10", "Many/F2", "Many/F1"}) {
+            p.folder(name);
+        }
+        p.rescan();
+        p.navigate("Many");
+        const auto withFolders = [](std::vector<std::string> folders, const std::vector<std::string>& assets) {
+            folders.insert(folders.end(), assets.begin(), assets.end());
+            return folders;
+        };
+        const auto reversed = [](std::vector<std::string> list) {
+            std::ranges::reverse(list);
+            return list;
+        };
+        const std::vector<std::string> byType = withFolders(levels, materials);
+        CHECK(p.labels() == withFolders({"F1", "F2", "F10"}, byName));
+        p.execute("ith.content.set_view", R"({"descending": true})");
+        CHECK(p.labels() == withFolders({"F10", "F2", "F1"}, reversed(byName)));
+        p.execute("ith.content.set_view", R"({"sortBy": "type", "descending": false})");
+        CHECK(p.labels() == withFolders({"F1", "F2", "F10"}, byType));
+        p.execute("ith.content.set_view", R"({"descending": true})");
+        CHECK(p.labels() == withFolders({"F10", "F2", "F1"}, reversed(byType)));
+        // A search shows the same order without the folders.
+        p.model().setSearch("item");
+        CHECK(p.labels() == reversed(byType));
     }
 
     TEST_CASE("search and filter cover the folder and its subfolders, without folder items (requirements 7 to 10)") {

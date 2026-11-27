@@ -453,6 +453,9 @@ private:
     // Each item's place in name order (naturalCompare, then the label's bytes, then the path),
     // parallel to m_items.
     std::vector<std::uint32_t> m_nameRanks;
+    // Each item's place in type order (the category's display name, then the type's display name,
+    // then name order), parallel to m_items.
+    std::vector<std::uint32_t> m_typeRanks;
     std::unordered_map<std::string, std::size_t> m_byPath;
     std::unordered_map<AssetId, std::size_t> m_byId;
     // The items of each folder ("" for the root), by index into m_items.

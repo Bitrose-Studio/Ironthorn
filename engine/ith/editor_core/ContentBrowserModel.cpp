@@ -2,6 +2,7 @@
 
 #include "ith/asset_database/AssetHeader.h"
 #include "ith/file_system/FileSystem.h"
+#include "ith/foundation/Assert.h"
 #include "ith/foundation/Log.h"
 #include "ith/foundation/StringUtils.h"
 #include "ith/level/LevelFormat.h"
@@ -353,7 +354,9 @@ void ContentBrowserModel::refresh() {
         m_lowerLabels.push_back(toLowerAscii(m_items[index].label));
         m_children[m_items[index].folder].push_back(index);
     }
-    // Every item's place in name order, once: sorting what is shown then compares two numbers.
+    // Every item's place in name order and in type order, once: sorting what is shown then sorts
+    // plain numbers (sortShown packs a place and an index into 63 bits).
+    ITH_ASSERT(m_items.size() < (std::size_t{1} << 31U));
     std::vector<std::uint32_t> order(m_items.size());
     for (std::size_t index = 0; index < order.size(); ++index) {
         order[index] = static_cast<std::uint32_t>(index);
@@ -372,6 +375,23 @@ void ContentBrowserModel::refresh() {
     m_nameRanks.assign(m_items.size(), 0);
     for (std::size_t rank = 0; rank < order.size(); ++rank) {
         m_nameRanks[order[rank]] = static_cast<std::uint32_t>(rank);
+    }
+    std::ranges::sort(order, [this](std::uint32_t a, std::uint32_t b) {
+        const ContentItem& first = m_items[a];
+        const ContentItem& second = m_items[b];
+        if (const int byCategory = displayName(first.category).compare(displayName(second.category)); byCategory != 0) {
+            return byCategory < 0;
+        }
+        const std::string_view typeA = contentTypeOf(first.type).displayName;
+        const std::string_view typeB = contentTypeOf(second.type).displayName;
+        if (const int byType = typeA.compare(typeB); byType != 0) {
+            return byType < 0;
+        }
+        return m_nameRanks[a] < m_nameRanks[b];
+    });
+    m_typeRanks.assign(m_items.size(), 0);
+    for (std::size_t rank = 0; rank < order.size(); ++rank) {
+        m_typeRanks[order[rank]] = static_cast<std::uint32_t>(rank);
     }
 
     while (!folderExists(m_folder)) {
@@ -706,31 +726,23 @@ void ContentBrowserModel::rebuildView() {
 }
 
 void ContentBrowserModel::sortShown() {
-    const ContentViewSettings view = m_view;
-    const auto rank = [this](const ContentItem* item) {
-        return m_nameRanks[static_cast<std::size_t>(item - m_items.data())];
-    };
-    const auto less = [view, &rank](const ContentItem* a, const ContentItem* b) {
-        if (view.sortBy == ContentSortKey::Type) {
-            if (const int order = displayName(a->category).compare(displayName(b->category)); order != 0) {
-                return order < 0;
-            }
-            const std::string_view typeA = contentTypeOf(a->type).displayName;
-            const std::string_view typeB = contentTypeOf(b->type).displayName;
-            if (const int order = typeA.compare(typeB); order != 0) {
-                return order < 0;
-            }
-        }
-        return rank(a) < rank(b);
-    };
-    // Folders first in either direction; descending reverses each group.
-    const auto rest = std::ranges::stable_partition(
-        m_shown, [](const ContentItem* item) { return item->kind == ContentItemKind::Folder; });
-    const auto ordered = [&less, &view](const ContentItem* a, const ContentItem* b) {
-        return view.descending ? less(b, a) : less(a, b);
-    };
-    std::ranges::sort(m_shown.begin(), rest.begin(), ordered);
-    std::ranges::sort(rest, ordered);
+    // Folders first in either direction; descending reverses each group. Each item's place is known
+    // (refresh), so one number per item says where it goes: the group in bit 63, the place in bits
+    // 32 to 62 and the item's index in m_items below. Plain numbers sort without a comparator; a
+    // comparator over the item pointers came out unsorted under MSVC 19.52's optimizer.
+    const std::vector<std::uint32_t>& ranks = m_view.sortBy == ContentSortKey::Type ? m_typeRanks : m_nameRanks;
+    std::vector<std::uint64_t> keys;
+    keys.reserve(m_shown.size());
+    for (const ContentItem* item : m_shown) {
+        const auto index = static_cast<std::size_t>(item - m_items.data());
+        const std::uint64_t group = item->kind == ContentItemKind::Folder ? 0 : 1;
+        const std::uint64_t place = m_view.descending ? m_items.size() - 1 - ranks[index] : ranks[index];
+        keys.push_back(group << 63U | place << 32U | index);
+    }
+    std::ranges::sort(keys);
+    for (std::size_t at = 0; at < keys.size(); ++at) {
+        m_shown[at] = &m_items[static_cast<std::size_t>(keys[at] & 0xFFFF'FFFFU)];
+    }
 }
 
 void ContentBrowserModel::pruneSelection() {
