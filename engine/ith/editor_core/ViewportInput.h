@@ -26,7 +26,17 @@
 //   Alt + RMB    dolly toward the pivot
 //   Alt + LMB    orbit around the pivot
 //   MMB          pan
-//   LMB          a click candidate (picking and the gizmo come with later steps)
+//   LMB          a click candidate: a click picks (ADR-0042 rule 22)
+//
+// A click is an LMB press without Alt on an image and its release, with the pointer never more than
+// kClickSlop logical points (kClickSlop * setDisplayScale() in pixels) from the press in between.
+// On the release the consumer sets the viewport's ViewportState::click: the press's position from
+// the image's top-left corner and the press's modifiers (Ctrl toggles, else Shift adds, else the
+// click replaces the selection; Ctrl+Shift toggles; PickMode). A newer click replaces one the panel
+// hasn't taken yet. A longer LMB drag does nothing. RMB, MMB and Alt gestures never click. Losing
+// focus must not pick: the application calls cancelClicks() on WindowFocusLost, after Input's
+// synthetic release. The translate gizmo (rule 25) will take an LMB press on one of its handles
+// before it becomes a click candidate.
 //
 // The wheel over an image without a drag dollies that viewport's camera by steps.
 //
@@ -45,6 +55,7 @@
 // Main thread only; the Viewports store must outlive the consumer.
 
 #include "ith/editor_core/EditorCamera.h"
+#include "ith/editor_core/Viewports.h"
 #include "ith/input/Input.h"
 #include "ith/math/Types.h"
 #include "ith/platform_events/InputCodes.h"
@@ -55,7 +66,6 @@
 
 namespace ith {
 
-class Viewports;
 struct Event;
 
 // The longest frame time the first update() of a fly movement moves the camera for, in seconds:
@@ -63,6 +73,11 @@ struct Event;
 // 30 Hz frame. Later updates of the same movement use their whole frame time, so the fly speed
 // doesn't depend on the frame rate.
 inline constexpr float kMaxFlyStepSeconds = 1.0f / 30.0f;
+
+// How far, in logical points (times the display scale in pixels), the pointer may move between an
+// LMB press and its release for them to be a click (ADR-0042 rule 12; ADR-0047 item 1): the same
+// physical size at any display scale, on every platform.
+inline constexpr float kClickSlop = 4.0f;
 
 // What a held viewport drag does (ADR-0042 rule 12).
 enum class ViewportGesture : std::uint8_t {
@@ -91,6 +106,17 @@ public:
     // finite and positive; otherwise it stays.
     void setPixelDensity(float density) noexcept;
 
+    // The window's display scale (Window::displayScale(): the platform's content scale, which
+    // includes the pixel density on every platform), which kClickSlop is multiplied by to give the
+    // click slop in pixels; 1 at first. Set it before routing the frame's events. Precondition
+    // (asserted): finite and positive; otherwise it stays.
+    void setDisplayScale(float scale) noexcept;
+
+    // Drops every click not yet taken (ViewportState::click of every viewport) and the held LMB
+    // press's click candidate, so its release doesn't click. Call it on WindowFocusLost, which Input
+    // delivers after the release it synthesises for held buttons: a focus loss never picks.
+    void cancelClicks() noexcept;
+
     // Whether a drag that started on a viewport image is held, until its button's release.
     [[nodiscard]] bool holdsDrag() const noexcept { return m_drag.has_value(); }
 
@@ -118,6 +144,8 @@ private:
         MouseButton button = MouseButton::None;
         ViewportGesture gesture = ViewportGesture::Fly;
         Vec2 start{0.0f};
+        // A Click candidate's click, set at the press; reset once the pointer moves past kClickSlop.
+        std::optional<ViewportClick> click;
     };
 
     InputReply onMouseButtonDown(const Event& event);
@@ -134,6 +162,7 @@ private:
     // Wheel notches of the current fly not yet turned into speed steps.
     float m_speedWheel = 0.0f;
     float m_pixelDensity = 1.0f;
+    float m_displayScale = 1.0f;
     // The last update moved the flying camera.
     bool m_wasMoving = false;
     bool m_changed = false;

@@ -425,6 +425,8 @@ VkFormat vulkanFormat(Format format) {
             return VK_FORMAT_R16G16B16A16_SFLOAT;
         case Format::R32Uint:
             return VK_FORMAT_R32_UINT;
+        case Format::R32G32Uint:
+            return VK_FORMAT_R32G32_UINT;
         case Format::R32Float:
             return VK_FORMAT_R32_SFLOAT;
         case Format::R32G32Float:

@@ -202,6 +202,8 @@ std::string_view toString(rhi::Format format) {
             return "R16G16B16A16Float";
         case Format::R32Uint:
             return "R32Uint";
+        case Format::R32G32Uint:
+            return "R32G32Uint";
         case Format::R32Float:
             return "R32Float";
         case Format::R32G32Float:

@@ -405,6 +405,8 @@ DXGI_FORMAT dxgiFormat(Format format) {
             return DXGI_FORMAT_R16G16B16A16_FLOAT;
         case Format::R32Uint:
             return DXGI_FORMAT_R32_UINT;
+        case Format::R32G32Uint:
+            return DXGI_FORMAT_R32G32_UINT;
         case Format::R32Float:
             return DXGI_FORMAT_R32_FLOAT;
         case Format::R32G32Float:

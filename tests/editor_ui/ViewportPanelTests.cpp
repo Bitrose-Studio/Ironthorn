@@ -4,7 +4,10 @@
 // rendered only when the camera, the world, the selection, the size or the game-view flag changed;
 // the image is reported in window pixels, with a zero size while it isn't drawn and no hover under a
 // floating window; the toolbar runs commands; the Outliner's Add Shape places a shape the viewport
-// then draws; and a scale set by command or typed into Details re-renders it at its new size.
+// then draws; a scale set by command or typed into Details re-renders it at its new size; and the id
+// target and click picking (ADR-0042 rules 21 and 22): a click is copied in the next frame and
+// applied kFramesInFlight frames later, a newer click replaces one being read, and hidden viewports
+// and invalidate() treat picks as documented.
 
 #include "ith/editor_ui/ViewportPanel.h"
 
@@ -103,7 +106,7 @@ struct ViewportFixture {
         REQUIRE_MESSAGE(created.hasValue(), (created ? std::string() : created.error().message));
         panel = std::move(*created);
         registerViewport(session.panels(), *panel);
-        ui.beforeUi = [this](rg::RenderGraph& graph) { panel->addRenderPasses(graph); };
+        ui.beforeUi = [this](rg::RenderGraph& graph, const rhi::Frame& frame) { panel->addRenderPasses(graph, frame); };
     }
 
     ViewportFixture(const ViewportFixture&) = delete;
@@ -217,7 +220,9 @@ TEST_SUITE("editor_ui.viewport") {
         EditorShellState shell;
         {
             DockLayout dock(session);
-            ui.beforeUi = [&panel](rg::RenderGraph& graph) { (*panel)->addRenderPasses(graph); };
+            ui.beforeUi = [&panel](rg::RenderGraph& graph, const rhi::Frame& frame) {
+                (*panel)->addRenderPasses(graph, frame);
+            };
             for (int frame = 0; frame < 4; ++frame) {
                 ui.frame([&] {
                     (*panel)->newFrame();
@@ -271,8 +276,8 @@ TEST_SUITE("editor_ui.viewport") {
         // in window pixels. The old texture is unregistered: its graph import is null.
         fixture.ui.pixelSize = {2 * kWidth, 2 * kHeight};
         bool checked = false;
-        fixture.ui.beforeUi = [&](rg::RenderGraph& graph) {
-            fixture.panel->addRenderPasses(graph);
+        fixture.ui.beforeUi = [&](rg::RenderGraph& graph, const rhi::Frame& frame) {
+            fixture.panel->addRenderPasses(graph, frame);
             CHECK(fixture.ui.ui->importUserTexture(graph, firstTexture).isNull());
             CHECK_FALSE(fixture.ui.ui->importUserTexture(graph, fixture.panel->texture(kInstance)).isNull());
             checked = true;
@@ -288,7 +293,9 @@ TEST_SUITE("editor_ui.viewport") {
         CHECK(fixture.state().imageSize.y == doctest::Approx(size.y * 2.0f));
         CHECK(doubled->width == static_cast<std::uint32_t>(std::lround(size.x * 2.0f)));
         CHECK(doubled->height == static_cast<std::uint32_t>(std::lround(size.y * 2.0f)));
-        fixture.ui.beforeUi = [&fixture](rg::RenderGraph& graph) { fixture.panel->addRenderPasses(graph); };
+        fixture.ui.beforeUi = [&fixture](rg::RenderGraph& graph, const rhi::Frame& frame) {
+            fixture.panel->addRenderPasses(graph, frame);
+        };
 
         // A smaller window: a smaller target.
         fixture.ui.pixelSize = {kWidth, kHeight};
@@ -431,8 +438,8 @@ TEST_SUITE("editor_ui.viewport") {
         // target is gone. A camera move meanwhile renders nothing.
         fixture.state().camera.position.x += 1.0f;
         bool checked = false;
-        fixture.ui.beforeUi = [&](rg::RenderGraph& graph) {
-            fixture.panel->addRenderPasses(graph);
+        fixture.ui.beforeUi = [&](rg::RenderGraph& graph, const rhi::Frame& frame) {
+            fixture.panel->addRenderPasses(graph, frame);
             CHECK(fixture.ui.ui->importUserTexture(graph, shown).isNull());
             checked = true;
         };
@@ -442,7 +449,9 @@ TEST_SUITE("editor_ui.viewport") {
         CHECK_FALSE(fixture.panel->colorTarget(kInstance).has_value());
         CHECK_FALSE(fixture.scenePassesInLastFrame());
         CHECK(fixture.panel->renders() == renders);
-        fixture.ui.beforeUi = [&fixture](rg::RenderGraph& graph) { fixture.panel->addRenderPasses(graph); };
+        fixture.ui.beforeUi = [&fixture](rg::RenderGraph& graph, const rhi::Frame& frame) {
+            fixture.panel->addRenderPasses(graph, frame);
+        };
 
         // Shown again: a new target, rendered once.
         fixture.frame();
@@ -741,11 +750,187 @@ TEST_SUITE("editor_ui.viewport") {
         }
         // The registration is gone: the next frame's import of its id is null.
         bool checked = false;
-        fixture.ui.beforeUi = [&](rg::RenderGraph& graph) {
+        fixture.ui.beforeUi = [&](rg::RenderGraph& graph, const rhi::Frame& /*frame*/) {
             CHECK(fixture.ui.ui->importUserTexture(graph, texture).isNull());
             checked = true;
         };
         fixture.ui.frame();
         CHECK(checked);
+    }
+
+    TEST_CASE("the id target is R32G32Uint, RenderTarget | CopySrc, the colour target's size, and goes with it") {
+        ViewportFixture fixture;
+        fixture.frame();
+        const std::optional<rhi::TextureDesc> color = fixture.panel->colorTarget(kInstance);
+        const std::optional<rhi::TextureDesc> ids = fixture.panel->idTarget(kInstance);
+        REQUIRE(color.has_value());
+        REQUIRE(ids.has_value());
+        CHECK(ids->format == rhi::Format::R32G32Uint);
+        CHECK(ids->usage == (rhi::TextureUsage::RenderTarget | rhi::TextureUsage::CopySrc));
+        CHECK(ids->width == color->width);
+        CHECK(ids->height == color->height);
+        CHECK(ids->debugName == "Viewport 1 ids");
+        // The shapes pass writes it; nothing reads it while nobody clicks.
+        CHECK(fixture.ui.lastGraph.find("'Viewport 1 ids'") != std::string::npos);
+        CHECK(fixture.ui.lastGraph.find("'ViewportPick'") == std::string::npos);
+        fixture.windowSize = {320.0f, 240.0f};
+        fixture.frame();
+        REQUIRE(fixture.panel->idTarget(kInstance).has_value());
+        CHECK(fixture.panel->idTarget(kInstance)->width == fixture.panel->colorTarget(kInstance)->width);
+        fixture.hiddenFrame();
+        fixture.hiddenFrame();
+        CHECK_FALSE(fixture.panel->colorTarget(kInstance).has_value());
+        CHECK_FALSE(fixture.panel->idTarget(kInstance).has_value());
+    }
+
+    // The null device copies nothing, so every pick reads the empty texel: empty space. What a hit
+    // selects is covered by editor_core's applyPick tests and the GPU test.
+    TEST_CASE("a click is copied in the next frame and applied kFramesInFlight frames later, never earlier") {
+        ViewportFixture fixture;
+        REQUIRE(
+            fixture.session.execute("ith.entity.create", addShapeArgs(Shape::Cube, fixture.state().camera)).hasValue());
+        REQUIRE(fixture.session.execute("ith.edit.select_all").hasValue());
+        const auto selected = [&fixture] { return !fixture.session.document().selection().empty(); };
+        fixture.frame();
+        const Vec2 centre = fixture.state().imagePosition + fixture.state().imageSize * 0.5f;
+        fixture.ui.events({mouseMoved(centre.x, centre.y)});
+        fixture.frame();
+        REQUIRE(fixture.state().imageHovered);
+
+        fixture.ui.events(
+            {press(MouseButton::Left, centre.x, centre.y), release(MouseButton::Left, centre.x, centre.y)});
+        REQUIRE(fixture.state().click.has_value());
+        CHECK_FALSE(fixture.panel->picking());
+        fixture.frame(); // copies the texel
+        CHECK_FALSE(fixture.state().click.has_value());
+        CHECK(fixture.panel->picking());
+        CHECK(fixture.ui.lastGraph.find("'ViewportPick'") != std::string::npos);
+        CHECK(fixture.ui.lastGraph.find("'Viewport picks'") != std::string::npos);
+        for (std::uint32_t frame = 1; frame < rhi::kFramesInFlight; ++frame) {
+            fixture.frame(); // the copy's frame may still run on the GPU
+            CHECK(fixture.panel->picking());
+            CHECK(selected());
+        }
+        const std::uint64_t renders = fixture.panel->renders();
+        fixture.frame(); // read: empty space, and a plain click clears the selection
+        CHECK_FALSE(fixture.panel->picking());
+        CHECK_FALSE(selected());
+        CHECK(fixture.panel->renders() == renders + 1); // the same frame drew the cleared tint
+        CHECK(fixture.ui.lastGraph.find("'ViewportPick'") == std::string::npos);
+    }
+
+    TEST_CASE("Ctrl and Shift on empty space keep the selection; a newer click replaces one being read") {
+        ViewportFixture fixture;
+        REQUIRE(
+            fixture.session.execute("ith.entity.create", addShapeArgs(Shape::Cube, fixture.state().camera)).hasValue());
+        REQUIRE(fixture.session.execute("ith.edit.select_all").hasValue());
+        const auto selected = [&fixture] { return !fixture.session.document().selection().empty(); };
+        const auto frames = [&fixture](std::uint32_t count) {
+            for (std::uint32_t frame = 0; frame < count; ++frame) {
+                fixture.frame();
+            }
+        };
+        fixture.frame();
+        for (const PickMode mode : {PickMode::Toggle, PickMode::Add}) {
+            fixture.state().click = ViewportClick{.position = fixture.state().imageSize * 0.5f, .mode = mode};
+            frames(1 + rhi::kFramesInFlight);
+            CHECK_FALSE(fixture.panel->picking());
+            CHECK(selected());
+        }
+
+        // A plain click is copied, then a Ctrl click replaces it before it is read: only the Ctrl
+        // click is applied, after its own frame, and empty space with Ctrl keeps the selection.
+        fixture.state().click = ViewportClick{.position = {1.0f, 1.0f}, .mode = PickMode::Replace};
+        fixture.frame();
+        fixture.state().click = ViewportClick{.position = {2.0f, 2.0f}, .mode = PickMode::Toggle};
+        frames(1 + rhi::kFramesInFlight);
+        CHECK_FALSE(fixture.panel->picking());
+        CHECK(selected());
+    }
+
+    TEST_CASE("a copied pick completes after its viewport is hidden; invalidate() and a hidden viewport drop picks") {
+        ViewportFixture fixture;
+        REQUIRE(
+            fixture.session.execute("ith.entity.create", addShapeArgs(Shape::Cube, fixture.state().camera)).hasValue());
+        const auto selectAll = [&fixture] { REQUIRE(fixture.session.execute("ith.edit.select_all").hasValue()); };
+        const auto selected = [&fixture] { return !fixture.session.document().selection().empty(); };
+        const ViewportClick plain{.position = {10.0f, 10.0f}, .mode = PickMode::Replace};
+        selectAll();
+        fixture.frame();
+
+        // Copied, then hidden: the targets go, the pick still reads its texel and clears.
+        fixture.state().click = plain;
+        fixture.frame();
+        REQUIRE(fixture.panel->picking());
+        for (std::uint32_t frame = 0; frame < rhi::kFramesInFlight; ++frame) {
+            fixture.hiddenFrame();
+        }
+        CHECK_FALSE(fixture.panel->colorTarget(kInstance).has_value());
+        CHECK_FALSE(fixture.panel->picking());
+        CHECK_FALSE(selected());
+
+        // A click on a viewport not drawn (it has no picture to pick from) is dropped.
+        selectAll();
+        fixture.state().click = plain;
+        fixture.hiddenFrame();
+        CHECK_FALSE(fixture.state().click.has_value());
+        CHECK_FALSE(fixture.panel->picking());
+
+        // invalidate(), after a graph that failed to execute, drops the pick: its copy may not have run.
+        fixture.frame();
+        fixture.state().click = plain;
+        fixture.frame();
+        REQUIRE(fixture.panel->picking());
+        fixture.panel->invalidate();
+        CHECK_FALSE(fixture.panel->picking());
+        for (std::uint32_t frame = 0; frame < 1 + rhi::kFramesInFlight; ++frame) {
+            fixture.frame();
+        }
+        CHECK(selected());
+    }
+
+    TEST_CASE("an RMB click and an LMB drag over the image don't pick") {
+        ViewportFixture fixture;
+        fixture.frame();
+        const Vec2 centre = fixture.state().imagePosition + fixture.state().imageSize * 0.5f;
+        fixture.ui.events({mouseMoved(centre.x, centre.y)});
+        fixture.frame();
+        fixture.ui.events(
+            {press(MouseButton::Right, centre.x, centre.y), release(MouseButton::Right, centre.x, centre.y)});
+        fixture.ui.events({press(MouseButton::Left, centre.x, centre.y), mouseMoved(centre.x + 30.0f, centre.y),
+                           release(MouseButton::Left, centre.x + 30.0f, centre.y)});
+        CHECK_FALSE(fixture.state().click.has_value());
+        fixture.frame();
+        CHECK_FALSE(fixture.panel->picking());
+    }
+
+    TEST_CASE("UI frames without a device frame don't count: the pick completes kFramesInFlight device frames on") {
+        ViewportFixture fixture;
+        REQUIRE(
+            fixture.session.execute("ith.entity.create", addShapeArgs(Shape::Cube, fixture.state().camera)).hasValue());
+        REQUIRE(fixture.session.execute("ith.edit.select_all").hasValue());
+        const auto selected = [&fixture] { return !fixture.session.document().selection().empty(); };
+        fixture.frame();
+        fixture.state().click = ViewportClick{.position = {10.0f, 10.0f}, .mode = PickMode::Replace};
+        fixture.frame(); // copies the texel
+        REQUIRE(fixture.panel->picking());
+        // Minimized, or a frame whose render was skipped: the UI frame runs, no device frame begins,
+        // addRenderPasses() isn't called. The pick keeps waiting (the editor asks for frames while
+        // picking() is true).
+        for (int skipped = 0; skipped < 5; ++skipped) {
+            fixture.ui.ui->newFrame({.size = {kWidth, kHeight}, .pixelSize = {kWidth, kHeight}});
+            fixture.drawWindow();
+            fixture.ui.ui->endFrame();
+            fixture.ui.ui->abandonFrame();
+            CHECK(fixture.panel->picking());
+            CHECK(selected());
+        }
+        for (std::uint32_t frame = 1; frame < rhi::kFramesInFlight; ++frame) {
+            fixture.frame();
+            CHECK(fixture.panel->picking());
+        }
+        fixture.frame();
+        CHECK_FALSE(fixture.panel->picking());
+        CHECK_FALSE(selected());
     }
 }

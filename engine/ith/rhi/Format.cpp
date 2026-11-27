@@ -25,6 +25,7 @@ std::uint32_t formatTexelSize(Format format) {
         case Format::D32FloatS8Uint:
             return 4;
         case Format::R16G16B16A16Float:
+        case Format::R32G32Uint:
         case Format::R32G32Float:
             return 8;
         case Format::R32G32B32A32Float:
@@ -35,6 +36,10 @@ std::uint32_t formatTexelSize(Format format) {
 
 bool isDepthFormat(Format format) {
     return format == Format::D32Float || format == Format::D32FloatS8Uint;
+}
+
+bool isIntegerFormat(Format format) {
+    return format == Format::R32Uint || format == Format::R32G32Uint;
 }
 
 bool isLinearFilterable(Format format) {
@@ -52,6 +57,7 @@ bool isLinearFilterable(Format format) {
             return true;
         case Format::Unknown:
         case Format::R32Uint:
+        case Format::R32G32Uint:
         case Format::R32Float:
         case Format::R32G32Float:
         case Format::R32G32B32A32Float:

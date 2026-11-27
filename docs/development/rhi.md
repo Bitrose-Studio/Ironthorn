@@ -114,6 +114,14 @@ device->destroy(*swapchain); // before the window
   Direct3D 12 rules. A zero extent reaches to the end of the level, so the default region is the
   whole level; a font atlas updates only its changed rectangles. Depth formats copy whole levels
   only, as Direct3D 12 requires.
+- **Integer colour targets** (`isIntegerFormat()`: `R32Uint`, `R32G32Uint`) clear only to all
+  zeros: Direct3D 12 converts the clear floats, Vulkan reads them as bits, so no other value is
+  portable. Recording checks it at `beginRendering()` in Debug and development builds. A pipeline
+  never blends into one: `createGraphicsPipeline()` refuses a blend mode other than `Opaque` for
+  it.
+- **Frame numbers.** Inside frame N (`Frame::number`, also `Device::frameNumber()` while the frame
+  is open), every frame up to N − `kFramesInFlight` has finished on the GPU, so its readback
+  buffers can be read without a wait.
 - **Mapped memory** of Upload and Readback buffers is persistent and host-coherent, and valid
   until the buffer's `destroy()`.
 - **Errors** are `rhi::Error` with an `ErrorCode` and a message; `codeName()` gives the stable

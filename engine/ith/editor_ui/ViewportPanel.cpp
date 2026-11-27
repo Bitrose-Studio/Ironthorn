@@ -12,6 +12,7 @@
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/PanelRegistry.h"
 #include "ith/editor_core/Selection.h"
+#include "ith/editor_core/ViewportPick.h"
 #include "ith/editor_ui/Theme.h"
 #include "ith/editor_ui/ViewportShaders.h"
 #include "ith/foundation/Assert.h"
@@ -55,15 +56,26 @@ constexpr std::array<float, 6> kSnapSteps{0.01f, 0.05f, 0.1f, 0.25f, 0.5f, 1.0f}
 constexpr float kGridFadeDistance = 50.0f;
 constexpr float kGridFadePerHeight = 10.0f;
 
-// The push constants of Shapes.slang.
+// The push constants of Shapes.slang. They are at rhi::kMaxPushConstantSize (128 bytes), so the
+// entity's id texel (pickTexel()) rides in the words the local-to-view 3x3 leaves free after its
+// first two rows, instead of a per-draw buffer (ADR-0047 item 4). The layout matches the shader's
+// 16-byte packing: a float3 and a uint share each row.
 struct ShapeConstants {
     std::array<Vec4, 4> clip{};
-    std::array<Vec4, 3> view{};
+    Vec3 view0{0.0f};
+    std::uint32_t entityIndex = 0;
+    Vec3 view1{0.0f};
+    std::uint32_t entityGeneration = 0;
+    Vec4 view2{0.0f};
     Vec3 color{0.0f};
     std::uint32_t vertices = 0;
 };
 
 static_assert(sizeof(ShapeConstants) == kViewportShapesConstantsSize);
+static_assert(kViewportShapesConstantsSize == rhi::kMaxPushConstantSize, "no word is left for more per-draw data");
+static_assert(offsetof(ShapeConstants, entityIndex) == 76);
+static_assert(offsetof(ShapeConstants, entityGeneration) == 92);
+static_assert(offsetof(ShapeConstants, view2) == 96);
 
 // The push constants of Grid.slang.
 struct GridConstants {
@@ -160,11 +172,24 @@ ViewportRendered renderedKey(const ViewportState& state, const EditorChanges& ch
 } // namespace
 
 struct ViewportPanel::Instance {
-    // "Viewport <n> colour", the target's debug name.
+    // A click whose texel is being copied: the device frame that copies it, and how it selects.
+    struct Pick {
+        std::uint64_t frame = 0;
+        PickMode mode = PickMode::Replace;
+    };
+
+    // "Viewport <n> colour" and "Viewport <n> ids", the targets' debug names.
     std::string name;
+    std::string idName;
     rhi::TextureHandle color;
     rhi::TextureDesc desc;
     UiTextureId texture = 0;
+    // The id target, created and released with the colour target; its state between graphs.
+    rhi::TextureHandle ids;
+    rhi::TextureDesc idDesc;
+    rg::ImportedState idState;
+    // At most one per instance: a newer click replaces it.
+    std::optional<Pick> pick;
     std::optional<ViewportRendered> rendered;
     // Drawn in this frame: draw() sets it, newFrame() releases the target when it is still unset
     // and clears it.
@@ -181,6 +206,7 @@ ViewportPanel::ViewportPanel(EditorSession& session, EditorUi& ui, rhi::Device& 
     for (std::size_t index = 0; index < kMaxViewports; ++index) {
         m_instances[index] = std::make_unique<Instance>();
         m_instances[index]->name = "Viewport " + std::to_string(index + 1) + " colour";
+        m_instances[index]->idName = "Viewport " + std::to_string(index + 1) + " ids";
     }
 }
 
@@ -191,7 +217,8 @@ Expected<std::unique_ptr<ViewportPanel>> ViewportPanel::create(EditorSession& se
                    "the viewport needs all four compiled shader stages");
     std::unique_ptr<ViewportPanel> panel(new ViewportPanel(session, ui, device));
 
-    const std::array colorTargets{rhi::ColorTarget{.format = kViewportColorFormat, .blend = rhi::BlendMode::Opaque}};
+    const std::array colorTargets{rhi::ColorTarget{.format = kViewportColorFormat, .blend = rhi::BlendMode::Opaque},
+                                  rhi::ColorTarget{.format = kViewportIdFormat, .blend = rhi::BlendMode::Opaque}};
     const std::array shapeShaders{rhi::ShaderDesc{.stage = rhi::ShaderStage::Vertex,
                                                   .code = shaders.shapesVertex,
                                                   .entryPoint = kViewportShapesVertexEntry,
@@ -265,6 +292,20 @@ Expected<std::unique_ptr<ViewportPanel>> ViewportPanel::create(EditorSession& se
     }
     std::memcpy(memory.data(), vertices.data(), vertexBytes);
     std::memcpy(memory.data() + panel->m_indexOffset, indices.data(), indices.size() * sizeof(std::uint16_t));
+
+    // One texel slot per instance, each at the copy offset alignment; the CPU only reads it.
+    panel->m_picksDesc = {.size = kMaxViewports * rhi::kTextureCopyOffsetAlignment,
+                          .usage = rhi::BufferUsage::CopyDst,
+                          .memory = rhi::MemoryType::Readback,
+                          .debugName = "Viewport picks"};
+    Expected<rhi::BufferHandle, rhi::Error> picks = device.createBuffer(panel->m_picksDesc);
+    if (!picks) {
+        return viewportError("the viewport picks buffer could not be created", picks.error());
+    }
+    panel->m_picks = *picks;
+    if (device.mappedMemory(panel->m_picks).size() < panel->m_picksDesc.size) {
+        return makeError("editor_ui.viewport_failed", "the viewport picks buffer has no mapped memory of its size");
+    }
     return panel;
 }
 
@@ -272,6 +313,7 @@ ViewportPanel::~ViewportPanel() {
     for (const std::unique_ptr<Instance>& instance : m_instances) {
         release(*instance);
     }
+    m_device->destroy(m_picks);
     m_device->destroy(m_mesh);
     m_device->destroy(m_gridPipeline);
     m_device->destroy(m_shapesPipeline);
@@ -286,6 +328,12 @@ void ViewportPanel::release(Instance& instance) {
         m_device->destroy(instance.color);
         instance.color = {};
     }
+    // A pick already copied reads the picks buffer, not the target, so it stays.
+    if (instance.ids != rhi::TextureHandle{}) {
+        m_device->destroy(instance.ids);
+        instance.ids = {};
+    }
+    instance.idState = {};
     instance.rendered.reset();
 }
 
@@ -296,24 +344,40 @@ void ViewportPanel::resize(Instance& instance, std::uint32_t width, std::uint32_
                                 .format = kViewportColorFormat,
                                 .usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::Sampled,
                                 .debugName = instance.name};
-    Expected<rhi::TextureHandle, rhi::Error> color = m_device->createTexture(desc);
-    if (!color) {
-        // Logged once: draw() tries again only at another size.
+    const rhi::TextureDesc idDesc{.width = width,
+                                  .height = height,
+                                  .format = kViewportIdFormat,
+                                  .usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::CopySrc,
+                                  .debugName = instance.idName};
+    // Logged once: draw() tries again only at another size.
+    const auto failed = [&](const rhi::Error& error) {
         instance.failedWidth = width;
         instance.failedHeight = height;
-        ITH_LOG_WARNING(Viewport, "The viewport target of {} x {} pixels could not be created: {}", width, height,
-                        color.error().toString());
+        ITH_LOG_WARNING(Viewport, "The viewport targets of {} x {} pixels could not be created: {}", width, height,
+                        error.toString());
+    };
+    Expected<rhi::TextureHandle, rhi::Error> color = m_device->createTexture(desc);
+    if (!color) {
+        failed(color.error());
+        return;
+    }
+    Expected<rhi::TextureHandle, rhi::Error> ids = m_device->createTexture(idDesc);
+    if (!ids) {
+        m_device->destroy(*color);
+        failed(ids.error());
         return;
     }
     instance.failedWidth = 0;
     instance.failedHeight = 0;
     instance.color = *color;
     instance.desc = desc;
-    // A new target: the renderer starts it from Undefined, and the scene renders into it.
+    instance.ids = *ids;
+    instance.idDesc = idDesc;
+    // New targets: the renderer starts the colour one from Undefined, the id one starts from
+    // ImportedState's default, and the scene renders into both.
     instance.texture = m_ui->registerUserTexture(*color, desc);
     if (instance.texture == 0) {
-        m_device->destroy(instance.color);
-        instance.color = {};
+        release(instance);
         instance.failedWidth = width;
         instance.failedHeight = height;
     }
@@ -442,11 +506,47 @@ void ViewportPanel::newFrame() {
 void ViewportPanel::invalidate() noexcept {
     for (const std::unique_ptr<Instance>& instance : m_instances) {
         instance->rendered.reset();
+        instance->pick.reset();
     }
 }
 
-void ViewportPanel::addRenderPasses(rg::RenderGraph& graph) {
+bool ViewportPanel::picking() const noexcept {
+    return std::ranges::any_of(m_instances,
+                               [](const std::unique_ptr<Instance>& instance) { return instance->pick.has_value(); });
+}
+
+void ViewportPanel::readPicks(std::uint64_t open) {
+    // Inside frame `open`, beginFrame() has waited for every frame up to open - kFramesInFlight: those
+    // copies are done, and their bytes are the CPU's to read (Device::mappedMemory()).
+    const std::span<const std::byte> memory = m_device->mappedMemory(m_picks);
+    for (std::size_t index = 0; index < kMaxViewports; ++index) {
+        Instance& instance = *m_instances[index];
+        if (!instance.pick.has_value() || instance.pick->frame + rhi::kFramesInFlight > open) {
+            continue;
+        }
+        const PickMode mode = instance.pick->mode;
+        instance.pick.reset();
+        std::array<std::uint32_t, 2> texel{};
+        std::memcpy(texel.data(), memory.data() + index * rhi::kTextureCopyOffsetAlignment, sizeof(texel));
+        if (const Expected<void> applied = applyPick(*m_session, {.index = texel[0], .generation = texel[1]}, mode);
+            !applied) {
+            ITH_LOG_WARNING(Viewport, "{}", applied.error().message);
+        }
+    }
+}
+
+rg::Texture ViewportPanel::importIds(rg::RenderGraph& graph, Instance& instance) {
+    return graph.importTexture(
+        {.texture = instance.ids, .desc = instance.idDesc, .state = &instance.idState, .writable = true});
+}
+
+void ViewportPanel::addRenderPasses(rg::RenderGraph& graph, const rhi::Frame& opened) {
+    // First, so a selection a pick changes is drawn by this frame's scene passes.
+    readPicks(opened.number);
+    // The device frame these passes run in.
+    const std::uint64_t frame = opened.number;
     rg::Buffer mesh;
+    rg::Buffer picks;
     for (std::size_t index = 0; index < kMaxViewports; ++index) {
         Instance& instance = *m_instances[index];
         ViewportState& state = m_session->viewports().at(index);
@@ -454,33 +554,83 @@ void ViewportPanel::addRenderPasses(rg::RenderGraph& graph) {
             // Hidden or closed: no image takes input, and the next newFrame() releases the target.
             state.imageSize = Vec2{0.0f};
             state.imageHovered = false;
+            state.click.reset();
             continue;
         }
         if (instance.texture == 0) {
+            state.click.reset();
             continue;
         }
+        rg::Texture ids;
         const ViewportRendered now = renderedKey(state, m_session->document().changes());
-        if (instance.rendered == now) {
+        if (instance.rendered != now) {
+            if (mesh.isNull()) {
+                // Once per graph, before the first draw list: world matrices for what changed.
+                propagateTransforms(m_session->document().mutableWorld());
+                mesh = graph.importBuffer({.buffer = m_mesh, .desc = m_meshDesc, .state = &m_meshState});
+            }
+            ids = addScenePasses(graph, instance, state, mesh);
+            if (!ids.isNull()) {
+                instance.rendered = now;
+                ++m_renders;
+            }
+        }
+        if (!state.click.has_value()) {
             continue;
         }
-        if (mesh.isNull()) {
-            // Once per graph, before the first draw list: world matrices for what changed.
-            propagateTransforms(m_session->document().mutableWorld());
-            mesh = graph.importBuffer({.buffer = m_mesh, .desc = m_meshDesc, .state = &m_meshState});
+        const ViewportClick click = *state.click;
+        state.click.reset();
+        if (!instance.rendered.has_value() || state.imageSize.x <= 0.0f || state.imageSize.y <= 0.0f) {
+            continue; // nothing drawn to pick from
         }
-        if (addScenePasses(graph, instance, state, mesh)) {
-            instance.rendered = now;
-            ++m_renders;
+        if (ids.isNull()) {
+            ids = importIds(graph, instance);
         }
+        if (picks.isNull()) {
+            picks =
+                graph.importBuffer({.buffer = m_picks, .desc = m_picksDesc, .state = &m_picksState, .writable = true});
+        }
+        // Window pixels to the target's texels: the same unless the target was clamped. Inside the
+        // target, also for a position on or past the image's edge.
+        const auto texelOf = [](float position, float imageSide, std::uint32_t side) -> std::uint32_t {
+            ITH_ASSERT(side > 0);
+            const float texel = std::floor(position * static_cast<float>(side) / imageSide);
+            if (side == 0 || !(texel > 0.0f)) {
+                return 0; // also NaN
+            }
+            return texel >= static_cast<float>(side - 1) ? side - 1 : static_cast<std::uint32_t>(texel);
+        };
+        const rhi::TexelRegion region{.x = texelOf(click.position.x, state.imageSize.x, instance.idDesc.width),
+                                      .y = texelOf(click.position.y, state.imageSize.y, instance.idDesc.height),
+                                      .width = 1,
+                                      .height = 1,
+                                      .depth = 1};
+        const std::uint64_t offset = index * std::uint64_t{rhi::kTextureCopyOffsetAlignment};
+        graph.addPass(
+            "ViewportPick", rg::PassType::Copy,
+            [&](rg::PassBuilder& pass) {
+                pass.read(ids, rg::TextureUse::CopySrc);
+                pass.write(picks, rg::BufferUse::CopyDst);
+            },
+            [ids, picks, offset, region](rg::PassContext& context) {
+                context.list().copyTextureToBuffer({.buffer = context.buffer(picks),
+                                                    .bufferOffset = offset,
+                                                    .rowPitch = rhi::kTextureCopyRowAlignment,
+                                                    .texture = context.texture(ids),
+                                                    .region = region});
+            },
+            rg::PassFlags::NeverCull);
+        instance.pick = Instance::Pick{.frame = frame, .mode = click.mode};
     }
 }
 
-bool ViewportPanel::addScenePasses(rg::RenderGraph& graph, const Instance& instance, const ViewportState& state,
-                                   rg::Buffer mesh) {
+rg::Texture ViewportPanel::addScenePasses(rg::RenderGraph& graph, Instance& instance, const ViewportState& state,
+                                          rg::Buffer mesh) {
     const rg::Texture color = m_ui->importUserTexture(graph, instance.texture);
     if (color.isNull()) {
-        return false;
+        return {};
     }
+    const rg::Texture ids = importIds(graph, instance);
     const std::uint32_t width = instance.desc.width;
     const std::uint32_t height = instance.desc.height;
     const rg::Texture depth = graph.createTexture(
@@ -519,10 +669,12 @@ bool ViewportPanel::addScenePasses(rg::RenderGraph& graph, const Instance& insta
             }
             ShapeDraw& draw = draws.emplace_back();
             draw.constants.clip = {rowOf(clip, 0), rowOf(clip, 1), rowOf(clip, 2), rowOf(clip, 3)};
-            for (int row = 0; row < 3; ++row) {
-                draw.constants.view[static_cast<std::size_t>(row)] = {viewFromLocal[0][row], viewFromLocal[1][row],
-                                                                      viewFromLocal[2][row], 0.0f};
-            }
+            draw.constants.view0 = {viewFromLocal[0][0], viewFromLocal[1][0], viewFromLocal[2][0]};
+            draw.constants.view1 = {viewFromLocal[0][1], viewFromLocal[1][1], viewFromLocal[2][1]};
+            draw.constants.view2 = {viewFromLocal[0][2], viewFromLocal[1][2], viewFromLocal[2][2], 0.0f};
+            const PickTexel texel = pickTexel(entity);
+            draw.constants.entityIndex = texel.index;
+            draw.constants.entityGeneration = texel.generation;
             draw.constants.color = shapeColor;
             draw.firstIndex = m_meshes[shape].firstIndex;
             draw.indexCount = m_meshes[shape].indexCount;
@@ -534,6 +686,7 @@ bool ViewportPanel::addScenePasses(rg::RenderGraph& graph, const Instance& insta
         "ViewportShapes", rg::PassType::Raster,
         [&](rg::PassBuilder& pass) {
             pass.renderTarget(color, rhi::LoadOp::Clear, clearColor);
+            pass.renderTarget(ids, rhi::LoadOp::Clear, {0.0f, 0.0f, 0.0f, 0.0f}); // 0: no entity
             pass.depth(depth, rhi::LoadOp::Clear, 0.0f);
             pass.read(mesh, rg::BufferUse::ShaderRead, rhi::PipelineStage::VertexShader);
             pass.read(mesh, rg::BufferUse::Index);
@@ -557,7 +710,7 @@ bool ViewportPanel::addScenePasses(rg::RenderGraph& graph, const Instance& insta
 
     // Game view draws what a game would see: no grid.
     if (state.gameView) {
-        return true;
+        return ids;
     }
     // The projection's angles (ADR-0046): fovX across the image, the derived vertical angle up it.
     const float tanX = std::tan(0.5f * camera.fovX);
@@ -583,7 +736,7 @@ bool ViewportPanel::addScenePasses(rg::RenderGraph& graph, const Instance& insta
             list.pushConstants(grid);
             list.draw(3);
         });
-    return true;
+    return ids;
 }
 
 UiTextureId ViewportPanel::texture(std::string_view instance) const {
@@ -597,6 +750,14 @@ std::optional<rhi::TextureDesc> ViewportPanel::colorTarget(std::string_view inst
         return std::nullopt;
     }
     return m_instances[*index]->desc;
+}
+
+std::optional<rhi::TextureDesc> ViewportPanel::idTarget(std::string_view instance) const {
+    const std::optional<std::size_t> index = indexOf(instance);
+    if (!index.has_value() || m_instances[*index]->ids == rhi::TextureHandle{}) {
+        return std::nullopt;
+    }
+    return m_instances[*index]->idDesc;
 }
 
 void registerViewport(PanelRegistry& panels, ViewportPanel& panel) {

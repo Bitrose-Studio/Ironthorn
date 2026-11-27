@@ -22,6 +22,8 @@ enum class Format : std::uint8_t {
     R16G16Float,
     R16G16B16A16Float,
     R32Uint,
+    // Two 32-bit unsigned integers, e.g. the editor viewport's entity id target (ADR-0042 rule 21).
+    R32G32Uint,
     R32Float,
     R32G32Float,
     R32G32B32A32Float,
@@ -41,5 +43,9 @@ enum class Format : std::uint8_t {
 // packed and 16-bit float formats. False for Unknown, the integer formats, the 32-bit float
 // formats (Vulkan doesn't guarantee linear filtering for them) and the depth formats.
 [[nodiscard]] bool isLinearFilterable(Format format);
+
+// True for the integer colour formats (R32Uint, R32G32Uint). As colour targets they clear only to
+// all zeros (ColorAttachment::clearColor) and are never blended (ColorTarget::blend is Opaque).
+[[nodiscard]] bool isIntegerFormat(Format format);
 
 } // namespace ith::rhi

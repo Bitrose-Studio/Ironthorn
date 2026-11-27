@@ -1,0 +1,78 @@
+#include "ith/editor_core/ViewportPick.h"
+
+#include "ith/ecs/StableId.h"
+#include "ith/ecs/World.h"
+#include "ith/editor_core/EditorDocument.h"
+#include "ith/editor_core/EditorSession.h"
+#include "ith/foundation/Assert.h"
+#include "ith/serialization/Value.h"
+
+#include <limits>
+#include <string>
+#include <utility>
+
+namespace ith {
+
+namespace {
+
+using serialization::Value;
+
+const char* modeName(PickMode mode) noexcept {
+    switch (mode) {
+        case PickMode::Toggle:
+            return "toggle";
+        case PickMode::Add:
+            return "add";
+        case PickMode::Replace:
+            break;
+    }
+    return "replace";
+}
+
+} // namespace
+
+PickTexel pickTexel(Entity entity) noexcept {
+    if (entity.isNull()) {
+        return {};
+    }
+    ITH_ASSERT_MSG(entity.index() < std::numeric_limits<std::uint32_t>::max(),
+                   "an entity's slot index + 1 fits the id target's 32 bits");
+    return {.index = entity.index() + 1, .generation = entity.generation()};
+}
+
+Entity pickedEntity(PickTexel texel, std::uint8_t worldId) noexcept {
+    if (texel.index == 0) {
+        return {};
+    }
+    return Entity::fromParts(texel.index - 1, texel.generation, worldId);
+}
+
+Expected<void> applyPick(EditorSession& session, PickTexel texel, PickMode mode) {
+    Value entities = Value::array();
+    if (texel.index == 0) {
+        // Empty space: a plain click clears the selection; Ctrl and Shift keep it.
+        if (mode != PickMode::Replace) {
+            return {};
+        }
+    } else {
+        const World& world = session.document().world();
+        const Entity entity = pickedEntity(texel, world.id());
+        if (!world.isAlive(entity)) {
+            return {}; // despawned since the frame was drawn
+        }
+        const auto* id = world.get<const StableId>(entity);
+        if (id == nullptr) {
+            return {}; // only entities with a stable id are selectable (ADR-0037 rule 5)
+        }
+        entities.elements().push_back(Value::string(id->id.toString()));
+    }
+    Value args = Value::object();
+    args.set("entities", std::move(entities));
+    args.set("mode", Value::string(modeName(mode)));
+    if (Expected<Value> result = session.execute("ith.selection.set", args); !result) {
+        return makeUnexpected(std::move(result).error());
+    }
+    return {};
+}
+
+} // namespace ith

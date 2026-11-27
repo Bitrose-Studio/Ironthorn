@@ -568,6 +568,10 @@ TEST_SUITE("editor_ui.renderer") {
             CHECK(fixture.ui->registerUserTexture(*handle, desc) == 0);
             ++expected;
             CHECK(capture.count() == expected);
+            desc.format = rhi::Format::R32G32Uint; // the viewport's id target's format
+            CHECK(fixture.ui->registerUserTexture(*handle, desc) == 0);
+            ++expected;
+            CHECK(capture.count() == expected);
             // Not guaranteed to filter linearly on Vulkan, and the UI's sampler is linear.
             for (const rhi::Format format :
                  {rhi::Format::R32Float, rhi::Format::R32G32Float, rhi::Format::R32G32B32A32Float}) {

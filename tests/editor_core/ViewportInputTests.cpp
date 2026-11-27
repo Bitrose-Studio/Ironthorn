@@ -2,7 +2,8 @@
 // consumer below it: the letter-key rule (RMB + W flies, W alone runs the translate tool, Ctrl + Z
 // still undoes during fly), releases to the consumers that saw the press, routing by the reported
 // image rectangles, drags held outside them until release, one drag at a time, the wheel with and
-// without RMB, pan, orbit and dolly, the click candidate, and update()'s change report.
+// without RMB, pan, orbit and dolly, the click candidate and the clicks it makes (the slop, the
+// modifiers, the gestures that never click), and update()'s change report.
 
 #include "ith/editor_core/ViewportInput.h"
 
@@ -37,7 +38,9 @@ using ith::InputReply;
 using ith::Key;
 using ith::KeyModifiers;
 using ith::MouseButton;
+using ith::PickMode;
 using ith::Vec3;
+using ith::ViewportClick;
 using ith::ViewportGesture;
 using ith::ViewportTool;
 using ith::test::editor::json;
@@ -441,11 +444,130 @@ TEST_SUITE("editor_core.viewport_input") {
         CHECK_FALSE(fixture.viewports.update(0.1f));
         fixture.events({release(MouseButton::Left, 300.0f, 250.0f)});
         CHECK_FALSE(fixture.viewports.holdsDrag());
+        CHECK_FALSE(fixture.session.viewports().at(0).click.has_value()); // a drag, not a click
 
         // A side button over the image is swallowed and starts nothing.
         fixture.events({press(MouseButton::Back, 200.0f, 200.0f)});
         CHECK_FALSE(fixture.keymapState().pressed(MouseButton::Back));
         CHECK_FALSE(fixture.viewports.holdsDrag());
+    }
+
+    TEST_CASE("an LMB click within the slop sets the viewport's click: the press's place and modifiers") {
+        Fixture fixture;
+        const std::optional<ViewportClick>& first = fixture.session.viewports().at(0).click;
+        const std::optional<ViewportClick>& second = fixture.session.viewports().at(1).click;
+        // The pointer wanders 3.6 pixels, inside kClickSlop; the click is where the press was.
+        fixture.events({press(MouseButton::Left, 200.0f, 200.0f), moved(202.0f, 203.0f, 2.0f, 3.0f)});
+        CHECK_FALSE(first.has_value()); // not before the release
+        fixture.events({release(MouseButton::Left, 202.0f, 203.0f)});
+        CHECK(first == ViewportClick{.position = {100.0f, 100.0f}, .mode = PickMode::Replace});
+        CHECK_FALSE(fixture.keymapState().pressed(MouseButton::Left));
+
+        // Ctrl toggles, Shift adds, Ctrl wins over Shift; a newer click replaces one not yet taken.
+        fixture.events({press(MouseButton::Left, 150.0f, 120.0f, KeyModifiers::Control),
+                        release(MouseButton::Left, 150.0f, 120.0f)});
+        CHECK(first == ViewportClick{.position = {50.0f, 20.0f}, .mode = PickMode::Toggle});
+        fixture.events({press(MouseButton::Left, 150.0f, 120.0f, KeyModifiers::Shift),
+                        release(MouseButton::Left, 150.0f, 120.0f)});
+        CHECK(first->mode == PickMode::Add);
+        fixture.events({press(MouseButton::Left, 150.0f, 120.0f, KeyModifiers::Control | KeyModifiers::Shift),
+                        release(MouseButton::Left, 150.0f, 120.0f)});
+        CHECK(first->mode == PickMode::Toggle);
+
+        // Each viewport gets its own click, from its own image's corner.
+        fixture.events({press(MouseButton::Left, 650.0f, 150.0f), release(MouseButton::Left, 650.0f, 150.0f)});
+        CHECK(second == ViewportClick{.position = {50.0f, 50.0f}, .mode = PickMode::Replace});
+        CHECK(first->position == ith::Vec2{50.0f, 20.0f});
+    }
+
+    TEST_CASE("a drag past the slop doesn't click, even back at the press; the slop follows the display scale") {
+        Fixture fixture;
+        const std::optional<ViewportClick>& click = fixture.session.viewports().at(0).click;
+        fixture.events({press(MouseButton::Left, 200.0f, 200.0f), moved(205.0f, 200.0f, 5.0f, 0.0f),
+                        moved(200.0f, 200.0f, -5.0f, 0.0f), release(MouseButton::Left, 200.0f, 200.0f)});
+        CHECK_FALSE(click.has_value());
+        // A release past the slop without motion events in between doesn't click either.
+        fixture.events({press(MouseButton::Left, 200.0f, 200.0f), release(MouseButton::Left, 200.0f, 210.0f)});
+        CHECK_FALSE(click.has_value());
+        // At display scale 1 the slop is 4 pixels: 4 clicks, 5 doesn't.
+        fixture.events({press(MouseButton::Left, 200.0f, 200.0f), release(MouseButton::Left, 204.0f, 200.0f)});
+        CHECK(click.has_value());
+        fixture.session.viewports().at(0).click.reset();
+        fixture.events({press(MouseButton::Left, 200.0f, 200.0f), release(MouseButton::Left, 205.0f, 200.0f)});
+        CHECK_FALSE(click.has_value());
+
+        // At display scale 2 the slop is 8 pixels: 6 is still a click, 9 isn't. The pixel density
+        // (pan and orbit) doesn't change it: on Windows and X11 it stays 1 at 200%.
+        fixture.viewports.setDisplayScale(2.0f);
+        fixture.events({press(MouseButton::Left, 200.0f, 200.0f), moved(206.0f, 200.0f, 6.0f, 0.0f),
+                        release(MouseButton::Left, 206.0f, 200.0f)});
+        CHECK(click == ViewportClick{.position = {100.0f, 100.0f}, .mode = PickMode::Replace});
+        fixture.session.viewports().at(0).click.reset();
+        fixture.events({press(MouseButton::Left, 200.0f, 200.0f), release(MouseButton::Left, 209.0f, 200.0f)});
+        CHECK_FALSE(click.has_value());
+        fixture.viewports.setDisplayScale(1.0f);
+        fixture.viewports.setPixelDensity(2.0f);
+        fixture.events({press(MouseButton::Left, 200.0f, 200.0f), release(MouseButton::Left, 206.0f, 200.0f)});
+        CHECK_FALSE(click.has_value());
+    }
+
+    TEST_CASE("losing focus with LMB held never picks: cancelClicks() drops the synthetic release's click") {
+        Fixture fixture;
+        const std::optional<ViewportClick>& click = fixture.session.viewports().at(0).click;
+        fixture.events({press(MouseButton::Left, 200.0f, 200.0f)});
+        REQUIRE(fixture.viewports.gesture() == ViewportGesture::Click);
+        // Input releases held buttons on focus loss, at the pointer, before the focus-loss event: a
+        // click by itself, which the editor cancels when it sees WindowFocusLost.
+        fixture.events({Event{.type = EventType::WindowFocusLost}});
+        CHECK_FALSE(fixture.viewports.holdsDrag());
+        CHECK(click.has_value());
+        fixture.viewports.cancelClicks();
+        CHECK_FALSE(click.has_value());
+
+        // Cancelled while still held, the press's release doesn't click either; every viewport's
+        // waiting click goes.
+        fixture.events({Event{.type = EventType::WindowFocusGained}});
+        fixture.events({press(MouseButton::Left, 650.0f, 150.0f), release(MouseButton::Left, 650.0f, 150.0f)});
+        REQUIRE(fixture.session.viewports().at(1).click.has_value());
+        fixture.events({press(MouseButton::Left, 200.0f, 200.0f)});
+        fixture.viewports.cancelClicks();
+        CHECK_FALSE(fixture.session.viewports().at(1).click.has_value());
+        fixture.events({release(MouseButton::Left, 200.0f, 200.0f)});
+        CHECK_FALSE(click.has_value());
+        CHECK_FALSE(fixture.viewports.holdsDrag());
+    }
+
+#ifdef ITH_ENABLE_ASSERTS
+    TEST_CASE("an invalid display scale is a programmer error and keeps the slop") {
+        Fixture fixture;
+        {
+            const ith::test::AssertCapture capture;
+            fixture.viewports.setDisplayScale(0.0f);
+            fixture.viewports.setDisplayScale(std::numeric_limits<float>::quiet_NaN());
+            CHECK(capture.count() == 2);
+        }
+        fixture.events({press(MouseButton::Left, 200.0f, 200.0f), release(MouseButton::Left, 203.0f, 200.0f)});
+        CHECK(fixture.session.viewports().at(0).click.has_value());
+    }
+#endif
+
+    TEST_CASE("RMB, MMB and the Alt gestures never click") {
+        Fixture fixture;
+        const std::optional<ViewportClick>& click = fixture.session.viewports().at(0).click;
+        fixture.events({press(MouseButton::Right, 200.0f, 200.0f), release(MouseButton::Right, 200.0f, 200.0f)});
+        fixture.events({press(MouseButton::Middle, 200.0f, 200.0f), release(MouseButton::Middle, 200.0f, 200.0f)});
+        fixture.events(
+            {press(MouseButton::Left, 200.0f, 200.0f, KeyModifiers::Alt), release(MouseButton::Left, 200.0f, 200.0f)});
+        fixture.events({press(MouseButton::Right, 200.0f, 200.0f, KeyModifiers::Alt),
+                        release(MouseButton::Right, 200.0f, 200.0f)});
+        CHECK_FALSE(click.has_value());
+        // An LMB press during another drag is swallowed and doesn't click on its release.
+        fixture.events({press(MouseButton::Right, 200.0f, 200.0f), press(MouseButton::Left, 200.0f, 200.0f),
+                        release(MouseButton::Left, 200.0f, 200.0f), release(MouseButton::Right, 200.0f, 200.0f)});
+        CHECK_FALSE(click.has_value());
+        // Outside every image there is nothing to click.
+        fixture.events({press(MouseButton::Left, 50.0f, 50.0f), release(MouseButton::Left, 50.0f, 50.0f)});
+        CHECK_FALSE(click.has_value());
     }
 
     TEST_CASE("losing focus ends fly and releases its keys") {

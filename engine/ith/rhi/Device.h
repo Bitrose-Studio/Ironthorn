@@ -223,7 +223,9 @@ public:
     // True once a call reported DeviceLost; the device can then only be destroyed.
     [[nodiscard]] bool isLost() const;
 
-    // The number of the next frame beginFrame() begins.
+    // The number of the next frame beginFrame() begins; while a frame is open, that frame's number
+    // (Frame::number), since the count moves on at endFrame(). Inside frame N, every frame up to
+    // N - kFramesInFlight has finished on the GPU.
     [[nodiscard]] std::uint64_t frameNumber() const;
 
     // Objects destroyed but not yet released.

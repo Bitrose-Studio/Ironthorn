@@ -185,6 +185,9 @@ const char* checkGraphicsPipeline(const GraphicsPipelineDesc& desc) {
         if (target.format == Format::Unknown || isDepthFormat(target.format)) {
             return "a color target needs a color format";
         }
+        if (isIntegerFormat(target.format) && target.blend != BlendMode::Opaque) {
+            return "an integer color target can't be blended";
+        }
     }
     if (desc.depthFormat != Format::Unknown && !isDepthFormat(desc.depthFormat)) {
         return "a pipeline's depth format must be a depth format";

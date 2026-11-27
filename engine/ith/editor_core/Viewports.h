@@ -88,6 +88,22 @@ inline constexpr serialization::DocumentFormat kEditorViewportsFormat{
 // The largest viewports file read.
 inline constexpr std::size_t kMaxViewportsFileSize = std::size_t{4} << 20;
 
+// How a click on a viewport image changes the selection (ADR-0042 rule 22).
+enum class PickMode : std::uint8_t {
+    Replace, // a plain click: the hit entity alone, or nothing on empty space
+    Toggle,  // Ctrl: the hit entity in or out; empty space changes nothing
+    Add,     // Shift: the hit entity added, as primary; empty space changes nothing
+};
+
+// A click on a viewport image that waits to be picked (ADR-0042 rule 22).
+struct ViewportClick {
+    // Where the press was, in window pixels from the image's top-left corner (imagePosition).
+    Vec2 position{0.0f};
+    PickMode mode = PickMode::Replace;
+
+    friend bool operator==(const ViewportClick&, const ViewportClick&) = default;
+};
+
 // One viewport's state.
 struct ViewportState {
     // Saved per level.
@@ -103,6 +119,10 @@ struct ViewportState {
     // (a floating panel, a popup). The viewport consumer takes presses, motion and the wheel only over
     // a hovered image; false until the panel has drawn, and in frames it doesn't draw the image.
     bool imageHovered = false;
+    // The last click on the image that the panel has not taken yet: the viewport consumer sets it on
+    // a click's release (a newer click replaces it), and the panel takes it in its next render, reads
+    // the entity under it back from the GPU and selects it (ADR-0042 rules 21 and 22).
+    std::optional<ViewportClick> click;
 
     // The image's width / height; 1 while the image has no area.
     [[nodiscard]] float aspect() const noexcept {

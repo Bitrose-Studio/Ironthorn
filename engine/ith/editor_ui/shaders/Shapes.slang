@@ -1,6 +1,7 @@
-// The viewport's shapes pass (ADR-0042 rules 15, 19 and 20): one draw per ShapeRenderer, unlit,
-// with a fixed light from the camera so the shapes read as 3D. Rendering is camera-relative
-// (ADR-0006 rule 7): the CPU subtracts the camera's position before it builds the matrices.
+// The viewport's shapes pass (ADR-0042 rules 15, 19 to 21): one draw per ShapeRenderer, unlit,
+// with a fixed light from the camera so the shapes read as 3D, and each fragment's entity written
+// into the id target for click picking. Rendering is camera-relative (ADR-0006 rule 7): the CPU
+// subtracts the camera's position before it builds the matrices.
 //
 // A vertex is 24 bytes, pulled from a bindless buffer: float3 position and float3 normal, in the
 // shape's local space. The index buffer holds each shape's indices already offset to its first
@@ -15,10 +16,14 @@ struct Constants {
     float4 clip1;
     float4 clip2;
     float4 clip3;
-    // The local-to-view 3x3 (rotation and scale), as rows; w unused. Normals go through its
-    // cofactor matrix, which is right for non-uniform scales too.
-    float4 view0;
-    float4 view1;
+    // The local-to-view 3x3 (rotation and scale), as rows. Normals go through its cofactor matrix,
+    // which is right for non-uniform scales too. The constants are at the RHI's 128-byte push
+    // constant limit (rhi::kMaxPushConstantSize), so the entity's id texel (slot index + 1 and
+    // generation) rides in the words the first two rows leave free, instead of a per-draw buffer.
+    float3 view0;
+    uint entityIndex;
+    float3 view1;
+    uint entityGeneration;
     float4 view2;
     // The linear colour, the selection tint already applied.
     float3 color;
@@ -48,8 +53,8 @@ Varyings shapesVertex(uint vertexId : SV_VertexID) {
     const uint offset = vertexId * 24;
     const float4 local = float4(vertices.Load<float3>(offset), 1.0);
     const float3 normal = vertices.Load<float3>(offset + 12);
-    const float3 r0 = constants.view0.xyz;
-    const float3 r1 = constants.view1.xyz;
+    const float3 r0 = constants.view0;
+    const float3 r1 = constants.view1;
     const float3 r2 = constants.view2.xyz;
     // The cofactor matrix is the inverse transpose times the determinant; its sign keeps mirrored
     // shapes' normals pointing out.
@@ -68,8 +73,18 @@ Varyings shapesVertex(uint vertexId : SV_VertexID) {
 // to the left, so the faces of a box differ.
 static const float3 kLight = float3(-0.3, 0.5, 0.81);
 
-float4 shapesPixel(Varyings input) : SV_Target {
+struct Targets {
+    // The colour target (sRGB).
+    float4 color : SV_Target0;
+    // The id target (R32G32Uint): the entity's slot index + 1 and generation.
+    uint2 id : SV_Target1;
+};
+
+Targets shapesPixel(Varyings input) {
     const float3 normal = normalize(input.normal);
     const float shade = 0.3 + 0.7 * saturate(dot(normal, normalize(kLight)));
-    return float4(constants.color * shade, 1.0);
+    Targets output;
+    output.color = float4(constants.color * shade, 1.0);
+    output.id = uint2(constants.entityIndex, constants.entityGeneration);
+    return output;
 }

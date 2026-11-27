@@ -358,7 +358,7 @@ bool render(ith::rhi::Device& device, RenderTarget& target, ith::rg::RenderGraph
     const ith::rg::Texture texture = target.import(graph, **frame);
     ith::Expected<void, ith::rhi::Error> executed;
     if (!texture.isNull()) {
-        viewports.addRenderPasses(graph);
+        viewports.addRenderPasses(graph, **frame);
         ui.addRenderPasses(graph, texture, (*frame)->slot, ith::rhi::LoadOp::Clear,
                            ith::linearColor(ui.theme().background));
         graph.compile();
@@ -456,6 +456,27 @@ struct StateWatch {
         return any;
     }
 };
+
+// Applies an event of the editor's window: a new pixel size resizes the swapchain, a new display
+// scale rescales the UI, and a focus loss cancels viewport clicks (Input released the held buttons
+// just before it; that release must not pick, ADR-0047 item 2).
+void applyWindowEvent(const ith::Event& event, const ith::Window& window, RenderTarget& target, ith::EditorUi& ui,
+                      ith::DockLayout& dock, ith::ViewportConsumer& viewportInput) {
+    switch (event.type) {
+        case ith::EventType::WindowPixelSizeChanged:
+            target.resize({.width = event.width, .height = event.height});
+            break;
+        case ith::EventType::WindowDisplayScaleChanged:
+            ui.setDisplayScale(window.displayScale());
+            dock.displayScaleChanged();
+            break;
+        case ith::EventType::WindowFocusLost:
+            viewportInput.cancelClicks();
+            break;
+        default:
+            break;
+    }
+}
 
 // The editor's frame loop and its state, once the platform, the device and the session exist.
 // Fails with "editor.project_not_found" unless the project directory exists.
@@ -587,16 +608,15 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         const std::uint32_t jobsRun = jobs.runMainThreadJobs();
         // Viewport drags move cameras in window coordinates, the same on every display scale.
         viewportInput.setPixelDensity(pixelDensity(window));
+        // The click slop is in logical points, the same physical size on every platform.
+        viewportInput.setDisplayScale(window.displayScale());
         input.processEvents(events, platform.pumpTimeNs());
         for (const ith::Event& event : events) {
             if (event.type == ith::EventType::QuitRequested ||
                 (event.type == ith::EventType::WindowCloseRequested && event.window == window.id())) {
                 running = !mayClose(session, shell, closeWarned);
-            } else if (event.window == window.id() && event.type == ith::EventType::WindowPixelSizeChanged) {
-                target.resize({.width = event.width, .height = event.height});
-            } else if (event.window == window.id() && event.type == ith::EventType::WindowDisplayScaleChanged) {
-                ui.setDisplayScale(window.displayScale());
-                dock.displayScaleChanged();
+            } else if (event.window == window.id()) {
+                applyWindowEvent(event, window, target, ui, dock, viewportInput);
             }
         }
         applyInput(input, window);
@@ -623,6 +643,11 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
             break;
         }
         idle.frameFinished();
+        // A waiting pick needs device frames to complete, also while no event arrives; a minimized
+        // window draws none, so it waits there without spinning the loop.
+        if ((*viewportPanel)->picking() && window.pixelSize().width > 0) {
+            idle.requestFrame();
+        }
         ++frames;
 
         // Automation runs once the shell has drawn a few frames, then the editor exits.

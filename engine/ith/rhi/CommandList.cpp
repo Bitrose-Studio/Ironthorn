@@ -128,8 +128,11 @@ void CommandList::beginRendering(const RenderingDesc& desc) {
                 return;
             }
             const detail::TextureSlot& slot = m_device->textures.data(color.texture.index());
+            const bool zeroClear = color.load != LoadOp::Clear || !isIntegerFormat(slot.format) ||
+                                   std::ranges::all_of(color.clearColor, [](float value) { return value == 0.0f; });
             if (!check(hasAny(slot.usage, TextureUsage::RenderTarget), "a color attachment needs RenderTarget usage") ||
-                !check(sameSize(slot), "every attachment has the same size")) {
+                !check(sameSize(slot), "every attachment has the same size") ||
+                !check(zeroClear, "an integer color attachment clears only to all zeros")) {
                 return;
             }
         }

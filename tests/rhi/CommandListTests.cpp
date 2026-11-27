@@ -249,6 +249,36 @@ TEST_SUITE("rhi.command_list_checks") {
         endFrame(device);
     }
 
+    TEST_CASE("an integer colour attachment clears only to all zeros") {
+        NullGpu gpu;
+        Device device = makeDevice(gpu);
+        const TextureHandle ids = makeTexture(device, TextureUsage::RenderTarget, Format::R32G32Uint);
+        const TextureHandle color = makeTexture(device, TextureUsage::RenderTarget);
+        beginFrame(device);
+        CommandList& list = device.openCommandList("Integer clears");
+        const ith::test::AssertCapture capture;
+        // The default clear colour has alpha 1: refused, and nothing is recorded.
+        const std::array defaulted{ColorAttachment{.texture = color}, ColorAttachment{.texture = ids}};
+        list.beginRendering({.colors = defaulted});
+        const std::array one{ColorAttachment{.texture = ids, .clearColor = {1.0f, 0.0f, 0.0f, 0.0f}}};
+        list.beginRendering({.colors = one});
+        CHECK(capture.count() == 2);
+        CHECK(gpu.commandCount() == 0);
+        // Zeros, and loads that don't clear, are fine; a normalized target clears to any colour.
+        const std::array zero{ColorAttachment{.texture = color, .clearColor = {0.2f, 0.4f, 0.6f, 1.0f}},
+                              ColorAttachment{.texture = ids, .clearColor = {0.0f, 0.0f, 0.0f, 0.0f}}};
+        list.beginRendering({.colors = zero});
+        list.endRendering();
+        const std::array kept{
+            ColorAttachment{.texture = ids, .load = LoadOp::Load, .clearColor = {5.0f, 0.0f, 0.0f, 1.0f}}};
+        list.beginRendering({.colors = kept});
+        list.endRendering();
+        CHECK(capture.count() == 2);
+        CHECK(gpu.commandCount() == 4);
+        REQUIRE(device.submit(list).hasValue());
+        endFrame(device);
+    }
+
     TEST_CASE("stale handles and missing usages are asserted and dropped") {
         NullGpu gpu;
         Device device = makeDevice(gpu);
@@ -375,6 +405,37 @@ TEST_SUITE("rhi.command_list_checks") {
         copy(depth, {});                                                      // a whole depth level
         CHECK(capture.count() == 8);
         CHECK(gpu.commandCount() == 4);
+        REQUIRE(device.submit(list).hasValue());
+        endFrame(device);
+    }
+
+    TEST_CASE("one R32G32Uint texel reads back into 8 bytes; its row must still be 256-aligned") {
+        NullGpu gpu;
+        Device device = makeDevice(gpu);
+        // The viewport's pick: one texel of the id target into its 512-byte-aligned slot.
+        const BufferHandle readback = makeBuffer(device, BufferUsage::CopyDst, MemoryType::Readback, 520);
+        const TextureHandle ids =
+            makeTexture(device, TextureUsage::RenderTarget | TextureUsage::CopySrc, Format::R32G32Uint, 64);
+        beginFrame(device);
+        CommandList& list = device.openCommandList("Pick");
+        const ith::test::AssertCapture capture;
+        const auto pick = [&](std::uint64_t offset, std::uint32_t rowPitch, std::uint32_t width = 1) {
+            list.copyTextureToBuffer({.buffer = readback,
+                                      .bufferOffset = offset,
+                                      .rowPitch = rowPitch,
+                                      .texture = ids,
+                                      .region = {.x = 63, .y = 63, .width = width, .height = 1, .depth = 1}});
+        };
+        pick(512, 8);      // the row pitch is not a multiple of 256
+        pick(256, 256);    // the offset is not a multiple of 512
+        pick(516, 256);    // likewise, and 8 bytes would end past the buffer
+        pick(512, 256, 2); // two texels: past the right edge
+        CHECK(capture.count() == 4);
+        CHECK(gpu.commandCount() == 0);
+        pick(0, 256);
+        pick(512, 256); // 8 bytes from 512 end inside the 520-byte buffer
+        CHECK(capture.count() == 4);
+        CHECK(gpu.commandCount() == 2);
         REQUIRE(device.submit(list).hasValue());
         endFrame(device);
     }

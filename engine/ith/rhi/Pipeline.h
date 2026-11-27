@@ -76,7 +76,8 @@ enum class BlendMode : std::uint8_t {
 };
 
 struct ColorTarget {
-    // Must not be Unknown or a depth format.
+    // Must not be Unknown or a depth format. An integer format (isIntegerFormat()) is never blended:
+    // only Opaque.
     Format format = Format::Unknown;
     BlendMode blend = BlendMode::Opaque;
 };

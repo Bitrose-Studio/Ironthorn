@@ -29,6 +29,8 @@ TEST_SUITE("rhi.frames") {
             CHECK(frame.number == number);
             CHECK(frame.slot == number % kFramesInFlight);
             CHECK(frame.backbuffer.isNull());
+            // Inside a frame, frameNumber() is that frame's number; it moves on at endFrame().
+            CHECK(device.frameNumber() == frame.number);
             endFrame(device);
         }
         CHECK(device.frameNumber() == 5);

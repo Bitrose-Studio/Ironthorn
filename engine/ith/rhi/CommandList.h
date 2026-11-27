@@ -59,6 +59,9 @@ struct ColorAttachment {
     TextureHandle texture;
     LoadOp load = LoadOp::Clear;
     StoreOp store = StoreOp::Store;
+    // The value a Clear load writes. Integer formats (isIntegerFormat()) clear only to all zeros,
+    // checked in Debug and development builds: the APIs read these floats differently for them
+    // (converted on Direct3D 12, as bits on Vulkan), so no other value is portable.
     std::array<float, 4> clearColor{0.0f, 0.0f, 0.0f, 1.0f};
 };
 

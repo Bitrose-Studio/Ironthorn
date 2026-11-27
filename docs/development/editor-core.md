@@ -187,7 +187,8 @@ programmer error and leave the camera unchanged.
 `ViewportState` per viewport panel instance, `ith.viewport.1` to `ith.viewport.4`, whether the
 panel is open or not: the `camera`, the `gameView` flag and the image rectangle the panel reports
 (`imagePosition`, `imageSize` in window pixels; `aspect()` is 1 until the panel has drawn) and
-whether the image is hovered with nothing on top of it (`imageHovered`). Next to
+whether the image is hovered with nothing on top of it (`imageHovered`), and the last `click` on
+the image that the panel hasn't taken yet (see [Click picking](#click-picking)). Next to
 them is one editor-wide state: the transform tool (translate at first), the gizmo space (world) and
 snapping (on, 0.1 m). Panels draw the store, the commands below change it and tests drive it
 directly. None of it dirties the level or makes an undo entry.
@@ -271,10 +272,12 @@ input.addConsumer({.window = id, .layer = ith::ConsumerLayer::Editor, .consumer 
 input.addConsumer({.window = id, .layer = ith::ConsumerLayer::Editor, .consumer = &viewportInput});
 // ... EditorUi::create({..., .viewports = &viewportInput}) ...
 viewportInput.setPixelDensity(pixelDensity); // window pixels per window coordinate
+viewportInput.setDisplayScale(window.displayScale()); // the click slop's points to pixels
 input.processEvents(events, platform.pumpTimeNs());
 if (viewportInput.update(deltaSeconds)) {
     idle.requestFrame(); // a camera moved: keep drawing, also while a held W sends no events
 }
+// on WindowFocusLost for the window: viewportInput.cancelClicks();
 ```
 
 It routes by the image rectangles the panels reported to the `Viewports` store in the last frame.
@@ -290,7 +293,7 @@ Alt at the press decide the gesture:
 | Alt + RMB | Dolly toward the pivot |
 | Alt + LMB | Orbit around the pivot |
 | MMB | Pan |
-| LMB | A click candidate: it does nothing yet; picking and the gizmo start here later |
+| LMB | A click candidate: a click picks ([Click picking](#click-picking)); the gizmo will start here |
 | The wheel, without a drag | Dolly by steps |
 
 **The letter-key rule.** While fly is active, the consumer takes every key press without Ctrl or
@@ -319,6 +322,47 @@ The Alt gestures can collide with the window manager: some Linux desktops (Xfce,
 Plasma 5) move or resize windows on Alt + drag by default, and the editor never sees those drags.
 The user changes the window manager's modifier (often to Super); a configurable orbit modifier is
 follow-up work.
+
+### Click picking
+
+A **click** is an LMB press without Alt on an image and its release, with the pointer never more
+than `kClickSlop` (4) logical points from the press in between. In pixels that is `kClickSlop`
+times the window's display scale, which the application sets each frame with
+`setDisplayScale(window.displayScale())`: the platform's content scale, which includes the pixel
+density on every platform. So the slop is 4 pixels at 100% and 8 at 200% on Windows, X11, Wayland
+and macOS alike (ADR-0047 item 1). It is separate from `setPixelDensity`, which only scales pan,
+orbit and dolly. A longer drag stays a drag even if the pointer comes back, and does nothing. RMB,
+MMB, the Alt gestures and an LMB press during another drag never click.
+On the release the consumer sets the viewport's `ViewportState::click` (`ViewportClick`, in
+`Viewports.h`): the press's position in window pixels from the image's corner, and the press's
+modifiers as a `PickMode`. Ctrl toggles, else Shift adds, else the click replaces; Ctrl+Shift
+toggles. A newer click replaces one the panel hasn't taken yet. The editor UI's Viewport panel
+takes the click, reads the entity under it back from its id target, and applies it exactly
+`kFramesInFlight` frames later, in the render phase: the viewport's tint changes in that frame, the
+Outliner and Details a frame later ([editor UI](editor-ui.md#viewport)).
+
+**Focus loss never picks.** On focus loss `Input` synthesises the release of every held button
+before it delivers `WindowFocusLost`; for a held LMB press that release would be a click. The
+application calls `cancelClicks()` when it sees `WindowFocusLost` for the window, before the panel
+renders: it drops every viewport's waiting click and the held press's candidate (ADR-0047 item 2).
+
+The translate gizmo (ADR-0042 rule 25) will hit-test its handles at the press first. Only a press
+that misses them stays a click candidate.
+
+`ViewportPick.h` holds the GPU-free half (ADR-0042 rules 21 and 22):
+
+- `pickTexel(entity)` is what the shapes pass writes into the `R32G32Uint` id target: the slot
+  index + 1 and the generation. The empty texel (index 0) means no entity, and the target is
+  cleared to it. The world id isn't stored: the target only shows the editor world.
+- `pickedEntity(texel, worldId)` turns a texel back into a handle.
+- `applyPick(session, texel, mode)` changes the selection through `ith.selection.set`:
+
+| Texel | `Replace` (click) | `Toggle` (Ctrl) | `Add` (Shift) |
+|---|---|---|---|
+| Empty space | Clears the selection | Nothing | Nothing |
+| A live entity with a stable id | Selects it alone | Toggles it | Adds it as primary |
+| A stale entity (despawned since the frame was drawn: `isAlive` fails) | Nothing | Nothing | Nothing |
+| An entity without a `StableId` (ADR-0037 rule 5) | Nothing | Nothing | Nothing |
 
 ## View models
 
@@ -593,7 +637,15 @@ runner serves the headless tests and the editor's `--automation` run.
   image stays held until its release and swallows other presses, the wheel with and without RMB
   (fractions kept, the step clamped), pan, orbit, dolly and look, the click candidate, and losing
   focus ending fly; the first fly frame clamped to `kMaxFlyStepSeconds` and later ones not; an
-  orbit at pixel density 2 matching density 1;
+  orbit at pixel density 2 matching density 1; clicks: the press's position and modifiers (Ctrl,
+  Shift, both), one per viewport, a newer one replacing the last, the slop (a drag past it, even
+  back at the press, and a far release don't click; 4 pixels at display scale 1, 8 at 2, the
+  pixel density not counting), focus loss with LMB held dropped by `cancelClicks()`, and RMB,
+  MMB, the Alt gestures, presses during another drag and presses outside every image never clicking;
+- the picking tests (`ViewportPickTests.cpp`): an entity's texel and back (slot 0, the largest
+  generation, the empty texel), replace, toggle and add on hits, empty space with each mode, and
+  stale hits (a despawned entity, its reused slot, an unused slot) and entities without a stable id
+  changing nothing;
 - the automation tests: the matcher, script errors, every script in `tests/editor_core/scripts`
   run in a fresh project, and the **coverage test**, which fails when a registered command is run
   by no script. A new command therefore comes with a script step;

@@ -471,6 +471,30 @@ TEST_SUITE("rhi.pipelines") {
         CHECK(capture.count() == 5);
 #endif
     }
+
+    TEST_CASE("a pipeline that blends into an integer colour target is refused; opaque is fine") {
+        NullGpu gpu;
+        Device device = makeDevice(gpu);
+        const std::array shaders{ShaderDesc{.stage = ShaderStage::Vertex, .code = kShaderCode},
+                                 ShaderDesc{.stage = ShaderStage::Pixel, .code = kShaderCode}};
+        const ith::test::AssertCapture capture;
+        for (const Format format : std::array{Format::R32Uint, Format::R32G32Uint}) {
+            CAPTURE(static_cast<int>(format));
+            const std::array blended{ColorTarget{.format = Format::R8G8B8A8Unorm, .blend = BlendMode::Alpha},
+                                     ColorTarget{.format = format, .blend = BlendMode::Alpha}};
+            const Expected<PipelineHandle, Error> refused = device.createGraphicsPipeline(
+                {.shaders = shaders, .colorTargets = blended, .debugName = "Blended ids"});
+            REQUIRE_FALSE(refused.hasValue());
+            CHECK(refused.error().code == ErrorCode::InvalidUsage);
+            const std::array opaque{ColorTarget{.format = Format::R8G8B8A8Unorm, .blend = BlendMode::Alpha},
+                                    ColorTarget{.format = format, .blend = BlendMode::Opaque}};
+            CHECK(device.createGraphicsPipeline({.shaders = shaders, .colorTargets = opaque, .debugName = "Ids"})
+                      .hasValue());
+        }
+#ifdef ITH_ENABLE_ASSERTS
+        CHECK(capture.count() == 2);
+#endif
+    }
 }
 
 TEST_SUITE("rhi.limits") {

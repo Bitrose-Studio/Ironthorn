@@ -7,11 +7,17 @@
 // frames, so its targets are destroyed and recreated under the debug layers, and must end on the same
 // image. A third shows the same scene from a low camera in a wide 1280 x 448 window, where most of the
 // grid is seen at a grazing angle (viewport_grazing_<backend>.ppm): its lines must fade out there
-// instead of aliasing into false curves, and the grid must not end on a visible rim.
+// instead of aliasing into false curves, and the grid must not end on a visible rim. A fourth picks
+// by readback (ADR-0042 rules 21 and 22) at framebuffer scale 2: clicks select the cube, add the
+// sphere, toggle the cube out and clear on empty space.
 
+#include "ith/ecs/StableId.h"
+#include "ith/ecs/World.h"
 #include "ith/editor_core/EditorCamera.h"
+#include "ith/editor_core/EditorDocument.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/PanelRegistry.h"
+#include "ith/editor_core/Selection.h"
 #include "ith/editor_core/Viewports.h"
 #include "ith/editor_ui/EditorUi.h"
 #include "ith/editor_ui/EditorUiShader.h"
@@ -19,6 +25,8 @@
 #include "ith/editor_ui/ViewportShaders.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
+#include "ith/foundation/Entity.h"
+#include "ith/foundation/Uuid.h"
 #include "ith/input/Input.h"
 #include "ith/math/Types.h"
 #include "ith/reflection/TypeRegistry.h"
@@ -27,6 +35,7 @@
 #include "ith/rhi/Device.h"
 #include "ith/serialization/Value.h"
 #include "ith/shader_compiler/ShaderCompiler.h"
+#include "ith/shapes/ShapeRenderer.h"
 
 #include "GoldenImage.h"
 
@@ -36,6 +45,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -54,12 +64,18 @@ namespace {
 constexpr rhi::Format kFormat = rhi::Format::R8G8B8A8Srgb;
 
 // What a golden image shows: the window's size in pixels (a width that is a multiple of 64, so rows
-// read back tightly packed on every backend) and the viewport's camera.
+// read back tightly packed on every backend), the viewport's camera, and the framebuffer scale: the
+// window is width / scale x height / scale in window coordinates.
 struct Shot {
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     EditorCamera camera;
+    float scale = 1.0f;
 };
+
+// Runs in every frame after the panel drew and before its passes are added: frame `frame`'s checks
+// and clicks.
+using FrameHook = std::function<void(std::size_t frame, EditorSession& session)>;
 
 // The default camera, pinned here so the image doesn't follow a change of the default, in a 640 x 400
 // window.
@@ -145,14 +161,16 @@ struct Rendered {
     std::uint32_t shapeDraws = 0;
 };
 
-// The full window of `shot`.
+// The full window of `shot`, in window coordinates.
 ImVec2 fullWindow(const Shot& shot) {
-    return {static_cast<float>(shot.width), static_cast<float>(shot.height)};
+    return {static_cast<float>(shot.width) / shot.scale, static_cast<float>(shot.height) / shot.scale};
 }
 
-// Renders one frame per entry of `frames`, the viewport window of that size (zero: hidden), in the
-// window and with the camera of `shot`, on `device` and reads the last frame back.
-Rendered renderViewport(rhi::Device& device, const Shot& shot, std::span<const ImVec2> frames) {
+// Renders one frame per entry of `frames`, the viewport window of that size in window coordinates
+// (zero: hidden), in the window and with the camera of `shot`, on `device`, calls `hook` in every
+// frame, and reads the last frame back.
+Rendered renderViewport(rhi::Device& device, const Shot& shot, std::span<const ImVec2> frames,
+                        const FrameHook& hook = {}) {
     REQUIRE(shot.width % 64 == 0); // rows stay tightly packed at D3D12's 256-byte pitch
     const std::uint32_t width = shot.width;
     const std::uint32_t height = shot.height;
@@ -226,11 +244,15 @@ Rendered renderViewport(rhi::Device& device, const Shot& shot, std::span<const I
         rg::ImportedState targetState;
         rg::ImportedState readbackState;
         for (std::size_t frame = 0; frame < frames.size(); ++frame) {
-            (*ui)->newFrame({.size = {static_cast<std::int32_t>(width), static_cast<std::int32_t>(height)},
+            const ImVec2 window = fullWindow(shot);
+            (*ui)->newFrame({.size = {static_cast<std::int32_t>(window.x), static_cast<std::int32_t>(window.y)},
                              .pixelSize = {static_cast<std::int32_t>(width), static_cast<std::int32_t>(height)},
                              .deltaSeconds = 1.0f / 60.0f});
             (*panel)->newFrame();
             drawViewport(session, frames[frame]);
+            if (hook) {
+                hook(frame, session);
+            }
             (*ui)->endFrame();
             Expected<std::optional<rhi::Frame>, rhi::Error> begun = device.beginFrame();
             REQUIRE(begun.hasValue());
@@ -238,7 +260,7 @@ Rendered renderViewport(rhi::Device& device, const Shot& shot, std::span<const I
             graph.reset();
             const rg::Texture texture =
                 graph.importTexture({.texture = *target, .desc = targetDesc, .state = &targetState, .writable = true});
-            (*panel)->addRenderPasses(graph);
+            (*panel)->addRenderPasses(graph, **begun);
             (*ui)->addRenderPasses(graph, texture, (*begun)->slot, rhi::LoadOp::Clear,
                                    {0.0103f, 0.0103f, 0.0116f, 1.0f});
             if (frame + 1 == frames.size()) {
@@ -300,6 +322,86 @@ Image renderResizedAndHidden(rhi::Device& device) {
     return rendered.image;
 }
 
+// The stable id of the one entity drawing `shape`.
+Uuid idOfShape(EditorSession& session, Shape shape) {
+    std::optional<Uuid> found;
+    session.document().mutableWorld().query<const ShapeRenderer, const StableId>().forEach(
+        [&](Entity, const ShapeRenderer& renderer, const StableId& id) {
+            if (renderer.shape == shape) {
+                REQUIRE_FALSE(found.has_value());
+                found = id.id;
+            }
+        });
+    REQUIRE(found.has_value());
+    return *found;
+}
+
+// Where `point` shows in viewport 1's image, in window pixels from its top-left corner.
+Vec2 imagePixelOf(const ViewportState& state, const Vec3& point) {
+    const Vec4 clip = projectionMatrix(state.camera, state.aspect(), kViewportNearPlane) * viewMatrix(state.camera) *
+                      Vec4(point, 1.0f);
+    const Vec2 ndc = Vec2(clip) / clip.w;
+    return {(ndc.x * 0.5f + 0.5f) * state.imageSize.x, (0.5f - ndc.y * 0.5f) * state.imageSize.y};
+}
+
+// Picks the default scene by readback (ADR-0042 rules 21, 22 and 30) at framebuffer scale 2, so
+// clicks in window pixels must map to the target's texels: a click on the cube selects it, Shift on
+// the sphere adds it, Ctrl on the cube toggles it out, and a plain click on empty space clears the
+// selection. Each click is set as the viewport consumer sets it; its pick lands kFramesInFlight
+// frames after the frame that copied it, so the next click waits one frame more.
+void pickDefaultScene(rhi::Device& device) {
+    Shot shot = defaultShot();
+    shot.scale = 2.0f;
+    constexpr std::size_t kStep = 1 + rhi::kFramesInFlight + 1;
+    const std::vector<ImVec2> frames(1 + 5 * kStep, fullWindow(shot));
+    std::vector<std::vector<Uuid>> seen;
+    // The session lives inside renderViewport: the ids are read from it in the first frame.
+    std::optional<Uuid> cubeId;
+    std::optional<Uuid> sphereId;
+    const FrameHook hook = [&](std::size_t frame, EditorSession& session) {
+        ViewportState& state = session.viewports().at(0);
+        if (frame == 0) {
+            cubeId = idOfShape(session, Shape::Cube);
+            sphereId = idOfShape(session, Shape::Sphere);
+            return;
+        }
+        if ((frame - 1) % kStep != 0) {
+            return;
+        }
+        // The selection the previous click left, then the next click.
+        seen.push_back(session.document().selection().entities());
+        REQUIRE(state.imageSize.x > 0.0f);
+        const Vec2 cube = imagePixelOf(state, {-0.8f, 0.5f, 0.0f});
+        const Vec2 sphere = imagePixelOf(state, {0.9f, 0.5f, 0.4f});
+        switch ((frame - 1) / kStep) {
+            case 0:
+                state.click = ViewportClick{.position = cube, .mode = PickMode::Replace};
+                break;
+            case 1:
+                state.click = ViewportClick{.position = sphere, .mode = PickMode::Add};
+                break;
+            case 2:
+                state.click = ViewportClick{.position = cube, .mode = PickMode::Toggle};
+                break;
+            case 3:
+                // The image's top-left corner: sky, no shape.
+                state.click = ViewportClick{.position = {4.0f, 4.0f}, .mode = PickMode::Replace};
+                break;
+            default:
+                break;
+        }
+    };
+    static_cast<void>(renderViewport(device, shot, frames, hook));
+    REQUIRE(seen.size() == 5);
+    REQUIRE(cubeId.has_value());
+    REQUIRE(sphereId.has_value());
+    CHECK(seen[0].empty());
+    CHECK(seen[1] == std::vector<Uuid>{*cubeId});
+    CHECK(seen[2] == std::vector<Uuid>{*cubeId, *sphereId});
+    CHECK(seen[3] == std::vector<Uuid>{*sphereId});
+    CHECK(seen[4].empty());
+}
+
 } // namespace
 
 TEST_SUITE("editor_ui_gpu.viewport") {
@@ -327,6 +429,14 @@ TEST_SUITE("editor_ui_gpu.viewport") {
         }
         checkGolden(renderResizedAndHidden(*device), "viewport_d3d12");
     }
+
+    TEST_CASE("clicks on WARP at framebuffer scale 2 pick the cube, add the sphere, toggle and clear") {
+        std::optional<rhi::Device> device = softwareDevice(rhi::Backend::D3D12);
+        if (!device) {
+            return;
+        }
+        pickDefaultScene(*device);
+    }
 #endif
 
     TEST_CASE("a cube and a sphere on the grid on lavapipe match their golden image") {
@@ -351,5 +461,13 @@ TEST_SUITE("editor_ui_gpu.viewport") {
             return;
         }
         checkGolden(renderResizedAndHidden(*device), "viewport_vulkan");
+    }
+
+    TEST_CASE("clicks on lavapipe at framebuffer scale 2 pick the cube, add the sphere, toggle and clear") {
+        std::optional<rhi::Device> device = softwareDevice(rhi::Backend::Vulkan);
+        if (!device || !isLavapipe(*device)) {
+            return;
+        }
+        pickDefaultScene(*device);
     }
 }

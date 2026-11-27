@@ -53,6 +53,25 @@ CameraInput inputFor(ViewportGesture gesture) noexcept {
     return input;
 }
 
+// How a click with `modifiers` at its press selects: Ctrl toggles, else Shift adds.
+PickMode pickModeFor(KeyModifiers modifiers) noexcept {
+    if (hasModifiers(modifiers, KeyModifiers::Control)) {
+        return PickMode::Toggle;
+    }
+    if (hasModifiers(modifiers, KeyModifiers::Shift)) {
+        return PickMode::Add;
+    }
+    return PickMode::Replace;
+}
+
+// Whether the pointer at `x`, `y` (window pixels) is at most kClickSlop logical points from `start`,
+// at `scale` pixels per point (the display scale).
+bool withinSlop(Vec2 start, float x, float y, float scale) noexcept {
+    const Vec2 moved = Vec2{x, y} - start;
+    const float slop = kClickSlop * scale;
+    return moved.x * moved.x + moved.y * moved.y <= slop * slop;
+}
+
 } // namespace
 
 InputReply ViewportConsumer::onInputEvent(const Event& event) {
@@ -61,9 +80,14 @@ InputReply ViewportConsumer::onInputEvent(const Event& event) {
             return onMouseButtonDown(event);
         case EventType::MouseButtonUp:
             if (m_drag.has_value() && event.mouseButton == m_drag->button) {
-                // A click candidate ends here too: picking (ADR-0042 rule 22) comes with a later step.
+                // A click candidate that stayed within the slop picks (ADR-0042 rule 22); the panel
+                // takes the click in its next render.
+                const Drag drag = *m_drag;
                 m_drag.reset();
                 m_speedWheel = 0.0f;
+                if (drag.click.has_value() && withinSlop(drag.start, event.x, event.y, m_displayScale)) {
+                    m_viewports->at(drag.viewport).click = drag.click;
+                }
             }
             return InputReply::NotConsumed; // Input ignores the reply to a release
         case EventType::MouseMoved:
@@ -75,6 +99,8 @@ InputReply ViewportConsumer::onInputEvent(const Event& event) {
                     const float scale = m_drag->gesture == ViewportGesture::Fly ? 1.0f : 1.0f / m_pixelDensity;
                     input.mouseDelta = Vec2{event.deltaX, event.deltaY} * scale;
                     apply(m_drag->viewport, input, 0.0f);
+                } else if (!withinSlop(m_drag->start, event.x, event.y, m_displayScale)) {
+                    m_drag->click.reset(); // a drag now; it stays one even if the pointer comes back
                 }
                 return InputReply::Consumed;
             }
@@ -130,11 +156,15 @@ InputReply ViewportConsumer::onMouseButtonDown(const Event& event) {
     const std::optional<ViewportGesture> gesture =
         gestureFor(event.mouseButton, hasModifiers(event.modifiers, KeyModifiers::Alt));
     if (gesture.has_value()) {
-        // A Click is only a candidate so far: gizmo drags (ADR-0042 rule 25) and picking
-        // (rule 22) start from it in later steps.
         m_drag = Drag{
             .viewport = *viewport, .button = event.mouseButton, .gesture = *gesture, .start = Vec2{event.x, event.y}};
         m_speedWheel = 0.0f;
+        if (*gesture == ViewportGesture::Click) {
+            // A candidate until its release (rule 22). The gizmo (rule 25) will hit-test its handles
+            // here first and start its drag instead.
+            m_drag->click = ViewportClick{.position = m_drag->start - m_viewports->at(*viewport).imagePosition,
+                                          .mode = pickModeFor(event.modifiers)};
+        }
     }
     return InputReply::Consumed;
 }
@@ -199,6 +229,23 @@ void ViewportConsumer::setPixelDensity(float density) noexcept {
     ITH_ASSERT_MSG(valid, "the pixel density must be finite and positive");
     if (valid) {
         m_pixelDensity = density;
+    }
+}
+
+void ViewportConsumer::setDisplayScale(float scale) noexcept {
+    const bool valid = std::isfinite(scale) && scale > 0.0f;
+    ITH_ASSERT_MSG(valid, "the display scale must be finite and positive");
+    if (valid) {
+        m_displayScale = scale;
+    }
+}
+
+void ViewportConsumer::cancelClicks() noexcept {
+    for (std::size_t index = 0; index < kMaxViewports; ++index) {
+        m_viewports->at(index).click.reset();
+    }
+    if (m_drag.has_value()) {
+        m_drag->click.reset();
     }
 }
 

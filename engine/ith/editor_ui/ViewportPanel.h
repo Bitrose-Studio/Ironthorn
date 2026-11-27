@@ -12,7 +12,7 @@
 //       ith::drawEditorShell(session, keymap, shell, dock); // draws the open viewports
 //       ui.endFrame();
 //       ... device.beginFrame(), graph.reset(), target = graph.importBackbuffer(frame) ...
-//       (*viewport)->addRenderPasses(graph);               // the scene passes, before the UI's
+//       (*viewport)->addRenderPasses(graph, frame);        // the scene passes, before the UI's
 //       ui.addRenderPasses(graph, target, frame.slot, ith::rhi::LoadOp::Clear, clearColor);
 //       graph.compile(); graph.execute(pool);
 //   }
@@ -24,16 +24,20 @@
 // applied, each side clamped to the device's maxTextureDimension2D), registered with the EditorUi as
 // a user texture and shown with ImGui. A resize unregisters the old target, destroys it (the device
 // defers it until the GPU is done) and makes a new one; an image without area has no target. A
-// target that can't be created is logged once and tried again only when the size changes. The
-// depth target (D32Float, cleared to 0) is a transient of the render graph, the colour target's
-// size, so it needs no keeping. An instance not drawn in a frame (a hidden tab, a closed panel)
-// releases its target at the start of the next frame (newFrame()); shown again, it gets a new
-// target and renders once.
+// target that can't be created is logged once and tried again only when the size changes. Next to
+// it the instance keeps its id target (kViewportIdFormat, R32G32Uint, RenderTarget | CopySrc, the
+// colour target's size, created and released with it; ADR-0042 rule 21): it is read after the frame
+// that drew it, when a click comes, so it lives as long as the picture it matches. The depth target
+// (D32Float, cleared to 0) is a transient of the render graph, the colour target's size, so it needs
+// no keeping. An instance not drawn in a frame (a hidden tab, a closed panel) releases its targets
+// at the start of the next frame (newFrame()); shown again, it gets new targets and renders once.
 //
 // The scene is rendered by two raster passes before the UI's, in the same graph, on the colour
 // target's one import (EditorUi::importUserTexture): "ViewportShapes" clears the targets and draws
 // every enabled entity with a ShapeRenderer and a WorldTransform, one draw each, unlit with a fixed
-// light from the camera; selected entities are tinted with the theme's viewportSelection.
+// light from the camera; selected entities are tinted with the theme's viewportSelection. It also
+// writes each fragment's entity into the id target (pickTexel(), ViewportPick.h; 0 where no shape
+// is), so the id target always matches the picture.
 // "ViewportGrid" draws the infinite grid on y = 0 over them, depth-tested (Grid.slang). Depth is
 // reversed (greater-equal, ADR-0006 rule 6), and rendering is camera-relative: the camera's position
 // is subtracted on the CPU before the matrices are built (rule 7). Nothing is culled, so a shape
@@ -54,6 +58,24 @@
 // image, so an LMB drag on it doesn't move a floating window. An instance not drawn in a frame (a
 // hidden tab, a closed panel) reports a zero size and no hover. The viewport consumer routes by
 // these.
+//
+// Click picking (ADR-0042 rule 22): addRenderPasses() takes each drawn instance's
+// ViewportState::click, which the viewport consumer set, maps it to the target's texel (window
+// pixels scaled by the target's size over the image's, so any framebuffer scale and a clamped target
+// both map right), and adds a "ViewportPick" copy pass after the scene passes that copies that one
+// texel of the id target into the instance's 8 bytes of a small Readback buffer (512-byte slots, rows
+// 256-byte aligned: rhi::kTextureCopyOffsetAlignment, kTextureCopyRowAlignment). The pick then waits
+// in the instance, with the click's mode and the device frame that copied it; at most one waits per
+// instance, and a newer click replaces it (only the newest copy is read, after its own frame). The
+// first addRenderPasses() whose device frame is at least kFramesInFlight frames after that one — so
+// the device's beginFrame() has already waited for it; the panel never waits on the GPU — reads the
+// texel and applies it with applyPick() (ith.selection.set; empty space clears on a plain click,
+// stale hits and entities without a stable id change nothing). That happens in the render phase,
+// before the scene passes: the same frame redraws the tint, and the Outliner and Details, already
+// drawn, show the selection a frame later. The selection so changes exactly kFramesInFlight frames
+// after the click; while a pick waits, picking() is true and the editor keeps drawing frames. A
+// click on an instance without a rendered target is dropped. A refused selection is logged as a
+// warning in the "Viewport" category.
 //
 // The toolbar runs commands; nothing in it changes state directly: the transform tool
 // (ith.viewport.translate_tool, rotate_tool, scale_tool), snapping and its step
@@ -89,6 +111,10 @@ class PanelRegistry;
 // The colour target format of every viewport.
 inline constexpr rhi::Format kViewportColorFormat = rhi::Format::R8G8B8A8Srgb;
 
+// The id target format of every viewport (ADR-0042 rule 21): R = entity slot index + 1, G = its
+// generation, 0 for no entity.
+inline constexpr rhi::Format kViewportIdFormat = rhi::Format::R32G32Uint;
+
 // The compiled stages of viewportShapesShaderSource() and viewportGridShaderSource()
 // (ViewportShaders.h), in the device's bytecode format; read during ViewportPanel::create() only.
 // The null device takes any non-empty bytes.
@@ -101,11 +127,11 @@ struct ViewportShaderCode {
 
 class ViewportPanel {
 public:
-    // Creates the two pipelines and the buffer holding every shape's unit mesh, filled once.
-    // `session`, `ui` and `device` must outlive the panel, and `ui` must render with `device`.
-    // Fails with "editor_ui.viewport_failed", the RHI's message inside, when a pipeline or the buffer
-    // can't be created or the buffer's mapped memory is too small. Precondition (asserted): no
-    // shader is empty.
+    // Creates the two pipelines, the buffer holding every shape's unit mesh, filled once, and the
+    // Readback buffer of the picks. `session`, `ui` and `device` must outlive the panel, and `ui`
+    // must render with `device`. Fails with "editor_ui.viewport_failed", the RHI's message inside,
+    // when a pipeline or a buffer can't be created or a buffer's mapped memory is too small.
+    // Precondition (asserted): no shader is empty.
     static Expected<std::unique_ptr<ViewportPanel>> create(EditorSession& session, EditorUi& ui, rhi::Device& device,
                                                            const ViewportShaderCode& shaders);
 
@@ -113,15 +139,16 @@ public:
     ViewportPanel& operator=(const ViewportPanel&) = delete;
     ViewportPanel(ViewportPanel&&) = delete;
     ViewportPanel& operator=(ViewportPanel&&) = delete;
-    // Unregisters and destroys every target, the pipelines and the mesh buffer (the device defers the
-    // destruction). Runs outside the graph-import phase: call EditorUi::abandonFrame() first when the
-    // last UI frame wasn't rendered. Execute or reset every graph holding its passes first.
+    // Unregisters and destroys every target, the pipelines and the buffers (the device defers the
+    // destruction); picks still waiting are dropped. Runs outside the graph-import phase: call
+    // EditorUi::abandonFrame() first when the last UI frame wasn't rendered. Execute or reset every
+    // graph holding its passes first.
     ~ViewportPanel();
 
     // Starts a UI frame for the panel: unregisters and destroys (deferred by the device) the colour
-    // target of every instance not drawn in the last frame. Call it once per frame after
-    // EditorUi::newFrame() and before the panels draw, so outside the graph-import phase; the last
-    // frame's graph must have executed. Main thread.
+    // and id targets of every instance not drawn in the last frame; a pick it already copied still
+    // completes. Call it once per frame after EditorUi::newFrame() and before the panels draw, so
+    // outside the graph-import phase; the last frame's graph must have executed. Main thread.
     void newFrame();
 
     // Draws instance `instance`'s toolbar and image inside its window, (re)creates its target for
@@ -130,17 +157,24 @@ public:
     // "ith.viewport.1" to "ith.viewport.4"; otherwise nothing is drawn.
     void draw(std::string_view instance);
 
-    // Adds the scene passes of every instance drawn this frame whose scene changed (see the header
-    // comment), each on its target's import from EditorUi::importUserTexture(); and gives the
-    // instances not drawn a zero image and no hover. Call it once per UI frame, after
-    // EditorUi::endFrame() and before EditorUi::addRenderPasses() with the same graph, after the
-    // device's beginFrame(). The passes read the panel's copies of the frame's draws. An instance
-    // counts as rendered once its passes are added: when the graph then fails to execute and the
-    // caller goes on, call invalidate().
-    void addRenderPasses(rg::RenderGraph& graph);
+    // Applies the picks whose copies the GPU has finished by `opened` (see the header comment); adds
+    // the scene passes of every instance drawn this frame whose scene changed, each on its target's
+    // import from EditorUi::importUserTexture(), and the pick copy of every drawn instance with a
+    // click; and gives the instances not drawn a zero image and no hover. `opened` is the device
+    // frame beginFrame() returned, still open: its number decides which picks are read and stamps
+    // the new ones, so a call outside a frame can't read a copy early. Call it once per UI frame,
+    // after EditorUi::endFrame() and before EditorUi::addRenderPasses() with the same graph. The
+    // passes read the panel's copies of the frame's draws. An instance counts as rendered, and its
+    // pick as copied, once its passes are added: when the graph then fails to execute and the caller
+    // goes on, call invalidate().
+    void addRenderPasses(rg::RenderGraph& graph, const rhi::Frame& opened);
 
-    // Forgets what every instance rendered, so the next addRenderPasses() renders them all.
+    // Forgets what every instance rendered, so the next addRenderPasses() renders them all, and drops
+    // the picks waiting for their copies (whose frame may not have run).
     void invalidate() noexcept;
+
+    // Whether a click's pick waits for its copy to finish, in any instance.
+    [[nodiscard]] bool picking() const noexcept;
 
     // The user texture showing `instance`, or 0 when it has no target (not drawn yet, or no area).
     [[nodiscard]] UiTextureId texture(std::string_view instance) const;
@@ -148,6 +182,9 @@ public:
     // The description `instance`'s colour target was created with, or std::nullopt without a target.
     // Its debugName stays valid until the target changes.
     [[nodiscard]] std::optional<rhi::TextureDesc> colorTarget(std::string_view instance) const;
+
+    // The same for `instance`'s id target, which exists exactly when the colour target does.
+    [[nodiscard]] std::optional<rhi::TextureDesc> idTarget(std::string_view instance) const;
 
     // How many times addRenderPasses() added scene passes, over every instance, since creation.
     [[nodiscard]] std::uint64_t renders() const noexcept { return m_renders; }
@@ -170,8 +207,13 @@ private:
     void drawToolbar(std::string_view instance, const ViewportState& state);
     void resize(Instance& instance, std::uint32_t width, std::uint32_t height);
     void release(Instance& instance);
-    // Adds the instance's passes; false when its target can't be imported.
-    bool addScenePasses(rg::RenderGraph& graph, const Instance& instance, const ViewportState& state, rg::Buffer mesh);
+    // Imports the instance's id target into `graph`.
+    static rg::Texture importIds(rg::RenderGraph& graph, Instance& instance);
+    // Adds the instance's passes and returns its id target's import; null when its colour target
+    // can't be imported.
+    rg::Texture addScenePasses(rg::RenderGraph& graph, Instance& instance, const ViewportState& state, rg::Buffer mesh);
+    // Applies every pick whose copy the GPU has finished by device frame `open`.
+    void readPicks(std::uint64_t open);
 
     EditorSession* m_session;
     EditorUi* m_ui;
@@ -186,6 +228,10 @@ private:
     std::uint64_t m_indexOffset = 0;
     // By Shape value.
     std::array<MeshRange, 4> m_meshes{};
+    // The picked texels, instance i's at i * rhi::kTextureCopyOffsetAlignment (Readback memory).
+    rhi::BufferHandle m_picks;
+    rhi::BufferDesc m_picksDesc;
+    rg::ImportedState m_picksState;
     std::array<std::unique_ptr<Instance>, kMaxViewports> m_instances;
     std::uint64_t m_renders = 0;
     std::uint32_t m_lastShapeDraws = 0;

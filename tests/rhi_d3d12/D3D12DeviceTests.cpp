@@ -10,6 +10,7 @@
 
 #include "ith/rhi/CommandList.h"
 #include "ith/rhi/Device.h"
+#include "ith/rhi/Format.h"
 #include "ith/rhi_select/CreateDevice.h"
 
 #ifdef ITH_TEST_HAS_SHADER_COMPILER
@@ -682,6 +683,86 @@ void discardThenClear(Device& device) {
     checkTexel(device.mappedMemory(readback), 3, 3, {255, 0, 0, 255});
 }
 
+// An R32G32Uint render target (the editor viewport's id target, ADR-0042 rule 21): a pattern
+// uploaded into it reads back one texel at a time, 8 bytes per texel, at the copy alignments; a
+// clear to 0 then reads back as zeros.
+void integerTarget(Device& device) {
+    constexpr std::uint32_t kSize = 8;
+    constexpr TexelRegion kTexel{.x = 5, .y = 3, .width = 1, .height = 1};
+    constexpr std::uint64_t kSecond = kTextureCopyOffsetAlignment;
+    const BufferHandle upload =
+        makeBuffer(device, BufferUsage::CopySrc, MemoryType::Upload, std::uint64_t{kTextureCopyRowAlignment} * kSize);
+    const BufferHandle readback = makeBuffer(device, BufferUsage::CopyDst, MemoryType::Readback, kSecond * 2);
+    const TextureHandle texture =
+        makeTexture(device, {.width = kSize,
+                             .height = kSize,
+                             .format = Format::R32G32Uint,
+                             .usage = TextureUsage::RenderTarget | TextureUsage::CopySrc | TextureUsage::CopyDst,
+                             .debugName = "Integer target"});
+    CHECK(formatTexelSize(Format::R32G32Uint) == 8);
+    // Texel (x, y) holds {y * 8 + x + 1, 0xAB000000 + x}: both channels differ per texel.
+    const std::span<std::byte> source = device.mappedMemory(upload);
+    for (std::uint32_t y = 0; y < kSize; ++y) {
+        for (std::uint32_t x = 0; x < kSize; ++x) {
+            const std::array<std::uint32_t, 2> texel{y * kSize + x + 1, 0xAB000000u + x};
+            std::memcpy(source.data() + std::size_t{y} * kTextureCopyRowAlignment + std::size_t{x} * 8, texel.data(),
+                        sizeof(texel));
+        }
+    }
+
+    if (!beginFrame(device)) {
+        return;
+    }
+    CommandList& list = device.openCommandList("Integer target");
+    list.barrier(TextureBarrier{.texture = texture,
+                                .stagesAfter = PipelineStage::Copy,
+                                .accessAfter = Access::CopyWrite,
+                                .layoutBefore = TextureLayout::Undefined,
+                                .layoutAfter = TextureLayout::CopyDst});
+    list.copyBufferToTexture({.buffer = upload, .rowPitch = kTextureCopyRowAlignment, .texture = texture});
+    list.barrier(TextureBarrier{.texture = texture,
+                                .stagesBefore = PipelineStage::Copy,
+                                .accessBefore = Access::CopyWrite,
+                                .stagesAfter = PipelineStage::Copy,
+                                .accessAfter = Access::CopyRead,
+                                .layoutBefore = TextureLayout::CopyDst,
+                                .layoutAfter = TextureLayout::CopySrc});
+    list.copyTextureToBuffer(
+        {.buffer = readback, .rowPitch = kTextureCopyRowAlignment, .texture = texture, .region = kTexel});
+    list.barrier(TextureBarrier{.texture = texture,
+                                .stagesBefore = PipelineStage::Copy,
+                                .accessBefore = Access::CopyRead,
+                                .stagesAfter = PipelineStage::ColorOutput,
+                                .accessAfter = Access::RenderTargetWrite,
+                                .layoutBefore = TextureLayout::CopySrc,
+                                .layoutAfter = TextureLayout::RenderTarget});
+    const std::array cleared{ColorAttachment{.texture = texture, .clearColor = {0.0f, 0.0f, 0.0f, 0.0f}}};
+    list.beginRendering({.colors = cleared});
+    list.endRendering();
+    list.barrier(TextureBarrier{.texture = texture,
+                                .stagesBefore = PipelineStage::ColorOutput,
+                                .accessBefore = Access::RenderTargetWrite,
+                                .stagesAfter = PipelineStage::Copy,
+                                .accessAfter = Access::CopyRead,
+                                .layoutBefore = TextureLayout::RenderTarget,
+                                .layoutAfter = TextureLayout::CopySrc});
+    list.copyTextureToBuffer({.buffer = readback,
+                              .bufferOffset = kSecond,
+                              .rowPitch = kTextureCopyRowAlignment,
+                              .texture = texture,
+                              .region = kTexel});
+    finish(device, list);
+
+    const std::span<const std::byte> result = device.mappedMemory(readback);
+    std::array<std::uint32_t, 2> picked{};
+    std::memcpy(picked.data(), result.data(), sizeof(picked));
+    CHECK(picked[0] == kTexel.y * kSize + kTexel.x + 1);
+    CHECK(picked[1] == 0xAB000000u + kTexel.x);
+    std::memcpy(picked.data(), result.data() + kSecond, sizeof(picked));
+    CHECK(picked[0] == 0);
+    CHECK(picked[1] == 0);
+}
+
 // Uploads a pattern into one mip level and layer of a texture, copies it back out and compares
 // the bytes of every row. `rows` counts the rows of all slices of a 3D texture.
 void copyRoundTrip(Device& device, const TextureDesc& desc, std::uint32_t mip, std::uint32_t layer,
@@ -932,6 +1013,14 @@ TEST_SUITE("rhi_d3d12.textures") {
             return;
         }
         partialCopies(*device);
+    }
+
+    TEST_CASE("an R32G32Uint render target copies single texels at the copy alignments and clears to 0") {
+        std::optional<Device> device = makeDevice();
+        if (!device) {
+            return;
+        }
+        integerTarget(*device);
     }
 
     TEST_CASE("copies reach mip levels and layers beyond the first, 3D slices and both depth formats") {

@@ -242,7 +242,8 @@ if (!events.empty() || jobs.runMainThreadJobs() > 0 || changed) {
 idle.frameFinished();
 ```
 
-Activity (events, a change of the document's counters, a finished job, later Play In Editor and
+Activity (events, a change of the document's counters, a finished job, a viewport pick waiting for
+its read-back (`ViewportPanel::picking()`), later Play In Editor and
 animations) draws at once, plus two frames for ImGui to settle. Otherwise the editor draws at the
 idle rate, 10 frames per second while one of its windows has focus and 2 while none has: the
 `preferences` section of `Editor.json` (`ith::EditorPreferences`, `ith::kEditorPreferences` in
@@ -366,7 +367,7 @@ writes the same value to all of them.
 
 `ViewportPanel` (`ViewportPanel.h`) draws the editor world from editor core's `Viewports` store
 ([editor core](editor-core.md#viewports)), as [ADR-0042](../decisions/0042-editor-viewport.md)
-rules 8 and 13 to 20 decide. It is the panel `ith.viewport`, instances `ith.viewport.1` to
+rules 8 and 13 to 22 decide. It is the panel `ith.viewport`, instances `ith.viewport.1` to
 `ith.viewport.4`, docked in the centre; the engine's `Default.json` opens instance 1 in the central
 stack.
 
@@ -382,7 +383,7 @@ ith::registerViewport(session.panels(), **viewport);
 // after ui.endFrame() and device.beginFrame():
 graph.reset();
 const ith::rg::Texture target = graph.importBackbuffer(frame);
-(*viewport)->addRenderPasses(graph);   // the scene passes, before the UI's
+(*viewport)->addRenderPasses(graph, frame); // the scene passes, before the UI's
 ui.addRenderPasses(graph, target, frame.slot, ith::rhi::LoadOp::Clear, clearColor);
 ```
 
@@ -390,7 +391,8 @@ Destroy the panel before the `EditorUi`: its targets are user textures of the UI
 `newFrame()` and `draw()` register and unregister targets, so they run outside the UI's
 graph-import phase; when the last frame wasn't rendered (a minimized window, a failed frame),
 `EditorUi::abandonFrame()` closes that phase first. After a graph with the panel's passes fails to
-execute, `invalidate()` makes every instance render again. The shell must not draw the panel after
+execute, `invalidate()` makes every instance render again and drops the picks waiting for that
+graph's copies. The shell must not draw the panel after
 it is destroyed.
 
 **Targets.** Each open instance owns a colour target, `R8G8B8A8Srgb` with `RenderTarget | Sampled`,
@@ -400,21 +402,27 @@ is larger). It is registered as a [user texture](#user-textures) and shown with 
 invisible button. When the size changes, the panel unregisters the old target, destroys it (the
 device defers that until the GPU is done) and creates a new one, during its draw, never in the
 import phase. A target that can't be created is logged once and tried again only at another size.
-An image without area has no target and adds no passes. The depth target, `D32Float` cleared to
-0, is a render graph transient of the same size. An instance not drawn in a frame (a
-hidden tab, a closed panel) releases its target at the start of the next frame, in
-`ViewportPanel::newFrame()`, outside the import phase; shown again, it gets a new target and
+An image without area has no target and adds no passes. Next to the colour target the instance
+keeps its id target, `R32G32Uint` with `RenderTarget | CopySrc`, the same size, created and
+released with it (ADR-0042 rule 21). It is kept, not a transient, because a click reads it in a
+later frame than the one that drew it, and it must match the picture on screen. The depth target,
+`D32Float` cleared to 0, is a render graph transient of the same size. An instance not drawn in a
+frame (a hidden tab, a closed panel) releases its targets at the start of the next frame, in
+`ViewportPanel::newFrame()`, outside the import phase; shown again, it gets new targets and
 renders once.
 
 **Passes.** `addRenderPasses()` adds two raster passes per instance that must render, on the
 colour target's one import from `EditorUi::importUserTexture()`, so the `EditorUi` pass that shows
 the image reads after them:
 
-- `ViewportShapes` clears colour (the theme's `viewportBackground`) and depth, then draws every
-  enabled entity with a `ShapeRenderer` and a `WorldTransform`, one draw each. The four unit meshes
-  are in one upload buffer, written once at creation, the indices already offset to each shape's
-  first vertex. Each draw's push constants (128 bytes) carry the clip matrix, the local-to-view
-  3x3 for the normals and the colour. Shading is unlit with a fixed light from the camera, a little
+- `ViewportShapes` clears colour (the theme's `viewportBackground`), the id target (to 0) and
+  depth, then draws every enabled entity with a `ShapeRenderer` and a `WorldTransform`, one draw
+  each. The four unit meshes are in one upload buffer, written once at creation, the indices already
+  offset to each shape's first vertex. Each draw's push constants (128 bytes) carry the clip matrix,
+  the local-to-view 3x3 for the normals, the colour, and the entity's id texel in two words the
+  3x3's rows leave free. The pixel shader writes the colour and, to the id target, the entity's slot
+  index + 1 and generation (`pickTexel()`, editor core's `ViewportPick.h`); 0 means no entity.
+  Shading is unlit with a fixed light from the camera, a little
   above and to the left, so the faces of a box differ. Selected entities are mixed halfway toward
   the theme's `viewportSelection`. Depth is reversed (greater-equal). Nothing is culled, so a
   mirrored shape (a negative scale) draws, its normals flipped by the sign of its determinant.
@@ -464,6 +472,36 @@ zero size and no hover. The viewport consumer and the platform backend route mou
 image only while it is hovered, or while a drag that started on it is held. The invisible button
 keeps an LMB drag on the image from moving a floating window. When a held drag ends, the platform
 backend gives ImGui the mouse's position back, so the image is hovered again without a move.
+
+**Click picking** (ADR-0042 rules 21 and 22). The viewport consumer turns a click on the image
+into the instance's `ViewportState::click` ([editor core](editor-core.md#viewports)). Then:
+
+1. The next `addRenderPasses()` takes the click. The position, in window pixels from the image's
+   corner, is scaled by the target's size over the image's, so it maps right at any framebuffer
+   scale and with a clamped target. A `ViewportPick` copy pass, after the scene passes, copies that
+   one texel of the id target into the instance's 8 bytes of a small Readback buffer (one
+   512-byte slot per instance, rows 256-byte aligned: `rhi::kTextureCopyOffsetAlignment`,
+   `kTextureCopyRowAlignment`).
+2. The pick waits in the instance with the click's mode and the number of the device frame that
+   copied it. At most one waits per instance: a newer click replaces it, and only the newest copy
+   is read, after its own frame.
+3. The first `addRenderPasses()` whose device frame is at least `kFramesInFlight` frames after the
+   copy's reads the texel. `addRenderPasses(graph, frame)` takes the open `rhi::Frame` that
+   `beginFrame()` returned, so the read and the stamp use that frame's number and a call outside a
+   frame can't read early. That frame's `beginFrame()` has already waited for the copy's frame, so
+   the panel never waits on the GPU. It applies the texel with `applyPick()` in the render phase,
+   before the scene passes: the same frame draws the new tint, and the Outliner and Details, drawn
+   earlier in the frame, show the selection a frame later. The selection changes exactly
+   `kFramesInFlight` frames (two) after the click. While a pick waits, `picking()` is true and the
+   editor requests a frame from its idle policy after every frame, so an idle editor still
+   completes the pick; UI frames without a device frame (a minimized window, a skipped render)
+   don't count, and a minimized window doesn't spin the loop.
+
+A click on an instance without a rendered target is dropped. A pick already copied completes
+after its viewport is hidden: it reads the buffer, not the target. Clicks are only an LMB press
+and release on the image without Alt within 4 logical points (editor core); RMB, MMB and the
+Alt gestures never pick, and losing focus with LMB held never picks. A refused selection is logged
+in the category `Viewport`.
 
 **Toolbar.** Above the image, every control runs a command and changes nothing itself:
 
@@ -551,8 +589,13 @@ passed and 1 when it failed.
   without area, the rectangle in window pixels, a zero rectangle while hidden and the target
   released the frame after, no hover under a floating window and hover back after a drag, disabled
   and mirrored shapes, two viewports in one graph, a clamped oversize target with one warning,
-  teardown after an unrendered frame, the toolbar, and Add Shape from the Outliner's context menu,
-  drawn by the next frame).
+  teardown after an unrendered frame, the toolbar, Add Shape from the Outliner's context menu,
+  drawn by the next frame, and the id target and picking: its format, usage and size following the
+  colour target, a click copied in the next frame and applied exactly `kFramesInFlight` frames
+  later with the tint redrawn in that frame, Ctrl and Shift on empty space keeping the selection, a
+  newer click replacing one being read, a copied pick completing after its viewport is hidden, and
+  clicks on hidden viewports, after `invalidate()`, with RMB or as a drag dropped, and UI frames
+  without a device frame not counting toward a pick).
 - `editor_automation_null` and `editor_automation_gpu` (label `sample`, the second also `gpu`):
   `ironthorn_editor` on SDL's offscreen driver runs `tests/editor/open_edit_save_reopen.json` in a
   fresh project - create, rename, attach, undo, redo, save, new level, open, query - on the null
@@ -577,15 +620,18 @@ passed and 1 when it failed.
   destroyed and recreated under the debug layers, and must end on that golden image. A third golden
   image shows the same scene from a camera 2 m up looking 10 degrees down in a wide 1280 x 448
   window (`golden/viewport_grazing_<backend>.ppm`), where most of the grid is seen at a grazing
-  angle and must fade out instead of aliasing. The helpers of
+  angle and must fade out instead of aliasing. A picking test on each backend renders the default
+  scene at framebuffer scale 2 and clicks the cube, Shift + clicks the sphere, Ctrl + clicks the
+  cube and clicks empty space: the selection must be the cube, both, the sphere, then nothing. The
+  id target is never shown, so it changes no golden image. The helpers of
   the golden tests are in `GoldenImage.h`.
 - `imgui_confined` and `imgui_confined_refuses_imgui_outside_editor_ui` (label `lint`).
 
 ## Not here yet
 
 - The Content Browser and the main toolbar (later P2 steps); asset pickers in Details.
-- In the viewport: picking, the translate gizmo and the selection outline (ADR-0042 rules 21 to
-  26); the active viewport for Add Shape is always `ith.viewport.1`.
+- In the viewport: the translate gizmo and the selection outline (ADR-0042 rules 23 to 26), and
+  marquee selection; the active viewport for Add Shape is always `ith.viewport.1`.
 - A shader cache for the UI and viewport shaders (with the shader cache of ADR-0011 rule 8).
 - File dialogs, and a Quit command with the Save / Don't Save / Cancel dialog.
 - Right-to-left and complex scripts, which ImGui can't shape (P4 brings shaped text).

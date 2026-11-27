@@ -184,7 +184,7 @@ struct UiFixture {
         const rg::Texture texture =
             graph.importTexture({.texture = target, .desc = targetDesc, .state = &targetState, .writable = true});
         if (beforeUi) {
-            beforeUi(graph);
+            beforeUi(graph, **begun);
         }
         ui->addRenderPasses(graph, texture, (*begun)->slot, rhi::LoadOp::Clear);
         graph.compile();
@@ -214,8 +214,9 @@ struct UiFixture {
     // The window's size in pixels that frame() hands the UI; twice the window size is a display scale
     // of 2.
     WindowSize pixelSize{kWidth, kHeight};
-    // Adds passes to the graph after the UI frame and before the UI's passes (viewport scene passes).
-    std::function<void(rg::RenderGraph&)> beforeUi;
+    // Adds passes to the graph after the UI frame and before the UI's passes (viewport scene passes),
+    // inside the device frame it gets.
+    std::function<void(rg::RenderGraph&, const rhi::Frame&)> beforeUi;
     // The dump of the last rendered graph, compiled.
     std::string lastGraph;
     std::uint64_t timeNs = 1'000'000'000;
