@@ -6,6 +6,10 @@
 // "discard" drops them. The UI asks Save / Don't Save / Cancel and runs the command again with the
 // answer; automation passes it. Saving and opening finish later, through the session's job
 // system (EditorSession.h); "ith.query.document" reports the result.
+//
+// Save As to a new path gives the saved level a new id, and over another level file that file's id;
+// the open document takes it with the path once the write succeeds (ADR-0050 item 9,
+// EditorSession::save).
 
 #include "ith/asset_database/AssetDatabase.h"
 #include "ith/assets/AssetId.h"
@@ -169,7 +173,7 @@ void registerFileCommands(CommandRegistry& registry) {
                   .execute = &save});
     registry.add({.id = "ith.file.save_as",
                   .displayName = "Save Current Level As",
-                  .tooltip = "Save the level to a new file, which becomes its file",
+                  .tooltip = "Save the level to another file, which becomes its file",
                   .category = "File",
                   .kind = CommandKind::Action,
                   .execute = &saveAs});

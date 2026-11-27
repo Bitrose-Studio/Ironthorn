@@ -375,6 +375,38 @@ TEST_SUITE("editor_core.viewports") {
         CHECK(next.viewports().find("ith.viewport.1")->camera == movedCamera(5.0f));
     }
 
+    TEST_CASE("after a Save As the cameras follow the level id: kept for the copy, or for the level overwritten") {
+        TempProject project;
+        EditorSession session(types(), {.projectDirectory = project.root()});
+        run(session, "ith.file.save_as", R"({"path": "Content/Room.ithmap"})");
+        const ith::Uuid room = session.document().levelId();
+        run(session, "ith.file.new_level"); // Room closes with the default cameras: no entry
+
+        run(session, "ith.file.open_level", R"({"path": "Content/Room.ithmap"})");
+        session.viewports().find("ith.viewport.1")->camera = movedCamera(3.0f);
+        run(session, "ith.file.save_as", R"({"path": "Content/Copy.ithmap"})");
+        const ith::Uuid copy = session.document().levelId();
+        REQUIRE(copy != room);
+        // The cameras stay as they are through the save.
+        CHECK(session.viewports().find("ith.viewport.1")->camera == movedCamera(3.0f));
+        run(session, "ith.file.new_level");
+        run(session, "ith.file.open_level", R"({"path": "Content/Copy.ithmap"})");
+        CHECK(session.viewports().find("ith.viewport.1")->camera == movedCamera(3.0f));
+        run(session, "ith.file.open_level", R"({"path": "Content/Room.ithmap"})");
+        CHECK(session.viewports().find("ith.viewport.1")->camera == EditorCamera{});
+
+        // Over Room: the level is Room now, and so are its cameras when it closes.
+        run(session, "ith.file.open_level", R"({"path": "Content/Copy.ithmap"})");
+        session.viewports().find("ith.viewport.1")->camera = movedCamera(6.0f);
+        run(session, "ith.file.save_as", R"({"path": "Content/Room.ithmap"})");
+        REQUIRE(session.document().levelId() == room);
+        run(session, "ith.file.new_level");
+        run(session, "ith.file.open_level", R"({"path": "Content/Room.ithmap"})");
+        CHECK(session.viewports().find("ith.viewport.1")->camera == movedCamera(6.0f));
+        run(session, "ith.file.open_level", R"({"path": "Content/Copy.ithmap"})");
+        CHECK(session.viewports().find("ith.viewport.1")->camera == movedCamera(3.0f));
+    }
+
     TEST_CASE("the tool, gizmo space, snap and game-view commands change the store, not the level") {
         EditorSession session(types());
         Viewports& viewports = session.viewports();

@@ -902,7 +902,7 @@ TEST_SUITE("editor_core.content_browser") {
         CHECK_FALSE(p.model().keyboardFocus());
     }
 
-    TEST_CASE("a new level saved into Content shows at once; a save outside Content or of a known level does not") {
+    TEST_CASE("a new level saved into Content shows at once; a Save, or a save outside Content, rescans nothing") {
         Project p;
         // The root exists before the first refresh.
         CHECK(p.execute("ith.content.navigate", R"({"folder": ""})").find("folder")->asString().empty());
@@ -913,16 +913,100 @@ TEST_SUITE("editor_core.content_browser") {
         CHECK(p.model().folderExists("Maps"));
         CHECK_FALSE(p.session->document().dirty());
 
-        // Saving it again, or Save As of the same level elsewhere, waits for a Rescan.
+        // Saving it again rescans nothing.
         const std::uint64_t builds = p.model().viewBuilds();
         p.execute("ith.file.save");
-        p.execute("ith.file.save_as", R"({"path": "Content/Maps/Copy.ithmap"})");
         CHECK(p.model().viewBuilds() == builds);
-        CHECK(p.model().findByPath("Maps/Copy.ithmap") == nullptr);
         // Outside Content: not an asset.
         p.execute("ith.file.new_level");
         p.execute("ith.file.save_as", R"({"path": "Scratch/Loose.ithmap"})");
         CHECK(p.model().viewBuilds() == builds);
+    }
+
+    TEST_CASE("a Save As of a known level shows the copy at once under a new id, and a Rescan finds no duplicate "
+              "(ADR-0050 item 9)") {
+        Project p;
+        p.execute("ith.file.save_as", R"({"path": "Content/Maps/First.ithmap"})");
+        const AssetId first(p.session->document().levelId());
+        p.navigate("Maps");
+        p.execute("ith.file.save_as", R"({"path": "Content/Maps/Copy.ithmap"})");
+        const AssetId copy(p.session->document().levelId());
+        CHECK(copy != first);
+        CHECK(p.item("Maps/First.ithmap").id == first);
+        CHECK(p.item("Maps/Copy.ithmap").id == copy);
+        CHECK(p.labels() == std::vector<std::string>{"Copy", "First"});
+
+        const Value counts = p.execute("ith.content.rescan");
+        CHECK(counts.find("assets")->toNumber<int>() == 2);
+        CHECK(counts.find("problems")->toNumber<int>() == 0);
+        CHECK(p.item("Maps/First.ithmap").id == first);
+        CHECK(p.item("Maps/Copy.ithmap").id == copy);
+        CHECK(p.session->document().path() == "Content/Maps/Copy.ithmap");
+        CHECK(AssetId(p.session->document().levelId()) == copy);
+
+        // Opening the original by id opens the original file.
+        p.execute("ith.file.open_level", R"({"id": ")" + first.toString() + R"("})");
+        CHECK(p.session->document().path() == "Content/Maps/First.ithmap");
+    }
+
+    TEST_CASE("a level copied outside the editor and opened takes the id the scan gives its file; Saves keep "
+              "them equal") {
+        for (const bool manualRescan : {true, false}) {
+            CAPTURE(manualRescan);
+            Project p;
+            p.execute("ith.file.save_as", R"({"path": "Content/Maps/A.ithmap"})");
+            const AssetId original(p.session->document().levelId());
+            const ith::Expected<std::string> text = ith::fs::readFile(p.file("Maps/A.ithmap"), std::size_t{1} << 20);
+            REQUIRE(text.hasValue());
+            p.write("Maps/B.ithmap", *text); // the same id, in another file
+            p.execute("ith.file.open_level", R"({"path": "Content/Maps/B.ithmap"})");
+            REQUIRE(AssetId(p.session->document().levelId()) == original);
+            if (manualRescan) {
+                p.rescan(); // B is the copy: its file gets a new id
+            }
+            for (int save = 0; save < 2; ++save) {
+                CAPTURE(save);
+                p.execute("ith.file.save");
+                const AssetId fileId = p.item("Maps/B.ithmap").id;
+                CHECK(fileId != original);
+                CHECK(AssetId(p.session->document().levelId()) == fileId);
+                const ith::Expected<std::string> saved =
+                    ith::fs::readFile(p.file("Maps/B.ithmap"), std::size_t{1} << 20);
+                REQUIRE(saved.hasValue());
+                CHECK(saved->find(fileId.toString()) != std::string::npos);
+                CHECK(p.session->document().path() == "Content/Maps/B.ithmap");
+            }
+            const std::uint64_t builds = p.model().viewBuilds();
+            p.execute("ith.file.save");
+            CHECK(p.model().viewBuilds() == builds); // nothing to rescan any more
+            CHECK(p.item("Maps/A.ithmap").id == original);
+        }
+    }
+
+    TEST_CASE("a Save As over a level takes its id: no Rescan when the database knows the file, shown when it "
+              "doesn't (ADR-0050 item 9)") {
+        Project p;
+        p.execute("ith.file.save_as", R"({"path": "Content/Maps/Target.ithmap"})");
+        const AssetId target(p.session->document().levelId());
+        p.execute("ith.file.new_level");
+        p.execute("ith.file.save_as", R"({"path": "Content/Maps/Mine.ithmap"})");
+        const AssetId mine(p.session->document().levelId());
+        p.navigate("Maps");
+
+        const std::uint64_t builds = p.model().viewBuilds();
+        p.execute("ith.file.save_as", R"({"path": "Content/Maps/Target.ithmap"})");
+        CHECK(AssetId(p.session->document().levelId()) == target);
+        CHECK(p.model().viewBuilds() == builds); // known path, unchanged id
+        CHECK(p.item("Maps/Target.ithmap").id == target);
+        CHECK(p.item("Maps/Mine.ithmap").id == mine);
+        CHECK(p.execute("ith.content.rescan").find("problems")->toNumber<int>() == 0);
+
+        // A level file written outside the editor, which the database doesn't have yet: shown at once.
+        const AssetId outside = p.native("Maps/Outside.ithmap", "ith.level");
+        p.execute("ith.file.save_as", R"({"path": "Content/Maps/Outside.ithmap"})");
+        CHECK(AssetId(p.session->document().levelId()) == outside);
+        CHECK(p.item("Maps/Outside.ithmap").id == outside);
+        CHECK(p.model().viewBuilds() > builds);
     }
 
     TEST_CASE("Rescan waits while a save is being written") {

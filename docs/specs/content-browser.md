@@ -464,14 +464,19 @@ counted (as the database enforces).
 - The current folder stays, or becomes its nearest existing ancestor. The selection keeps the
   items that still exist (assets by id, so an asset renamed outside the editor stays selected).
   Tree expansion stays for folders that still exist.
-- **The open level:** when its file was moved outside the editor, its id finds it at its new path
-  and the document's path changes to match; when the file is gone, the level stays open with its
-  path, and a warning says that saving will write it again.
+- **The open level** (never a dirty change): when the database has a record at the level's path,
+  the document takes that record's id (a scan gives a copy of a known level a new one) and keeps
+  its path. When its file is there but not in the database (left out as a duplicate id or an
+  invalid file), nothing changes. Only when its file is gone does the id find it: moved outside the
+  editor, the document's path changes to the file's new path; not found, the level stays open with
+  its path, and a warning says that saving will write it again.
 - The log reports the number of assets and problems found.
 - Rescan is refused while the open level is being saved (`editor.document.save_in_progress`).
-- A level saved into the content root under a path and an id the database doesn't have yet (a new
-  level's first save) shows at once: the save rescans. A Save As of a level the database already
-  knows waits for a Rescan, which decides which file is the copy.
+- A level saved into the content root to a file the database doesn't know under the level's id
+  shows at once: the save rescans. That is a new level's first save, a Save As to a new path (the
+  copy gets a new level id, the original keeps its own), and a Save As over a level file the
+  database hasn't scanned yet. A Save, or a Save As over a level the database already knows (the
+  saved level takes that file's id), needs no Rescan (ADR-0050 item 9).
 
 ### 3.15 Opening a level
 

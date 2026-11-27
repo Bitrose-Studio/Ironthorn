@@ -45,6 +45,12 @@ void EditorDocument::setPath(std::string path) {
     m_changes.bumpDocument();
 }
 
+void EditorDocument::setLevelId(const Uuid& levelId) {
+    ITH_ASSERT_MSG(!levelId.isNil(), "editor: a level can't have the nil id");
+    m_levelId = levelId;
+    m_changes.bumpDocument();
+}
+
 void EditorDocument::setSaving(bool saving) noexcept {
     m_saving = saving;
     m_changes.bumpDocument();

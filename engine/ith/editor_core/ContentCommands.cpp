@@ -12,7 +12,6 @@
 #include "ith/editor_core/ContentBrowserModel.h"
 #include "ith/editor_core/EditorLayout.h"
 #include "ith/editor_core/EditorSession.h"
-#include "ith/file_system/FileSystem.h"
 #include "ith/foundation/Log.h"
 #include "ith/level/LevelFormat.h"
 
@@ -169,28 +168,6 @@ std::string_view itemKindId(ContentItemKind kind) {
             return "problem";
     }
     return "asset";
-}
-
-// Keeps the open level's path in step with the database after a Rescan (spec 3.14): a level moved
-// outside the editor is found by its id; a level whose file is gone stays open with its path.
-void followOpenLevel(EditorSession& session) {
-    EditorDocument& document = session.document();
-    const AssetDatabase* assets = session.content().assets();
-    if (document.path().empty() || assets == nullptr) {
-        return;
-    }
-    if (const AssetRecord* record = assets->find(AssetId(document.levelId())); record != nullptr) {
-        const std::string path = std::string(kContentFolderName) + "/" + record->path;
-        if (session.resolvePath(path) != session.resolvePath(document.path())) {
-            document.setPath(path);
-        }
-        return;
-    }
-    const Expected<std::optional<fs::FileInfo>> info = fs::fileInfo(session.resolvePath(document.path()));
-    if (info && !info->has_value()) {
-        ITH_LOG_WARNING(ContentBrowser, "the open level's file {} is gone; saving the level writes it again",
-                        document.path());
-    }
 }
 
 Expected<Value> navigate(EditorSession& session, const Value& args) {
@@ -388,7 +365,7 @@ Expected<Value> rescan(EditorSession& session, const Value& /*args*/) {
     if (Expected<void> scanned = (*model)->rescan(); !scanned) {
         return makeUnexpected(std::move(scanned).error());
     }
-    followOpenLevel(session);
+    session.syncLevelWithAssets();
     const AssetDatabase& assets = *(*model)->assets();
     ITH_LOG_INFO(ContentBrowser, "Rescan: {} assets, {} problems", assets.records().size(),
                  (*model)->problems().size());

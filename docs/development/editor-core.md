@@ -73,7 +73,7 @@ Built-in commands:
 | `ith.edit.select_all`, `ith.edit.select_none` | | Select every entity in Outliner order, or none |
 | `ith.file.new_level` | `unsaved` | An empty, untitled level |
 | `ith.file.open_level` | `path` or `id`, `unsaved` | Open a level file, by path or by asset id; finishes in the background |
-| `ith.file.save`, `ith.file.save_as` | `path` (Save As) | Save the level; the write finishes in the background |
+| `ith.file.save`, `ith.file.save_as` | `path` (Save As) | Save the level; the write finishes in the background. Save As replaces an existing file without asking (the dialog asks), gives the level a new id on a new path and takes an overwritten level's id (see Level files) |
 | `ith.query.document` | | `path`, `levelId`, `dirty`, `saving`, `opening`, `playing`, `entities`, `lastError` |
 | `ith.query.selection` | | `entities`, `primary` |
 | `ith.query.entity` | `id` | `label`, `parent`, `children` and `components` (JSON, entities as stable ids) |
@@ -597,8 +597,10 @@ for (const ith::ContentItem* item : session.content().shown()) { ... }  // displ
   selection.
 - **Nothing per frame.** Every change rebuilds what it affects at once and bumps `generation()`;
   `viewBuilds()` counts the rebuilds of the shown items for tests. Rescan is the only way outside
-  changes come in (no watcher, ADR-0035 rule 9); the editor's own first save of a new level into
-  `Content/` rescans by itself, so the level shows at once.
+  changes come in (no watcher, ADR-0035 rule 9); a save into `Content/` of a file the database
+  doesn't know under the level's id (a level's first save, a Save As copy, an overwritten file the
+  database hasn't scanned) rescans by itself, so the level shows at once. A Save, or a Save As over a
+  level the database knows by its path, needs no Rescan: the id it holds is unchanged.
 - **Session state** in `<project>/Saved/Editor/ContentBrowser.json` (`ith.content_browser_state`,
   version 1, written atomically when it changes): the current folder, the view mode and sort, the
   expanded folders, the tree's width and the drawer's height. A missing file means the defaults; an
@@ -618,7 +620,7 @@ empty browser.
 | `ith.content.dismiss` | | Clears the selection; with nothing selected, closes the drawer (Escape in the browser) |
 | `ith.content.set_view` | `mode` (`grid`, `list`), `sortBy` (`name`, `type`), `descending` | The view settings |
 | `ith.content.set_filter` | `search` (at most `kMaxContentSearchSize` bytes, cut at a UTF-8 character), `categories` (`level` … `other`, which match assets only, and `problems`) | Returns `shown` |
-| `ith.content.rescan` | | Refused while a save is written (`editor.document.save_in_progress`). Scans the disk and rebuilds; the open level's path follows its file when it was moved outside the editor (not a dirty change), and a warning says when its file is gone. Returns `assets`, `problems` |
+| `ith.content.rescan` | | Refused while a save is written (`editor.document.save_in_progress`). Scans the disk and rebuilds; the open level follows (not a dirty change, `EditorSession::syncLevelWithAssets`): it takes the id of the record at its path and keeps its path; only when its file is gone does the id find it at a new path (moved outside the editor), else a warning says the file is gone. Returns `assets`, `problems` |
 | `ith.content.open` | `item` (else the primary item), `unsaved` | A folder becomes current; a level opens through `ith.file.open_level` by id, with its unsaved-changes rule, refused while playing (`editor.command.playing`), and closes the drawer; other items do nothing |
 | `ith.content.toggle_drawer` | `open` | Opens or closes the drawer; while the panel is in the layout, focuses it instead (`target`: `panel`), unless `open` is false |
 | `ith.query.content` | | The current folder, search, categories, view, the shown items (kind, path, id, label, type, the category of an asset, problems), the problem count, selection, primary, anchor, focus, `prompt` (null in this slice) and `drawerOpen` |
@@ -734,6 +736,20 @@ that side.
   job system's main-thread queue. A failed write puts the marker back, so the level stays dirty,
   and `lastFileError()` (and `ith.query.document`'s `lastError`) says why. Editing goes on while
   the file is written; another save or an open waits (`editor.document.save_in_progress`).
+- **The level id after Save As** ([ADR-0050](../decisions/0050-editor-content-browser-browse-slice-as-built.md)
+  item 9). `ith.file.save_as` replaces an existing file without asking; the overwrite prompt
+  belongs to the Save As dialog when it lands. Save As to the level's own path (after resolving it)
+  is a Save and keeps the id. Otherwise the file at the target is read on the background lane just
+  before the write (at most `serialization::kMaxTextSize` bytes): over another level file the saved
+  level takes that file's id, so references to the overwritten level keep working; nothing there,
+  or a file that is not a level document, gives the copy a new random id, so the original file
+  keeps its own. A level that has no file yet keeps its id on its first file. Any other read error
+  (busy, access denied, too large, a directory, a FIFO or a device) fails the save without writing.
+  Another spelling of the own path (letter case, a link) counts as a Save As and reads back the
+  level's own id. The document takes the resulting id and the path only when the write succeeds; a
+  failed write changes neither. When the save's own rescan gives the file another id (a copy of a
+  known level made outside the editor), the document takes it. The viewport cameras stay as they
+  are and are kept under the resulting id when the level closes.
 - **Open** reads the file on the background lane and loads it on the main thread, all or
   nothing; until then the document is busy. A failed read or load keeps the open level.
 - **New** and **Open** on a dirty level fail with `editor.document.unsaved_changes` unless the

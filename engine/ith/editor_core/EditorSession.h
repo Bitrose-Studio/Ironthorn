@@ -133,10 +133,40 @@ public:
     // the level's path once the file is written. The saved marker moves at once and comes back when
     // the write fails. Fails with "editor.document.no_path" (an untitled level and no path),
     // "editor.document.save_in_progress", "editor.document.busy" (an open is running) and the
-    // saveLevel errors; a failed write is reported later through lastFileError(). When the written
-    // file is a new asset in the Content folder (its path and the level's id unknown to the asset
-    // database), the Content Browser rescans, so it shows the level without a Rescan by the user.
+    // saveLevel errors; a failed write is reported later through lastFileError().
+    //
+    // An existing file at `path` is replaced without asking; asking before an overwrite is the Save
+    // As dialog's job.
+    //
+    // The level id the file gets (ADR-0050 item 9): its own path (compared after resolvePath, byte
+    // for byte) is a Save and keeps the id. Another path is a Save As: the file there is read on the
+    // background lane before the write (at most serialization::kMaxTextSize bytes). A level file
+    // gives its id, so references to the overwritten level keep working; nothing there, or a file
+    // that is not a level document, gives a new random id, so the original file keeps its own; a
+    // level that has no file yet keeps its id. Any other read error (fs.busy, fs.access_denied,
+    // fs.too_large, fs.is_a_directory, fs.unsupported for a FIFO or a device...) fails the save with
+    // it, without writing. Another spelling of the level's own path (another case on a file system
+    // that ignores it, a link) counts as a Save As and reads back the level's own id, so the id stays.
+    // The document takes the resulting id and the path only once the write succeeds; a failed write
+    // changes neither. The viewport cameras stay as they are and are kept under the resulting id when
+    // the level closes.
+    //
+    // When the written file is in the Content folder and the asset database doesn't know it under the
+    // resulting id (a new file, or an overwritten file whose id it had otherwise), the Content Browser
+    // rescans, so it shows the level without a Rescan by the user. When that scan gives the file
+    // another id (it was a copy of a known level, made outside the editor), the document takes that
+    // id, so the document and its file agree.
     Expected<void> save(std::string_view path = {});
+
+    // Keeps the open level in step with the asset database after a scan (ith.content.rescan and the
+    // rescan of a save; spec 3.14), never as a dirty change. An untitled level, or a session without a
+    // database, is left alone. When the database has a record at the level's path, the level takes
+    // that record's id (a scan gives a copy of a known level a new one) and keeps its path. When its
+    // file is there but not in the database (outside Content, left out as a duplicate id or an invalid
+    // file), or can't be checked, nothing changes. Only when the file is gone does the id find it: a
+    // record with the id at another path (moved outside the editor) becomes the level's path;
+    // without one, a warning says that saving writes the file again.
+    void syncLevelWithAssets();
 
     // Starts opening the level file at `path`: read on the background lane, then loaded all or
     // nothing. Until it finishes the document is busy (opening()). Fails with
@@ -164,9 +194,12 @@ private:
     Expected<void> checkIdle() const;
     void start(std::unique_ptr<FileOperation> operation);
     static void runFileStep(FileOperation& operation);
+    // Before a Save As writes: when the file at the path is a level, the text gets that level's id.
+    static void takeTargetId(FileOperation& operation);
     void finish();
-    // After a save to `fullPath`: a new level file in the Content folder, whose id the database doesn't
-    // have, appears in the Content Browser at once (a Rescan); a failure becomes a warning.
+    // After a save to `fullPath`: a level file in the Content folder that the database doesn't know
+    // under the level's id (a new file, or an overwritten one with another id) appears in the Content
+    // Browser at once (a Rescan, then syncLevelWithAssets); a failure becomes a warning.
     void showSavedLevel(const std::string& fullPath);
 
     const TypeRegistry* m_types;

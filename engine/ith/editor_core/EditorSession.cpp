@@ -1,6 +1,7 @@
 #include "ith/editor_core/EditorSession.h"
 
 #include "ith/asset_database/AssetDatabase.h"
+#include "ith/asset_database/AssetHeader.h"
 #include "ith/assets/AssetId.h"
 #include "ith/ecs/StableId.h"
 #include "ith/file_system/FileSystem.h"
@@ -9,7 +10,11 @@
 #include "ith/foundation/Log.h"
 #include "ith/jobs/JobSystem.h"
 #include "ith/level/Level.h"
+#include "ith/serialization/Document.h"
 
+#include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace ith {
@@ -41,6 +46,34 @@ Error fromSerialization(const serialization::Error& error) {
     return Error{.code = error.code, .message = std::move(message)};
 }
 
+// The id of the level file at `fullPath` (ADR-0050 item 9): nullopt when nothing is there or the file
+// is not a level document; the read's error for anything else (busy, access denied, too large, not
+// a regular file), so a Save As never replaces a file it couldn't check. The file's bytes are freed
+// before it returns. Any thread.
+Expected<std::optional<AssetId>> levelIdAt(const std::string& fullPath, std::string_view source) {
+    const Expected<std::string> existing = fs::readFile(fullPath, serialization::kMaxTextSize);
+    if (!existing) {
+        if (existing.error().code == "fs.not_found") {
+            return std::optional<AssetId>();
+        }
+        return makeUnexpected(existing.error());
+    }
+    const Expected<AssetHeader, serialization::Error> header = readAssetHeader(*existing, source);
+    if (!header || header->format != kLevelFormat) {
+        return std::optional<AssetId>();
+    }
+    return std::optional<AssetId>(header->id);
+}
+
+// `fullPath` relative to the database's Content folder, or nullopt when it is not inside it.
+std::optional<std::string> contentPathOf(const AssetDatabase& assets, const std::string& fullPath) {
+    const std::string content = assets.contentDirectory() + "/";
+    if (!fullPath.starts_with(content)) {
+        return std::nullopt;
+    }
+    return fullPath.substr(content.size());
+}
+
 } // namespace
 
 // A save or open in flight. The background step fills `bytes` or `error`; finish() completes it.
@@ -60,6 +93,10 @@ struct EditorSession::FileOperation {
     // Save: the saved position before this save and the one it set.
     std::uint64_t previousSaved = 0;
     std::uint64_t saved = 0;
+    // Save: the level id the written file holds (ADR-0050 item 9), and whether a level file already
+    // at the path gives it instead (a Save As, not a Save).
+    Uuid levelId;
+    bool takeTargetId = false;
 };
 
 EditorSession::EditorSession(const TypeRegistry& types, EditorSessionOptions options)
@@ -121,9 +158,15 @@ Expected<void> EditorSession::save(std::string_view path) {
     if (target.empty()) {
         return makeError("editor.document.no_path", "the level has no file yet; save it with Save As");
     }
+    std::string fullPath = resolvePath(target);
+    // The level id of the file (ADR-0050 item 9): a Save keeps it; a Save As to a new path gives a new
+    // one, except to a level that has no file yet; a level file already at the path gives its own,
+    // which the background step reads (takeTargetId).
+    const bool ownFile = !m_document.path().empty() && fullPath == resolvePath(m_document.path());
+    const Uuid levelId = ownFile || m_document.path().empty() ? m_document.levelId() : Uuid::generate();
     std::vector<serialization::Error> warnings;
     Expected<std::string, serialization::Error> text =
-        saveLevel(m_document.world(), m_document.levelId(), *m_types, {.warnings = &warnings});
+        saveLevel(m_document.world(), levelId, *m_types, {.warnings = &warnings});
     if (!text) {
         return makeUnexpected(fromSerialization(text.error()));
     }
@@ -133,8 +176,10 @@ Expected<void> EditorSession::save(std::string_view path) {
     auto operation = std::make_unique<FileOperation>();
     operation->kind = FileOperation::Kind::Save;
     operation->path = target;
-    operation->fullPath = resolvePath(target);
+    operation->fullPath = std::move(fullPath);
     operation->bytes = std::move(*text);
+    operation->levelId = levelId;
+    operation->takeTargetId = !ownFile;
     operation->previousSaved = m_document.history().markSaved();
     operation->saved = m_document.history().savedPosition();
     m_document.setSaving(true);
@@ -185,6 +230,12 @@ void EditorSession::start(std::unique_ptr<FileOperation> operation) {
 
 void EditorSession::runFileStep(FileOperation& operation) {
     if (operation.kind == FileOperation::Kind::Save) {
+        if (operation.takeTargetId) {
+            takeTargetId(operation);
+            if (operation.error) {
+                return;
+            }
+        }
         if (Expected<void> written = fs::writeFileAtomic(operation.fullPath, operation.bytes); !written) {
             operation.error = std::move(written).error();
         }
@@ -198,6 +249,24 @@ void EditorSession::runFileStep(FileOperation& operation) {
     }
 }
 
+void EditorSession::takeTargetId(FileOperation& operation) {
+    Expected<std::optional<AssetId>> existing = levelIdAt(operation.fullPath, operation.path);
+    if (!existing) {
+        operation.error = std::move(existing).error();
+        return;
+    }
+    if (!existing->has_value() || (*existing)->uuid() == operation.levelId) {
+        return;
+    }
+    Expected<std::string, serialization::Error> replaced = replaceHeaderId(operation.bytes, **existing, operation.path);
+    if (!replaced) {
+        operation.error = fromSerialization(replaced.error());
+        return;
+    }
+    operation.bytes = std::move(*replaced);
+    operation.levelId = (*existing)->uuid();
+}
+
 void EditorSession::finish() {
     const std::unique_ptr<FileOperation> operation = std::move(m_operation);
     m_lastFileError = std::move(operation->error);
@@ -209,6 +278,9 @@ void EditorSession::finish() {
                 m_document.history().setSavedPosition(operation->previousSaved);
             }
         } else {
+            if (operation->levelId != m_document.levelId()) {
+                m_document.setLevelId(operation->levelId);
+            }
             if (operation->path != m_document.path()) {
                 m_document.setPath(operation->path);
             }
@@ -239,21 +311,54 @@ void EditorSession::finish() {
 
 void EditorSession::showSavedLevel(const std::string& fullPath) {
     const AssetDatabase* assets = m_options.assets;
-    const std::string content = assets != nullptr ? assets->contentDirectory() + "/" : std::string();
-    if (assets == nullptr || !fullPath.starts_with(content)) {
+    const std::optional<std::string> path = assets != nullptr ? contentPathOf(*assets, fullPath) : std::nullopt;
+    if (!path) {
         return;
     }
-    // A level the database knows needs nothing. One whose id another file has (a Save As of a known
-    // level) waits for a Rescan, which decides which file is the copy.
-    if (assets->findByPath(fullPath.substr(content.size())) != nullptr ||
-        assets->find(AssetId(m_document.levelId())) != nullptr) {
+    // A file the database knows under the id it now holds needs nothing: a Save, or a Save As over a
+    // known level, whose id the saved level took. A new file, or one whose id changed, is scanned.
+    if (const AssetRecord* record = assets->findByPath(*path);
+        record != nullptr && record->id == AssetId(m_document.levelId())) {
         return;
     }
     ITH_ASSERT_MSG(!m_document.saving(), "the Content Browser rescans only after the save has finished");
     if (Expected<void> scanned = m_content.rescan(); !scanned) {
         ITH_LOG_WARNING(ContentBrowser, "the Content Browser can't show the saved level: {}", scanned.error().message);
         m_warnings.push_back(scanned.error());
+        return;
     }
+    syncLevelWithAssets();
+}
+
+void EditorSession::syncLevelWithAssets() {
+    const AssetDatabase* assets = m_options.assets;
+    if (m_document.path().empty() || assets == nullptr) {
+        return;
+    }
+    const std::string full = resolvePath(m_document.path());
+    // The database knows the level's own file: the level takes the id the file has now (the scan gave
+    // a copy of a known level a new one) and stays on its file.
+    if (const std::optional<std::string> path = contentPathOf(*assets, full); path) {
+        if (const AssetRecord* own = assets->findByPath(*path); own != nullptr) {
+            if (own->id != AssetId(m_document.levelId())) {
+                m_document.setLevelId(own->id.uuid());
+            }
+            return;
+        }
+    }
+    // The file is there but not in the database (outside Content, left out as a duplicate or an
+    // invalid file), or it can't be told: the level stays as it is.
+    const Expected<std::optional<fs::FileInfo>> info = fs::fileInfo(full);
+    if (!info || info->has_value()) {
+        return;
+    }
+    // The file is gone: moved outside the editor when the database has the id at another path.
+    if (const AssetRecord* record = assets->find(AssetId(m_document.levelId())); record != nullptr) {
+        m_document.setPath(std::string(kContentFolderName) + "/" + record->path);
+        return;
+    }
+    ITH_LOG_WARNING(ContentBrowser, "the open level's file {} is gone; saving the level writes it again",
+                    m_document.path());
 }
 
 void EditorSession::waitIdle() {

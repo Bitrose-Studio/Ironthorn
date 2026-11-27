@@ -82,6 +82,11 @@ public:
     // doesn't change.
     void setPath(std::string path);
 
+    // Gives the level another asset id: after a Save As wrote it to another file (ADR-0050 item 9).
+    // The world, the history and the dirty state don't change. Precondition (asserted): `levelId` is
+    // not nil.
+    void setLevelId(const Uuid& levelId);
+
     // True while Play In Editor or Simulate runs (ADR-0037 rule 10).
     [[nodiscard]] bool playing() const noexcept { return m_playing; }
 

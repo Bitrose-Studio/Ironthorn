@@ -1,9 +1,11 @@
 // The editor document's files (ADR-0037 rules 15 and 16) and the queries (rule 17): Save As and
 // Save with and without a job system, a reopened level equal to the saved one, the saved marker
 // across a failed write, unsaved changes before New and Open, a failed open that keeps the level,
-// commands refused while a level opens, opening by asset id, and what the queries return.
+// commands refused while a level opens, opening by asset id, the level id after Save As (ADR-0050
+// item 9), and what the queries return.
 
 #include "ith/asset_database/AssetDatabase.h"
+#include "ith/asset_database/AssetHeader.h"
 #include "ith/asset_database/Importer.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/file_system/FileSystem.h"
@@ -15,14 +17,21 @@
 
 #include <doctest/doctest.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <ostream> // doctest prints std::string operands through an ostream
 #include <string>
+#include <string_view>
+
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 namespace {
 
 using ith::EditorSession;
 using ith::test::editor::fails;
+using ith::test::editor::idOf;
 using ith::test::editor::idText;
 using ith::test::editor::run;
 using ith::test::editor::TempProject;
@@ -42,6 +51,17 @@ void build(EditorSession& session) {
 
 std::string hashOf(EditorSession& session) {
     return run(session, "ith.query.world_hash").find("hash")->asString();
+}
+
+// The level id in the header of the level file at `path` (relative to the project).
+ith::Uuid fileIdOf(const TempProject& project, std::string_view path) {
+    const ith::Expected<std::string> text =
+        ith::fs::readFile(ith::fs::joinPath(project.root(), path), std::size_t{1} << 20);
+    REQUIRE(text.hasValue());
+    const auto header = ith::readAssetHeader(*text);
+    REQUIRE(header.hasValue());
+    CHECK(header->format == ith::kLevelFormat);
+    return header->id.uuid();
 }
 
 } // namespace
@@ -182,6 +202,247 @@ TEST_SUITE("editor_core.files") {
         CHECK(second.document().levelId() == first.document().levelId());
         fails(second, "ith.file.open_level", R"({"id": )" + quoted(77) + "}", "editor.asset.not_found");
         fails(second, "ith.file.open_level", "{}", "editor.command.invalid_args");
+    }
+
+    TEST_CASE("Save As to a new path gives the copy a new level id; the original keeps its own; a Save keeps it") {
+        for (const bool withJobs : {false, true}) {
+            CAPTURE(withJobs);
+            TempProject project;
+            ith::JobSystem jobs({.foregroundWorkers = 1, .backgroundWorkers = 1});
+            EditorSession session(types(), {.projectDirectory = project.root(), .jobs = withJobs ? &jobs : nullptr});
+            build(session);
+            const ith::Uuid first = session.document().levelId();
+            // A level without a file keeps its id on its first file.
+            run(session, "ith.file.save_as", R"({"path": "Content/A.ithmap"})");
+            session.waitIdle();
+            CHECK(session.document().levelId() == first);
+            CHECK(fileIdOf(project, "Content/A.ithmap") == first);
+
+            run(session, "ith.file.save_as", R"({"path": "Content/B.ithmap"})");
+            if (withJobs) {
+                // Until the write has finished, the document keeps its id and path.
+                CHECK(session.document().levelId() == first);
+                CHECK(session.document().path() == "Content/A.ithmap");
+            }
+            session.waitIdle();
+            REQUIRE_FALSE(session.lastFileError().has_value());
+            const ith::Uuid copy = session.document().levelId();
+            CHECK(copy != first);
+            CHECK_FALSE(copy.isNil());
+            CHECK(session.document().path() == "Content/B.ithmap");
+            CHECK_FALSE(session.document().dirty());
+            CHECK(fileIdOf(project, "Content/A.ithmap") == first);
+            CHECK(fileIdOf(project, "Content/B.ithmap") == copy);
+            CHECK(run(session, "ith.query.document").find("levelId")->asString() == copy.toString());
+
+            // Save, and Save As to its own path written another way, keep the id.
+            run(session, "ith.edit.rename", R"({"id": )" + quoted(1) + R"(, "label": "Renamed"})");
+            run(session, "ith.file.save");
+            session.waitIdle();
+            run(session, "ith.file.save_as",
+                R"({"path": ")" + ith::fs::joinPath(project.root(), "Content/B.ithmap") + R"("})");
+            session.waitIdle();
+            CHECK(session.document().levelId() == copy);
+            CHECK(fileIdOf(project, "Content/B.ithmap") == copy);
+        }
+    }
+
+    TEST_CASE("Save As over another level takes its id; over a file that is not a level it gets a new one") {
+        for (const bool withJobs : {false, true}) {
+            CAPTURE(withJobs);
+            TempProject project;
+            ith::JobSystem jobs({.foregroundWorkers = 1, .backgroundWorkers = 1});
+            EditorSession session(types(), {.projectDirectory = project.root(), .jobs = withJobs ? &jobs : nullptr});
+            run(session, "ith.file.save_as", R"({"path": "Content/Target.ithmap"})");
+            session.waitIdle();
+            const ith::Uuid target = session.document().levelId();
+
+            run(session, "ith.file.new_level");
+            build(session);
+            run(session, "ith.file.save_as", R"({"path": "Content/Mine.ithmap"})");
+            session.waitIdle();
+            const ith::Uuid mine = session.document().levelId();
+
+            run(session, "ith.file.save_as", R"({"path": "Content/Target.ithmap"})");
+            session.waitIdle();
+            REQUIRE_FALSE(session.lastFileError().has_value());
+            CHECK(session.document().levelId() == target);
+            CHECK(session.document().path() == "Content/Target.ithmap");
+            CHECK(fileIdOf(project, "Content/Target.ithmap") == target);
+            CHECK(fileIdOf(project, "Content/Mine.ithmap") == mine);
+            // The overwritten file has the saved content.
+            EditorSession reopened(types(), {.projectDirectory = project.root()});
+            run(reopened, "ith.file.open_level", R"({"path": "Content/Target.ithmap"})");
+            CHECK(reopened.document().levelId() == target);
+            CHECK(hashOf(reopened) == hashOf(session));
+            // Byte for byte what a save of the level under that id writes.
+            const ith::Expected<std::string> written =
+                ith::fs::readFile(ith::fs::joinPath(project.root(), "Content/Target.ithmap"), std::size_t{1} << 20);
+            REQUIRE(written.hasValue());
+            CHECK(*written == ith::test::editor::levelText(session));
+
+            // An untitled level saved over a level takes its id too.
+            run(session, "ith.file.new_level");
+            run(session, "ith.file.save_as", R"({"path": "Content/Mine.ithmap"})");
+            session.waitIdle();
+            CHECK(session.document().levelId() == mine);
+
+            // Another native asset, or a file that isn't a document, is replaced under a new id.
+            for (const std::string& text :
+                 {std::string(R"({"format": "ith.material", "version": 1, "id": ")" + idText(9) + R"(", "data": {}})"),
+                  std::string("not a document")}) {
+                CAPTURE(text);
+                REQUIRE(ith::fs::writeFileAtomic(ith::fs::joinPath(project.root(), "Content/Other.ithmap"), text)
+                            .hasValue());
+                run(session, "ith.file.save_as", R"({"path": "Content/Mine.ithmap"})");
+                session.waitIdle();
+                run(session, "ith.file.save_as", R"({"path": "Content/Other.ithmap"})");
+                session.waitIdle();
+                REQUIRE_FALSE(session.lastFileError().has_value());
+                CHECK(session.document().levelId() != mine);
+                CHECK(session.document().levelId() != idOf(9));
+                CHECK(fileIdOf(project, "Content/Other.ithmap") == session.document().levelId());
+            }
+        }
+    }
+
+    TEST_CASE("a failed Save As changes neither the level id nor the path; with and without a job system") {
+        for (const bool withJobs : {false, true}) {
+            CAPTURE(withJobs);
+            TempProject project;
+            ith::JobSystem jobs({.foregroundWorkers = 1, .backgroundWorkers = 1});
+            EditorSession session(types(), {.projectDirectory = project.root(), .jobs = withJobs ? &jobs : nullptr});
+            build(session);
+            run(session, "ith.file.save_as", R"({"path": "Content/A.ithmap"})");
+            session.waitIdle();
+            const ith::Uuid id = session.document().levelId();
+            run(session, "ith.edit.rename", R"({"id": )" + quoted(1) + R"(, "label": "Unsaved"})");
+            // A directory where the file should go: the save fails (reading it already).
+            REQUIRE(ith::fs::createDirectories(ith::fs::joinPath(project.root(), "Content/Taken.ithmap")).hasValue());
+            run(session, "ith.file.save_as", R"({"path": "Content/Taken.ithmap"})");
+            session.waitIdle();
+            REQUIRE(session.lastFileError().has_value());
+            CHECK(session.lastFileError()->code == "fs.is_a_directory");
+            CHECK(session.document().levelId() == id);
+            CHECK(session.document().path() == "Content/A.ithmap");
+            CHECK(session.document().dirty());
+            CHECK(fileIdOf(project, "Content/A.ithmap") == id);
+            // The next Save goes to the level's own file, under its own id.
+            run(session, "ith.file.save");
+            session.waitIdle();
+            REQUIRE_FALSE(session.lastFileError().has_value());
+            CHECK(session.document().levelId() == id);
+            CHECK_FALSE(session.document().dirty());
+        }
+    }
+
+#ifndef ITH_SHIPPING
+    TEST_CASE("a Save As over another level whose write fails keeps the id, the path, the dirty state and that file") {
+        // The write fault is per thread, so the write runs on this one: no job system.
+        TempProject project;
+        EditorSession session(types(), {.projectDirectory = project.root()});
+        run(session, "ith.file.save_as", R"({"path": "Content/Target.ithmap"})");
+        const ith::Uuid target = session.document().levelId();
+        const std::string targetText =
+            *ith::fs::readFile(ith::fs::joinPath(project.root(), "Content/Target.ithmap"), std::size_t{1} << 20);
+        run(session, "ith.file.new_level");
+        build(session);
+        run(session, "ith.file.save_as", R"({"path": "Content/Mine.ithmap"})");
+        const ith::Uuid mine = session.document().levelId();
+        run(session, "ith.edit.rename", R"({"id": )" + quoted(1) + R"(, "label": "Unsaved"})");
+
+        ith::fs::testing::setWriteFault(ith::fs::testing::WriteFault::BeforeRename);
+        run(session, "ith.file.save_as", R"({"path": "Content/Target.ithmap"})");
+        ith::fs::testing::setWriteFault(ith::fs::testing::WriteFault::None);
+        REQUIRE(session.lastFileError().has_value());
+        CHECK(session.lastFileError()->code == "fs.io");
+        CHECK(session.document().levelId() == mine);
+        CHECK(session.document().levelId() != target);
+        CHECK(session.document().path() == "Content/Mine.ithmap");
+        CHECK(session.document().dirty());
+        CHECK(*ith::fs::readFile(ith::fs::joinPath(project.root(), "Content/Target.ithmap"), std::size_t{1} << 20) ==
+              targetText);
+        CHECK(fileIdOf(project, "Content/Mine.ithmap") == mine);
+    }
+#endif
+
+#ifndef _WIN32
+    TEST_CASE("a Save As onto a FIFO or an unreadable file fails at once without writing; with a job system") {
+        TempProject project;
+        ith::JobSystem jobs({.foregroundWorkers = 1, .backgroundWorkers = 1});
+        EditorSession session(types(), {.projectDirectory = project.root(), .jobs = &jobs});
+        build(session);
+        run(session, "ith.file.save_as", R"({"path": "Content/Mine.ithmap"})");
+        session.waitIdle();
+        const ith::Uuid mine = session.document().levelId();
+
+        const std::string fifo = ith::fs::joinPath(project.root(), "Content/Pipe.ithmap");
+        REQUIRE(::mkfifo(fifo.c_str(), 0600) == 0);
+        run(session, "ith.file.save_as", R"({"path": "Content/Pipe.ithmap"})");
+        session.waitIdle(); // returns: the read doesn't wait for a writer
+        REQUIRE(session.lastFileError().has_value());
+        CHECK(session.lastFileError()->code == "fs.unsupported");
+        CHECK(session.document().levelId() == mine);
+        CHECK(session.document().path() == "Content/Mine.ithmap");
+        const auto info = ith::fs::fileInfo(fifo);
+        REQUIRE(info.hasValue());
+        REQUIRE(info->has_value());
+        CHECK((*info)->kind == ith::fs::FileKind::Other); // still the FIFO
+
+        // A level file that can't be read: refused, not replaced under a new id.
+        run(session, "ith.file.save_as", R"({"path": "Content/Locked.ithmap"})");
+        session.waitIdle();
+        const std::string locked = ith::fs::joinPath(project.root(), "Content/Locked.ithmap");
+        const ith::Uuid lockedId = session.document().levelId();
+        run(session, "ith.file.open_level", R"({"path": "Content/Mine.ithmap"})");
+        session.waitIdle();
+        REQUIRE(::chmod(locked.c_str(), 0) == 0);
+        if (ith::fs::readFile(locked, std::size_t{1} << 20).hasValue()) {
+            MESSAGE("the file is still readable (running as root?); skipped");
+        } else {
+            run(session, "ith.file.save_as", R"({"path": "Content/Locked.ithmap"})");
+            session.waitIdle();
+            REQUIRE(session.lastFileError().has_value());
+            CHECK(session.lastFileError()->code == "fs.access_denied");
+            CHECK(session.document().levelId() == mine);
+            CHECK(session.document().path() == "Content/Mine.ithmap");
+        }
+        REQUIRE(::chmod(locked.c_str(), 0600) == 0);
+        CHECK(fileIdOf(project, "Content/Locked.ithmap") == lockedId);
+    }
+#endif
+
+    TEST_CASE("two unscanned files with one id: the open one stays the level's file through a Rescan and a Save") {
+        TempProject project;
+        const ith::ImporterRegistry importers;
+        ith::AssetDatabase assets(project.root(), importers);
+        EditorSession session(types(), {.projectDirectory = project.root(), .assets = &assets});
+        const std::string shared = idText(5);
+        const std::string level =
+            R"({"format": "ith.level", "version": 1, "id": ")" + shared + R"(", "data": {"entities": []}})";
+        const std::string a = ith::fs::joinPath(project.root(), "Content/Maps/A.ithmap");
+        REQUIRE(ith::fs::writeFileAtomic(a, level).hasValue());
+        REQUIRE(ith::fs::writeFileAtomic(ith::fs::joinPath(project.root(), "Content/Maps/B.ithmap"), level).hasValue());
+        run(session, "ith.file.open_level", R"({"path": "Content/Maps/B.ithmap"})");
+        REQUIRE(session.document().levelId() == idOf(5));
+
+        // A, first in byte order, keeps the id; B is left out as a duplicate, but it is still there.
+        run(session, "ith.content.rescan");
+        REQUIRE(assets.findByPath("Maps/B.ithmap") == nullptr);
+        CHECK(session.document().path() == "Content/Maps/B.ithmap");
+        CHECK_FALSE(session.document().dirty());
+
+        build(session);
+        run(session, "ith.file.save");
+        REQUIRE_FALSE(session.lastFileError().has_value());
+        CHECK(*ith::fs::readFile(a, std::size_t{1} << 20) == level);
+        CHECK(session.document().path() == "Content/Maps/B.ithmap");
+        // The save's scan gave B, the copy, a new id, which the level took.
+        const ith::AssetRecord* b = assets.findByPath("Maps/B.ithmap");
+        REQUIRE(b != nullptr);
+        CHECK(b->id != ith::AssetId(idOf(5)));
+        CHECK(ith::AssetId(session.document().levelId()) == b->id);
+        CHECK(fileIdOf(project, "Content/Maps/B.ithmap") == session.document().levelId());
     }
 
     TEST_CASE("queries: document, selection, entity, find, history and the world hash") {
