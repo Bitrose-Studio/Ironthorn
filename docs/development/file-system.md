@@ -64,7 +64,10 @@ follow links.
 
 A name in a listing that isn't valid Unicode (an unpaired surrogate on Windows, bytes that aren't
 UTF-8 on Linux) comes with `validName == false` and a display name with U+FFFD in place of the bad
-parts, so callers can report it; it can't be opened by that name.
+parts, so callers can report it; it can't be opened by that name. A Linux name that holds `\` is
+listed as it is but with `validName == false` too: every function here takes `\` for a
+separator, so joining that name into a path would address another entry, possibly outside the
+folder (`..\..`). Never join a name whose `validName` is false into a path.
 
 ### Atomic writes
 

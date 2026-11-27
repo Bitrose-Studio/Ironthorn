@@ -514,6 +514,33 @@ TEST_SUITE("file_system.files") {
         }
         ::unlink(bad.c_str());
     }
+
+    TEST_CASE("names holding a backslash are listed as names that can't be opened") {
+        // Legal on POSIX, but every fs function takes '\' for a separator: "..\.." would address
+        // a folder outside this one.
+        const TempDirectory directory;
+        const std::string folder = directory.path() + "/..\\..";
+        const std::string file = directory.path() + "/a\\b.txt";
+        REQUIRE(::mkdir(folder.c_str(), 0755) == 0);
+        const int descriptor = ::open(file.c_str(), O_CREAT | O_WRONLY | O_CLOEXEC, 0644);
+        REQUIRE(descriptor >= 0);
+        ::close(descriptor);
+        REQUIRE(fs::writeFileAtomic(directory.path("good.txt"), "x").hasValue());
+        const ith::Expected<std::vector<fs::DirectoryEntry>> entries = fs::listDirectory(directory.path());
+        REQUIRE(entries.hasValue());
+        if (entries) {
+            REQUIRE(entries->size() == 3);
+            for (const fs::DirectoryEntry& entry : *entries) {
+                CHECK(entry.validName == (entry.name == "good.txt"));
+                if (entry.name == "..\\..") {
+                    CHECK(entry.kind == fs::FileKind::Directory);
+                }
+            }
+            CHECK(std::ranges::count(*entries, std::string("a\\b.txt"), &fs::DirectoryEntry::name) == 1);
+        }
+        ::unlink(file.c_str());
+        ::rmdir(folder.c_str());
+    }
 #endif
 }
 

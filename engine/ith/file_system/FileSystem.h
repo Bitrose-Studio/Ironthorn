@@ -59,10 +59,13 @@ struct DirectoryEntry {
     // The name in UTF-8. When the name is not valid Unicode (an unpaired surrogate on Windows,
     // bytes that aren't UTF-8 elsewhere) this is a lossy display name with U+FFFD in place of the
     // bad parts, and `validName` is false: the entry can be reported but not opened by this name.
+    // A POSIX name holding '\' is kept as it is, with `validName` false too: every function here
+    // takes '\' for a separator, so the name can't address the entry (and could lead elsewhere).
     std::string name;
     FileKind kind = FileKind::Other;
     // The size in bytes of a file or of a link's target file; 0 for anything else.
     std::uint64_t size = 0;
+    // False when `name` can't be used to open the entry: never join it into a path.
     bool validName = true;
 };
 

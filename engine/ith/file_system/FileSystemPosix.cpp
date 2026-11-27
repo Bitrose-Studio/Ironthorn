@@ -466,11 +466,13 @@ Expected<std::vector<DirectoryEntry>> listDirectory(std::string_view path) {
         }
         const FileInfo info =
             infoOf(status, [&](struct stat& target) { return ::fstatat(directory, item->d_name, &target, 0) == 0; });
-        const bool valid = isValidUtf8(name);
-        entries.push_back(DirectoryEntry{.name = valid ? std::string(name) : detail::lossyUtf8(name),
+        // A name with a backslash is legal here, but every fs function takes '\' for a separator,
+        // so the entry can't be addressed by its name.
+        const bool utf8 = isValidUtf8(name);
+        entries.push_back(DirectoryEntry{.name = utf8 ? std::string(name) : detail::lossyUtf8(name),
                                          .kind = info.kind,
                                          .size = info.size,
-                                         .validName = valid});
+                                         .validName = utf8 && name.find('\\') == std::string_view::npos});
     }
     return entries;
 }
