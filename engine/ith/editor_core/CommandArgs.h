@@ -9,6 +9,7 @@
 #include "ith/foundation/Expected.h"
 #include "ith/foundation/Uuid.h"
 #include "ith/reflection/OwnedValue.h"
+#include "ith/serialization/Document.h"
 #include "ith/serialization/Error.h"
 #include "ith/serialization/Value.h"
 
@@ -46,20 +47,33 @@ optionalString(std::string_view command, const serialization::Value& args, std::
 [[nodiscard]] Expected<std::optional<Uuid>> optionalId(std::string_view command, const serialization::Value& args,
                                                        std::string_view key);
 
-// The live entity with the stable id, or "editor.entity.not_found".
-[[nodiscard]] Expected<Entity> liveEntity(const EditorSession& session, std::string_view command, const Uuid& id);
+// The live entity of the active world (EditorSession::active) with the stable id, or
+// "editor.entity.not_found".
+[[nodiscard]] Expected<Entity> liveEntity(EditorSession& session, std::string_view command, const Uuid& id);
 
-// The entities of "ids", or the selection when it is missing; at least one, each live, no repeats.
-[[nodiscard]] Expected<std::vector<Entity>> targets(const EditorSession& session, std::string_view command,
+// The entities of "ids", or the active selection when it is missing; at least one, each live in the
+// active world, no repeats.
+[[nodiscard]] Expected<std::vector<Entity>> targets(EditorSession& session, std::string_view command,
                                                     const serialization::Value& args);
+
+// The mapping that writes an entity of `world` as its stable id (the nil id when it has none or
+// belongs to another world) and reads an id as `world`'s live entity with it. `world` must outlive it.
+[[nodiscard]] serialization::EntityMapping stableIdMapping(const World& world);
+
+// The Outliner label of `entity` of `world`: its EditorLabel, or, in a game world, which has none,
+// the label of the editor world's entity with the same stable id (ADR-0053 decision 15); null when
+// neither has one. The pointer is into a component of `world` or of the editor world: valid only
+// until either world's structure or that label changes, so copy it before running a command.
+[[nodiscard]] const std::string* labelOf(const EditorSession& session, const World& world, Entity entity);
 
 // A component type of the session's registry that commands may add, remove or edit (not StableId,
 // Children or DisabledInHierarchy).
 [[nodiscard]] Expected<const TypeInfo*> componentType(const EditorSession& session, std::string_view command,
                                                       std::string_view name);
 
-// `json` read as a value of `type` with unknown fields refused; null or missing: the default.
-[[nodiscard]] Expected<OwnedValue> readValue(const EditorSession& session, const TypeInfo& type,
+// `json` read as a value of `type` with unknown fields refused, entities through the active world's
+// mapping; null or missing: the default.
+[[nodiscard]] Expected<OwnedValue> readValue(EditorSession& session, const TypeInfo& type,
                                              const serialization::Value* json);
 
 [[nodiscard]] serialization::Value idValue(const Uuid& id);
@@ -78,7 +92,8 @@ optionalString(std::string_view command, const serialization::Value& args, std::
 // The sibling after `entity` under its parent or among the roots; null for the last.
 [[nodiscard]] Entity nextSibling(const World& world, Entity entity);
 
-// Applies `patches` in the transaction the registry opened for the command; returns `result`.
+// Applies `patches` in the transaction the registry opened for the command, in the active world;
+// returns `result`.
 [[nodiscard]] Expected<serialization::Value> applyAll(EditorSession& session, std::span<const EntityPatch> patches,
                                                       serialization::Value result = {});
 

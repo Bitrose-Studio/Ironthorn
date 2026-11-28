@@ -152,7 +152,7 @@ TEST_SUITE("editor_core.files") {
         CHECK(run(session, "ith.query.entity", R"({"id": )" + quoted(1) + "}").find("label")->asString() ==
               "Saved first");
         session.document().setPlaying(true);
-        fails(session, "ith.file.new_level", "{}", "editor.command.disabled");
+        fails(session, "ith.file.new_level", "{}", "editor.command.playing");
         session.document().setPlaying(false);
     }
 

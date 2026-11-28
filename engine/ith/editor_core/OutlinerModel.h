@@ -18,6 +18,13 @@
 // moved, and the tree's selected keys follow the editor's Selection when its counter moved, so a
 // value edit or a gizmo drag never rebuilds the Outliner.
 //
+// Play In Editor (ADR-0053 decisions 12, 14 and 15). The model lists the active world
+// (EditorSession::active): the game world while a session runs, labelled with the editor twins'
+// labels, and the play selection. Entities spawned during play have no stable id; they are listed as
+// "Spawned <slot index>" with `spawned` set and can't be selected. The rows also rebuild when the
+// active world's identity changes, so Play and Stop always rebuild them. Rename, Delete, Enabled and
+// drops are refused by their commands while playing.
+//
 // Every change goes through a command (ADR-0037 rule 1): clicks through ith.selection.set, rename
 // through ith.edit.rename, Delete through ith.edit.delete and ith.edit.delete_with_children, the
 // Enabled toggle through ith.entity.set_enabled, and drag and drop through ith.entity.attach and
@@ -40,8 +47,11 @@ class EditorSession;
 
 // One entity of the Outliner, parallel to the tree's items.
 struct OutlinerEntry {
+    // The nil id for an entity spawned during play.
     Uuid id;
     std::string label;
+    // Spawned in the game world during play: no stable id, shown greyed, not selectable.
+    bool spawned = false;
     // The entity has the Disabled tag itself.
     bool disabled = false;
     // The entity or one of its ancestors is disabled: queries skip it (ADR-0031 rule 9).
@@ -90,7 +100,12 @@ public:
     // The search box: shows the entities whose label contains `text` and their ancestors.
     void setFilter(std::string text) { m_tree.setFilter(std::move(text)); }
 
-    // Selects as a click on the row of `id` does (ith.selection.set).
+    // How many times the rows were rebuilt; for tests and benchmarks.
+    [[nodiscard]] std::uint64_t rebuilds() const noexcept { return m_rebuilds; }
+
+    // Selects as a click on the row of `id` does (ith.selection.set). Fails with
+    // "editor.outliner.not_selectable" for the nil id (a spawned entity's row); a Shift-click range
+    // skips spawned rows.
     Expected<void> click(const Uuid& id, OutlinerClick how);
 
     // Inline rename. beginRename starts editing the label of the primary selection (the F2 prompt;
@@ -141,6 +156,8 @@ private:
     EditorSession* m_session;
     TreeViewModel m_tree;
     std::vector<OutlinerEntry> m_entries;
+    std::uint64_t m_rebuilds = 0;
+    std::uint64_t m_seenWorld = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t m_seenStructure = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t m_seenDocument = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t m_seenSelection = std::numeric_limits<std::uint64_t>::max();

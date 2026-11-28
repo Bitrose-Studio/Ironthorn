@@ -12,8 +12,8 @@
 //   session.waitIdle(); // the file is written
 //
 // The session registers the built-in commands of editor_core (the Edit, Entity, Selection, File,
-// Query, Window, Viewport and Content commands); editor_ui and game editor modules add theirs to the same
-// registry. `types` names the component types that commands and level files may use and must
+// Query, Window, Viewport, Content and Play commands); editor_ui and game editor modules add theirs to
+// the same registry. `types` names the component types that commands and level files may use and must
 // outlive the session. Headless: tests and automation use it directly. Main thread only.
 //
 // Files. Saving serializes the level on the main thread (it reads the world) and writes the file
@@ -21,18 +21,27 @@
 // the main thread. Results come back through the job system's main-thread queue, which the
 // application drains every frame (ADR-0035 rule 22). Without a job system both happen at once on
 // the calling thread. Relative paths are relative to the project directory.
+//
+// Play In Editor (ADR-0053). startPlay copies the editor world into a PlaySession's game world and
+// sets the document's play flag; stopPlay discards the session. While one exists, active() is the
+// game world's set, so the selection commands, the four value commands of the Details panel, the
+// world queries and the view models act on the game world; the file commands, the history and the
+// document keep using document().
 
+#include "ith/ecs/Schedule.h"
 #include "ith/editor_core/CommandRegistry.h"
 #include "ith/editor_core/ContentBrowserModel.h"
 #include "ith/editor_core/EditorDocument.h"
 #include "ith/editor_core/LayoutSession.h"
 #include "ith/editor_core/PanelRegistry.h"
+#include "ith/editor_core/PlaySession.h"
 #include "ith/editor_core/Viewports.h"
 #include "ith/foundation/Expected.h"
 #include "ith/jobs/JobCounter.h"
 #include "ith/serialization/Document.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -57,6 +66,29 @@ struct EditorSessionOptions {
     // The layered configuration that holds the named layouts and the default choice (ADR-0040);
     // null: only the built-in default layout exists. It must outlive the session.
     Config* config = nullptr;
+    // The game modules' systems, which every Play In Editor session's game world runs after the
+    // engine's game-world systems (ADR-0053 decision 3, ADR-0017 rule 5); the editor world never
+    // runs them. Empty in P2.
+    std::vector<SystemDescriptor> gameSystems;
+};
+
+// The world commands and panels act on (ADR-0053 decision 12): the game world's set while a play
+// session exists, the editor document's otherwise. Valid until the next startPlay or stopPlay.
+struct ActiveWorld {
+    // Read-only: changes go through `transactions`.
+    const World& world;
+    Transactions& transactions;
+    Selection& selection;
+    EditorChanges& changes;
+    // Entities as stable ids in JSON, for this world.
+    const serialization::EntityMapping& entities;
+    // 0 for the editor world, the play session's identity for a game world: never the same for two
+    // worlds one EditorSession showed, so a view model that keys its cache on it as well as on the
+    // counters rebuilds whenever the world changes, even when the counters happen to match.
+    std::uint64_t identity = 0;
+
+    // True for a game world.
+    [[nodiscard]] bool game() const noexcept { return identity != 0; }
 };
 
 // The session layout's file, relative to the project directory (ADR-0035 rule 13, ADR-0040 rule 12).
@@ -118,12 +150,43 @@ public:
 
     [[nodiscard]] const EditorSessionOptions& options() const noexcept { return m_options; }
 
+    // The world commands and panels act on now (ActiveWorld).
+    [[nodiscard]] ActiveWorld active() noexcept;
+
+    // The play session, or null when none exists.
+    [[nodiscard]] PlaySession* play() noexcept { return m_play.get(); }
+
+    [[nodiscard]] const PlaySession* play() const noexcept { return m_play.get(); }
+
+    // Whether a session can start now, checked in the spec's order (ADR-0053 decision 7):
+    // "editor.play.running" (a session exists), "editor.document.busy" (a level is being opened),
+    // "editor.command.interaction_open" (an editor-world transaction is open).
+    [[nodiscard]] Expected<void> canStartPlay() const;
+
+    // Starts Play (possessed) or Simulate (ejected) on the editor world as it is in memory, paused
+    // when `paused` (ADR-0053 decision 7): canStartPlay, PlaySession::start with
+    // options().gameSystems, then the document's play flag. Fails, changing nothing, with
+    // canStartPlay's errors, the schedule's "ecs.schedule.*" error (logged) and
+    // "editor.play.copy_failed". Precondition (asserted): not called from inside a command run by
+    // another command (CommandRegistry::depth at most 1), whose scopes may point at the game world.
+    Expected<void> startPlay(PlayMode mode, bool paused = false);
+
+    // Stops the session (ADR-0053 decision 10); does nothing without one. It can't fail: an open
+    // game-world transaction is dropped without replaying it (Transactions::abandonOpen; the world
+    // goes with it), the session and its world are destroyed, and the play flag is cleared. The
+    // editor world, its history, dirty state and selection are as before Play. A scope still held on
+    // the game world's transactions (a Details drag) must then be dropped with
+    // TransactionScope::release, never ended. Game-world entity handles must not be kept across
+    // Stop: world ids are recycled, so the next session's world may have the same id. Precondition
+    // (asserted): as for startPlay.
+    void stopPlay();
+
     // Runs a command: commands().execute(*this, id, args).
     Expected<serialization::Value> execute(std::string_view id, const serialization::Value& args = {});
 
     // The entity mapping between the editor world and JSON: an entity is written as its stable id
-    // (the nil id when it has none), and an id reads as the live entity that has it (the null
-    // handle when none does).
+    // (the nil id when it has none or isn't of the editor world), and an id reads as the live entity
+    // that has it (the null handle when none does). active().entities is the active world's.
     [[nodiscard]] const serialization::EntityMapping& entityMapping() const noexcept { return m_mapping; }
 
     // `path` made absolute: relative paths are joined to the project directory.
@@ -233,15 +296,20 @@ private:
     std::vector<Error> m_warnings;
     // The dropped undo references already reported by takeWarnings.
     std::size_t m_reportedDropped = 0;
+    // The identity the last play session got.
+    std::uint64_t m_playSessions = 0;
+    // Last, so it is destroyed first: nothing outlives the world it refers to.
+    std::unique_ptr<PlaySession> m_play;
 };
 
 // Register the built-in commands (EditCommands.cpp, FileCommands.cpp, QueryCommands.cpp,
-// LayoutCommands.cpp, ViewportCommands.cpp, ContentCommands.cpp).
+// LayoutCommands.cpp, ViewportCommands.cpp, ContentCommands.cpp, PlayCommands.cpp).
 void registerEditCommands(CommandRegistry& registry);
 void registerFileCommands(CommandRegistry& registry);
 void registerQueryCommands(CommandRegistry& registry);
 void registerLayoutCommands(CommandRegistry& registry);
 void registerViewportCommands(CommandRegistry& registry);
 void registerContentCommands(CommandRegistry& registry);
+void registerPlayCommands(CommandRegistry& registry);
 
 } // namespace ith

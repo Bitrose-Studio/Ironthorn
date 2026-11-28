@@ -3,12 +3,14 @@
 #include "ith/ecs/Hierarchy.h"
 #include "ith/ecs/StableId.h"
 #include "ith/ecs/World.h"
+#include "ith/editor_core/CommandArgs.h"
 #include "ith/editor_core/EditorLabel.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/foundation/Hash.h"
 #include "ith/serialization/Value.h"
 
 #include <algorithm>
+#include <string>
 #include <utility>
 
 namespace ith {
@@ -37,23 +39,39 @@ bool contains(std::span<const Uuid> ids, const Uuid& id) {
     return std::ranges::any_of(ids, [&id](const Uuid& other) { return other == id; });
 }
 
-void appendEntries(const World& world, Entity entity, std::uint32_t depth, bool parentDisabled,
-                   std::vector<TreeItem>& items, std::vector<OutlinerEntry>& entries) {
+// The tree key of an entity spawned during play, which has no stable id: from its slot index and
+// generation, so another entity in a reused slot is another row.
+std::uint64_t spawnedKey(Entity entity) noexcept {
+    constexpr std::uint64_t kSpawnedSeed = 0x5370'6177'6E65'6400ULL; // "Spawned"
+    return hashCombine(hashCombine(kSpawnedSeed, entity.index()), entity.generation());
+}
+
+void appendEntries(const EditorSession& session, const World& world, Entity entity, std::uint32_t depth,
+                   bool parentDisabled, bool showSpawned, std::vector<TreeItem>& items,
+                   std::vector<OutlinerEntry>& entries) {
     const auto* stable = world.get<const StableId>(entity);
-    if (stable == nullptr) {
+    if (stable == nullptr && !showSpawned) {
         return;
     }
-    const auto* label = world.get<const EditorLabel>(entity);
-    OutlinerEntry entry{.id = stable->id,
-                        .label = label != nullptr ? label->name : stable->id.toString(),
-                        .disabled = world.has<Disabled>(entity)};
+    OutlinerEntry entry{.disabled = world.has<Disabled>(entity)};
+    std::uint64_t key = 0;
+    if (stable != nullptr) {
+        const std::string* label = detail::labelOf(session, world, entity);
+        entry.id = stable->id;
+        entry.label = label != nullptr ? *label : stable->id.toString();
+        key = OutlinerModel::keyOf(stable->id);
+    } else {
+        entry.label = "Spawned " + std::to_string(entity.index());
+        entry.spawned = true;
+        key = spawnedKey(entity);
+    }
     entry.disabledInHierarchy = parentDisabled || entry.disabled;
-    items.push_back(TreeItem{.key = OutlinerModel::keyOf(stable->id), .depth = depth, .label = entry.label});
+    items.push_back(TreeItem{.key = key, .depth = depth, .label = entry.label});
     const bool disabled = entry.disabledInHierarchy;
     entries.push_back(std::move(entry));
     if (const auto* children = world.get<const Children>(entity)) {
         for (const Entity child : children->entities) {
-            appendEntries(world, child, depth + 1, disabled, items, entries);
+            appendEntries(session, world, child, depth + 1, disabled, showSpawned, items, entries);
         }
     }
 }
@@ -67,8 +85,12 @@ std::uint64_t OutlinerModel::keyOf(const Uuid& id) noexcept {
 }
 
 void OutlinerModel::update() {
-    const EditorChanges& changes = m_session->document().changes();
-    if (changes.structure() != m_seenStructure || changes.document() != m_seenDocument) {
+    const ActiveWorld active = m_session->active();
+    const EditorChanges& changes = active.changes;
+    // Another world (Play, Stop) always rebuilds, whatever its counters say (ADR-0053 decision 12).
+    if (active.identity != m_seenWorld || changes.structure() != m_seenStructure ||
+        changes.document() != m_seenDocument) {
+        m_seenWorld = active.identity;
         m_seenStructure = changes.structure();
         m_seenDocument = changes.document();
         rebuild();
@@ -82,10 +104,13 @@ void OutlinerModel::update() {
 }
 
 void OutlinerModel::rebuild() {
-    const World& world = m_session->document().world();
+    ++m_rebuilds;
+    const ActiveWorld active = m_session->active();
+    const World& world = active.world;
     std::vector<TreeItem> items;
     m_entries.clear();
-    world.forEachRoot([&](Entity root) { appendEntries(world, root, 0, false, items, m_entries); });
+    world.forEachRoot(
+        [&](Entity root) { appendEntries(*m_session, world, root, 0, false, active.game(), items, m_entries); });
     m_tree.setItems(std::move(items));
     if (m_renaming.has_value() && find(*m_renaming) == nullptr) {
         cancelRename();
@@ -94,7 +119,7 @@ void OutlinerModel::rebuild() {
 
 void OutlinerModel::syncSelection() {
     std::vector<std::uint64_t> keys;
-    for (const Uuid& id : m_session->document().selection().entities()) {
+    for (const Uuid& id : m_session->active().selection.entities()) {
         if (find(id) != nullptr) {
             keys.push_back(keyOf(id));
             // A selected entity's row is shown, as when it is selected in the viewport.
@@ -118,12 +143,15 @@ const OutlinerEntry* OutlinerModel::find(const Uuid& id) const {
 }
 
 Expected<void> OutlinerModel::click(const Uuid& id, OutlinerClick how) {
+    if (id.isNil()) {
+        return makeError("editor.outliner.not_selectable", "an entity spawned during play can't be selected");
+    }
     std::vector<Uuid> ids;
     std::string_view mode = "replace";
     if (how == OutlinerClick::Range && m_anchor.has_value() && find(*m_anchor) != nullptr) {
         for (const std::uint64_t key : m_tree.range(keyOf(*m_anchor), keyOf(id))) {
             const std::optional<std::size_t> item = m_tree.find(key);
-            if (item.has_value() && !(m_entries[*item].id == id)) {
+            if (item.has_value() && !m_entries[*item].spawned && !(m_entries[*item].id == id)) {
                 ids.push_back(m_entries[*item].id);
             }
         }
@@ -142,7 +170,7 @@ Expected<void> OutlinerModel::click(const Uuid& id, OutlinerClick how) {
 }
 
 bool OutlinerModel::beginRename() {
-    const std::optional<Uuid> primary = m_session->document().selection().primary();
+    const std::optional<Uuid> primary = m_session->active().selection.primary();
     return primary.has_value() && beginRename(*primary);
 }
 
@@ -178,7 +206,7 @@ Expected<void> OutlinerModel::deleteSelection(bool withChildren) {
 }
 
 Expected<void> OutlinerModel::setEnabled(const Uuid& id, bool enabled) {
-    const Selection& selection = m_session->document().selection();
+    const Selection& selection = m_session->active().selection;
     Value args = Value::object();
     args.set("ids", selection.contains(id) ? idsValue(selection.entities()) : idsValue(std::span(&id, 1)));
     args.set("enabled", Value::boolean(enabled));
@@ -186,7 +214,7 @@ Expected<void> OutlinerModel::setEnabled(const Uuid& id, bool enabled) {
 }
 
 std::vector<Uuid> OutlinerModel::dragSet(const Uuid& grabbed) const {
-    const Selection& selection = m_session->document().selection();
+    const Selection& selection = m_session->active().selection;
     if (!selection.contains(grabbed)) {
         return {grabbed};
     }

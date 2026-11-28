@@ -42,15 +42,27 @@ panels and automation all call `registry.execute(session, id, args)`.
 
 | Kind | What it is | Refused |
 |---|---|---|
-| `Edit` | changes the world, inside one transaction named by the display name; a failure cancels it | while playing, and while an interaction holds a transaction open |
-| `Action` | changes editor state without its own transaction (undo, redo, selection, files) | while an interaction holds a transaction open |
+| `Edit` | changes the [active world](#play-in-editor), inside one transaction named by the display name; a failure cancels it | while playing unless `playEditable`, and while an interaction holds a transaction open in either world |
+| `Action` | changes editor state without its own transaction (undo, redo, selection, files, play) | while an interaction holds a transaction open in either world, unless `runsDuringInteraction` |
 | `Query` | reads only | never |
 
 While a level is being opened, `Edit` and `Action` commands are refused with
 `editor.document.busy`. `canExecute` failures come back as `editor.command.disabled` with the
-reason. Arguments and results are JSON objects (`serialization::Value`): entities by stable id,
-components by fully qualified type name, values as `fromValue` reads them, unknown fields
-refused. Commands that take `ids` use the selection when it is left out.
+reason, except the refusals the Play In Editor spec names, which keep their codes:
+`editor.command.playing`, `editor.command.interaction_open`, `editor.command.nested`,
+`editor.document.busy` and every `editor.play.*` code. Arguments and results are JSON objects (`serialization::Value`): entities by
+stable id, components by fully qualified type name, values as `fromValue` reads them, unknown
+fields refused. Commands that take `ids` use the active selection when it is left out.
+
+`CommandDesc::playEditable` marks the `Edit` commands that run on the game world while a play
+session exists ([ADR-0053](../decisions/0053-play-in-editor-and-simulate.md) decision 13): the four
+value commands `ith.entity.set_property`, `reset_property`, `insert_element` and `erase_element`.
+They run in a transaction of the game world's `Transactions`, whose history is private and never
+undone, so they leave the editor world, its history and its dirty state alone.
+`CommandDesc::runsDuringInteraction` marks the Actions that run while an interaction is open: the
+play commands (Stop drops a game-world drag, Step and Pause keep the game going during one). The
+registry asserts that only `Edit` commands set `playEditable` and only Actions set
+`runsDuringInteraction`. `CommandRegistry::depth()` is how many executes are running.
 
 Built-in commands:
 
@@ -75,11 +87,15 @@ Built-in commands:
 | `ith.file.open_level` | `path` or `id`, `unsaved` | Open a level file, by path or by asset id; finishes in the background |
 | `ith.file.save`, `ith.file.save_as` | `path` (Save As) | Save the level; the write finishes in the background. Save As replaces an existing file without asking (the dialog asks), gives the level a new id on a new path and takes an overwritten level's id (see Level files) |
 | `ith.query.document` | | `path`, `levelId`, `dirty`, `saving`, `opening`, `playing`, `entities`, `lastError` |
-| `ith.query.selection` | | `entities`, `primary` |
-| `ith.query.entity` | `id` | `label`, `parent`, `children` and `components` (JSON, entities as stable ids) |
-| `ith.query.find` | `label` | `ids`, in Outliner order |
+| `ith.query.selection` | `world` | `entities`, `primary` |
+| `ith.query.entity` | `id`, `world` | `label`, `parent`, `children` and `components` (JSON, entities as stable ids) |
+| `ith.query.find` | `label`, `world` | `ids`, in Outliner order |
 | `ith.query.history` | | `entries` (names), `cursor`, `canUndo`, `canRedo` |
-| `ith.query.world_hash` | | `hash` of the level as it would be saved, `entities` |
+| `ith.query.world_hash` | `world` | `hash` of the level as it would be saved, `entities` |
+
+The selection, entity, find and world-hash queries read the active world; `world` (`"editor"` or
+`"game"`) reads that one instead, `"game"` failing with `editor.play.not_running` without a
+session. The play commands and `ith.query.play` are listed under [Play In Editor](#play-in-editor).
 
 ## Transactions and undo
 
@@ -103,7 +119,14 @@ drag.commit();       // one undo entry; or drag.cancel() on Esc
 - The document is dirty while the history is not at the saved marker; undoing back to it makes
   the document clean again. A saved position that can't come back keeps it dirty until the next
   save.
-- While playing, nothing is undoable and `Edit` commands are refused.
+- While playing, nothing is undoable and `Edit` commands are refused, except the `playEditable`
+  ones, which change the game world and record nothing.
+- `TransactionScope::release()` forgets a scope whose `Transactions` is gone without touching it:
+  the game world's are destroyed at Stop, which first drops their open transaction with
+  `abandonOpen()` (no replay: the world goes with it).
+- `setForeignWriters(true)` (the game world's, set by `PlaySession`): game systems change the world
+  outside the transactions, so an inverse that no longer applies when a drag is cancelled is
+  dropped and logged as a warning instead of asserting.
 - Selecting alone makes no entry: entries carry the selection, and undo and redo restore it.
 
 ## Change counters
@@ -115,7 +138,74 @@ drag.commit();       // one undo entry; or drag.cancel() on Esc
 Each view model keeps the `values` generation it last saw and asks
 `touchedSince(seen)` which entities' values changed after it, so several panels read the same
 changes. The log behind it keeps the last 4,096 bumps; a panel that fell further behind gets
-`nullopt` and refreshes everything.
+`nullopt` and refreshes everything. `bumpAllValues()` says "every value may have changed": it
+empties the log, so every older generation gets `nullopt`. A game world's tick bumps it.
+
+## Play In Editor
+
+```cpp
+session.startPlay(ith::PlayMode::Simulate, /*paused*/ true); // or ith.play.simulate {"paused": true}
+session.play()->step(3, 1.0 / 60.0);                         // or ith.play.step {"frames": 3}
+session.play()->tick(input.frameTimeNs());                   // the editor, once per frame
+session.stopPlay();                                          // or ith.play.stop
+```
+
+[ADR-0053](../decisions/0053-play-in-editor-and-simulate.md) and the
+[spec](../specs/play-in-editor.md). `ith::PlaySession` (`PlaySession.h`) is one run from Play or
+Simulate to Stop; `EditorSession` owns it while it exists (`play()`, null otherwise).
+
+- **Start** (`startPlay`): `canStartPlay()` refuses, in this order, with `editor.play.running`,
+  `editor.document.busy` and `editor.command.interaction_open` (Play and Simulate use it as their
+  `canExecute` too); then `gameplay`'s `buildGameSchedule` with
+  `EditorSessionOptions::gameSystems` (empty in P2; its `ecs.schedule.*` error is logged), a new
+  `World` filled by `copyWorld` with `excludeEditorOnly` (`editor.play.copy_failed` when refused),
+  a default `ith::Time`, the play selection set to the editor selection, and the document's play
+  flag. Nothing is read from or written to disk, so an untitled level plays as it is. Each failure
+  changes nothing. Play starts possessed, Simulate ejected; `paused` starts it paused.
+- **Ticking**: `tick(nowNs)` runs `tickGameWorld` with the time since its previous call; the first
+  call after a start or a resume only records the time, so time spent paused never reaches the
+  game. Paused, it does nothing. `step(frames, seconds)` runs ticks of exactly `seconds`; headless
+  sessions tick only that way. After every tick the game world's `EditorChanges` bump `structure`
+  when `World::structureGeneration()` moved, and `bumpAllValues()`.
+- **Stop** (`stopPlay`) can't fail: it drops an open game-world interaction without a replay
+  (`abandonOpen`), destroys the session (world, schedule, `Time`, play selection) and clears the
+  play flag. The editor world, history,
+  dirty state and selection are as before Play. The two lifecycle points are marked in code
+  ("`WorldStarted` goes here", "`WorldEnding` goes here") until the engine has events.
+- **The active world** (`active()`, an `ith::ActiveWorld`): the game world's world, `Transactions`,
+  play selection, `EditorChanges` and entity mapping while a session exists, the document's
+  otherwise, with an `identity` that differs for every world (0 for the editor world). The selection
+  commands, the four value commands, the world queries, the Outliner and Details models and the
+  keymap's Escape act on it; the file commands and the history use
+  `document()`. The view models key their caches on `identity` too, so Play and Stop always rebuild
+  them. Labels in the game world, which has no `EditorLabel`, are the editor twins'. Entities
+  spawned during play have no stable id: the Outliner lists them as "Spawned <slot>", greyed and
+  not selectable. Game-world entity handles are never kept across Stop, since world ids are
+  recycled; the Details model reports nothing from its handles between Play or Stop and its next
+  `update()`. After a tick, Details compares its shown values with its working copy and refreshes
+  only when one changed.
+- **Nesting**: Play, Simulate and Stop create or destroy the game world and its transactions, so
+  they refuse to run from inside another command with `editor.command.nested`; `startPlay` and
+  `stopPlay` assert that they aren't called from a nested command.
+- **Refused while playing** with `editor.command.playing`: Undo, Redo, every `Edit` command but the
+  four value commands (`ith.entity.set_enabled` included: it adds or removes `Disabled`), New Level,
+  Open Level, opening a level from the Content Browser, Save and Save As. The Content Browser's file
+  operations stay allowed.
+
+| Id | Arguments | Result | Refused with |
+|---|---|---|---|
+| `ith.play.play`, `ith.play.simulate` | `paused` | `state`, `possessed`, `paused`, `viewport` | `editor.play.running`, `editor.document.busy`, `editor.command.interaction_open`, `editor.command.nested` |
+| `ith.play.stop` | | `state: "stopped"` | `editor.play.not_running`, `editor.command.nested` |
+| `ith.play.pause` | `paused` (without it: toggles) | `paused` | `editor.play.not_running` |
+| `ith.play.step` | `frames` (1 to 1000, default 1), `deltaSeconds` ((0, 0.1], default 1/60) | `frame`, `elapsed` | `editor.play.not_running`, `editor.play.not_paused`, `editor.command.invalid_args` |
+| `ith.play.possess_or_eject` | `possess` (without it: toggles) | `possessed` | `editor.play.not_running` |
+| `ith.play.free_mouse` | | `captured: false` | `editor.play.not_running` |
+| `ith.query.play` | | `state`, `possessed`, `paused`, `captured`, `viewport`, `frame`, `elapsed`, `entities`, `spawned` | never |
+
+Not here yet (later slices of ADR-0053): the selected viewport (the play viewport is always
+`ith.viewport.1`), the camera saved at start and restored at Stop, the spectator, Possess and Eject
+beyond the flag, mouse capture (`captured` is always false), the Play In Editor input consumer,
+Keep Simulation Changes and its K binding, and the UI.
 
 ## Editor camera
 
@@ -860,8 +950,8 @@ between frames, so keys in the same batch of events reach the right context.
 `KeymapConsumer` is the keymap consumer of an editor window's input stack (ADR-0029 rule 7). It
 invokes the bound command of a key press (`CommandRegistry::invoke`, so a prompt can ask for
 input); letter keys follow the user's layout, so Ctrl + Z is the key that prints Z. While an
-interaction holds a transaction open, Escape cancels it (`Transactions::cancelOpen`) and other keys
-go on to the consumers below.
+interaction holds a transaction open, in the editor world or the game world, Escape cancels it
+(`Transactions::cancelOpen`) and other keys go on to the consumers below.
 
 ## Preferences
 
@@ -905,7 +995,7 @@ runner serves the headless tests and the editor's `--automation` run.
   under scaled, rotated, stretched and collapsed parents, one undo entry and none for a second
   End), and the WorldTransforms an opened level gets without an undo entry;
 - the keymap tests: chords, layers and conflicts, the Content context beside the Editor's, the
-  engine's `Keymap.json` (every id registered or listed as coming with a later step; the viewport
+  engine's `Keymap.json` (every id registered, the Play In Editor ones too; the viewport
   keys resolve), and the consumer;
 - the Content Browser tests (`ContentBrowserTests.cpp`, spec requirements 1 to 15, 50 to 52, 54,
   55, 57 and 58) in a temporary project with an asset database: folders, assets, hidden files and
@@ -987,7 +1077,8 @@ runner serves the headless tests and the editor's `--automation` run.
   changing nothing;
 - the automation tests: the matcher, script errors, every script in `tests/editor_core/scripts`
   run in a fresh project with an asset database (`content_browser.json` browses the levels it
-  saves, then creates, renames, duplicates, moves, deletes and imports content), and the **coverage
+  saves, then creates, renames, duplicates, moves, deletes and imports content; `play_in_editor.json`
+  starts a paused session, steps it and runs every play command and query), and the **coverage
   test**, which fails when a registered command is run by no script. A new command therefore comes
   with a script step;
 - the view-model tests: the tree's rows, filter, expansion and ranges; the Outliner's order,
@@ -995,6 +1086,29 @@ runner serves the headless tests and the editor's `--automation` run.
   multi-select, clamping, reset, lists, optionals, components, entity references, a drag with live
   preview as one undo entry, Esc and the refresh rule; and a 3,000-step random test of both models
   against the world;
+- the Play In Editor tests (`PlaySessionTests.cpp`, spec requirements 1 to 4, 7 to 17, 28 to 31a,
+  34, 35 and 45; 32 for the selection commands): the play query in every state; every refusal with
+  its code, also through `canExecute`; Play refused while a level opens, during an interaction and
+  with a cyclic game-system list (logged); the game world's entities, hierarchy, order, enabled
+  state and remapped references without `EditorLabel` under another world id; an untitled level
+  playing without touching the disk; game systems running only on the game world and first seeing
+  every value as added; fresh `Time` and resources per session; Step's exact `Time` with a dilation
+  applied the next tick and the same `Time` in every stage; Step's argument limits; the fake clock
+  (the first call after a start or resume, the clamp, a clock going back, pause); a paused edit
+  propagating; the selection commands, queries and labels on the game world with `world`; spawned
+  rows and the Outliner rebuilding only on structure; Play and Stop rebuilding the view models; the
+  four value commands and a Details drag (Step and Play during it, Esc through the keymap
+  consumer, `ith.play.stop` while it is open) changing only the game world; Play, Simulate and Stop
+  refused from inside another command; the registry's flag asserts; a system despawning a dragged
+  entity before Esc and Stop; Details refreshing on a tick only when a shown value changed, and
+  reporting nothing from stale handles after Play and Stop; a reused slot giving a spawned row a
+  new key; the structural, history and file refusals writing nothing;
+  the content file operations working during play; Stop restoring the editor world, history, dirty
+  state and selection, and the next Play getting a fresh world; and `bumpAllValues`;
+- the Play In Editor benchmark (`PlaySessionBenchmark.cpp`, CTest `play_session_benchmark`, label
+  `benchmark`): start and Stop on 10 000 entities against 100 ms and 50 ms, the session's own work
+  per tick against 0.25 ms, allocations per tick and the Outliner and Details work per tick (spec
+  requirements 46 to 48);
 - a randomized model test: thousands of random commands mixed with undo and redo, checked against
   the level text after each entry, plus the P2 step 7 sequence (create, rename, reparent, edit,
   delete, undo all, redo all) compared by level text.

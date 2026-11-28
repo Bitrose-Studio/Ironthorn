@@ -82,8 +82,8 @@ TEST_SUITE("editor_core.commands") {
 
         session.document().setPlaying(true);
         fails(session, "ith.edit.rename", R"({"label": "x"})", "editor.command.playing");
-        fails(session, "ith.edit.undo", "{}", "editor.command.disabled");
-        run(session, "ith.edit.select_none"); // the selection stays available
+        fails(session, "ith.edit.undo", "{}", "editor.command.playing"); // ADR-0053 decision 14
+        run(session, "ith.edit.select_none");                            // the selection stays available
         session.document().setPlaying(false);
 
         {

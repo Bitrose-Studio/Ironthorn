@@ -2,7 +2,8 @@
 # and its world, commands and their registry, transactions and the undo history, selection, change
 # counters, the keymap, the automation runner, the panel registry and layouts, the viewports (cameras,
 # input routing, click picking, the translate gizmo, tools, Focus, Snap to Floor, Add Shape), and the
-# view models of the Outliner, Details and Content Browser panels. Headless: no ImGui, no window, no
+# view models of the Outliner, Details and Content Browser panels, and the Play In Editor session
+# (ADR-0053: the game world, its schedule and tick, Pause and Step). Headless: no ImGui, no window, no
 # GPU, so it is tested on its own and under sanitizers. editor_ui draws its state and issues its
 # commands.
 ith_add_module(editor_core
@@ -50,6 +51,9 @@ ith_add_module(editor_core
         OutlinerModel.cpp
         PanelRegistry.h
         PanelRegistry.cpp
+        PlayCommands.cpp
+        PlaySession.h
+        PlaySession.cpp
         QueryCommands.cpp
         Selection.h
         Selection.cpp
@@ -80,6 +84,7 @@ ith_add_module(editor_core
         serialization
         config
         ecs
+        gameplay
         level
         assets
         input

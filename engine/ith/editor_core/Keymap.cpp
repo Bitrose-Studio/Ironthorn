@@ -204,10 +204,13 @@ InputReply KeymapConsumer::onInputEvent(const Event& event) {
     if (event.type != EventType::KeyDown || event.repeat) {
         return InputReply::NotConsumed;
     }
-    Transactions& transactions = m_session->document().transactions();
-    if (transactions.isOpen()) {
+    // An interaction in either world: the editor world's, or the game world's while playing.
+    Transactions& editor = m_session->document().transactions();
+    Transactions& active = m_session->active().transactions;
+    if (editor.isOpen() || active.isOpen()) {
         if (event.key == Key::Escape) {
-            transactions.cancelOpen();
+            editor.cancelOpen();
+            active.cancelOpen();
             return InputReply::Consumed;
         }
         return InputReply::NotConsumed;

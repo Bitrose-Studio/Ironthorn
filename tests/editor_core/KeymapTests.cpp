@@ -33,11 +33,6 @@ using ith::test::editor::json;
 using ith::test::editor::run;
 using ith::test::editor::types;
 
-// Commands of Keymap.json that later editor work registers: Play In Editor (step 13).
-constexpr std::string_view kLaterCommands[] = {
-    "ith.play.play", "ith.play.simulate", "ith.play.stop", "ith.play.free_mouse", "ith.play.possess_or_eject",
-};
-
 Keymap keymapOf(const EditorSession& session, const std::vector<std::string_view>& layers,
                 std::vector<ith::Error>& warnings) {
     std::vector<ith::serialization::Value> values;
@@ -147,7 +142,7 @@ TEST_SUITE("editor_core.keymap") {
         CHECK(hasWarning(clash, "editor.keymap.conflict"));
     }
 
-    TEST_CASE("the engine's Keymap.json loads cleanly; its ids are registered or come with a later step") {
+    TEST_CASE("the engine's Keymap.json loads cleanly and names only registered commands (requirement 45)") {
         EditorSession session(types());
         // The engine layer as the build copies it: engine/config (the tests run from the source directory).
         const ith::Config config({{.name = "engine", .directory = "engine/config"}});
@@ -155,16 +150,18 @@ TEST_SUITE("editor_core.keymap") {
         const Keymap keymap = Keymap::load(config, session.commands(), warnings);
         for (const ith::Error& warning : warnings) {
             CAPTURE(warning.message);
-            CHECK(warning.code == "editor.keymap.unknown_command");
-            const bool later = std::ranges::any_of(kLaterCommands, [&](const std::string_view& id) {
-                return warning.message == "no command " + std::string(id);
-            });
-            CHECK(later);
+            FAIL_CHECK("a warning"); // every bound command is registered, Play In Editor too (ADR-0053)
         }
         CHECK(*keymap.commandFor(chord("Ctrl+Keyboard.Z")) == "ith.edit.undo");
         CHECK(*keymap.commandFor(chord("Ctrl+Alt+Keyboard.S")) == "ith.file.save_as");
         CHECK(*keymap.commandFor(chord("Keyboard.Escape")) == "ith.edit.select_none");
         CHECK(*keymap.commandFor(chord("Keyboard.Escape"), ith::KeymapContext::PlayInEditor) == "ith.play.stop");
+        CHECK(*keymap.commandFor(chord("Alt+Keyboard.P")) == "ith.play.play");
+        CHECK(*keymap.commandFor(chord("Alt+Keyboard.S")) == "ith.play.simulate");
+        CHECK(*keymap.commandFor(chord("Shift+Keyboard.F1"), ith::KeymapContext::PlayInEditor) ==
+              "ith.play.free_mouse");
+        CHECK(*keymap.commandFor(chord("Keyboard.F8"), ith::KeymapContext::PlayInEditor) ==
+              "ith.play.possess_or_eject");
         // The viewport's keys (ADR-0042 rule 29) name registered commands, so they warn no more.
         for (const auto& [key, id] :
              {std::pair{"Keyboard.F", "ith.viewport.focus_selection"},
@@ -183,10 +180,7 @@ TEST_SUITE("editor_core.keymap") {
         for (const ith::KeymapContext context :
              {ith::KeymapContext::Editor, ith::KeymapContext::PlayInEditor, ith::KeymapContext::Content}) {
             for (const auto& [bound, id] : keymap.bindings(context)) {
-                const bool registered = session.commands().find(id) != nullptr;
-                const bool later =
-                    std::ranges::any_of(kLaterCommands, [&](const std::string_view& other) { return other == id; });
-                CHECK_MESSAGE((registered || later), id);
+                CHECK_MESSAGE(session.commands().find(id) != nullptr, id);
             }
         }
     }

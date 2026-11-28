@@ -7,6 +7,7 @@
 #include "ith/editor_core/Selection.h"
 #include "ith/editor_core/UndoHistory.h"
 #include "ith/foundation/Assert.h"
+#include "ith/foundation/Log.h"
 #include "ith/reflection/TypeOf.h"
 
 #include <algorithm>
@@ -15,6 +16,8 @@
 namespace ith {
 
 namespace {
+
+ITH_LOG_CATEGORY(EditorTransactions);
 
 // True when `change`, a Patch of only sets, sets nothing that `older` doesn't also set.
 bool coveredBy(const ComponentChange& change, const ComponentChange& older) {
@@ -97,6 +100,19 @@ void Transactions::cancelOpen() {
     m_depth = 1;
     end(true);
     ++m_epoch;
+}
+
+void Transactions::abandonOpen() noexcept {
+    if (m_depth == 0) {
+        return;
+    }
+    m_depth = 0;
+    ++m_epoch;
+    m_cancelled = false;
+    m_name.clear();
+    m_ids = {};
+    m_inverse.clear();
+    m_selectionBefore.clear();
 }
 
 Expected<void> Transactions::apply(std::span<const EntityPatch> patches) {
@@ -197,10 +213,14 @@ Expected<void> Transactions::replay(std::vector<EntityPatch>& patches, StableIdT
     const std::vector<EntityPatch> live = toLive(*m_world, std::move(patches), ids);
     Expected<std::vector<EntityPatch>> inverse = m_world->applyPatches(live);
     patches.clear();
-    ITH_ASSERT_MSG(inverse.hasValue(),
+    ITH_ASSERT_MSG(inverse.hasValue() || m_foreignWriters,
                    "editor: an undo entry no longer applies; the world changed outside the editor's "
                    "transactions");
     if (!inverse) {
+        if (m_foreignWriters) {
+            ITH_LOG_WARNING(EditorTransactions, "a change of a running game world can't be put back: {}",
+                            inverse.error().message);
+        }
         return makeError("editor.undo.failed", "the change no longer applies: " + inverse.error().message);
     }
     StableIdTable newIds;

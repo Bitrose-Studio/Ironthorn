@@ -66,6 +66,15 @@ public:
         }
     }
 
+    // Bumps `values` as "every value may have changed" (ADR-0053 decision 9), as a tick of a game
+    // world does: the log is emptied, so touchedSince of any older generation returns nullopt and
+    // every panel refreshes what it shows. Allocates nothing.
+    void bumpAllValues() noexcept {
+        ++m_values;
+        m_touched.clear();
+        m_forgotten = m_values;
+    }
+
     // The stable ids of the entities touched by the `values` bumps after generation `since`, each
     // once, in first-touched order; nullopt when the log no longer reaches back to `since`.
     [[nodiscard]] std::optional<std::vector<Uuid>> touchedSince(std::uint64_t since) const {
@@ -93,7 +102,8 @@ private:
     std::uint64_t m_selection = 0;
     std::uint64_t m_document = 0;
     std::deque<Touch> m_touched;
-    // The newest generation dropped from the log; asking from before it can't be answered.
+    // Asking from before this generation can't be answered: the newest one dropped from the log, or
+    // the one bumpAllValues made.
     std::uint64_t m_forgotten = 0;
 };
 

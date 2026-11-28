@@ -32,8 +32,9 @@ add_dependencies(ironthorn_editor ith_engine_config ith_editor_fonts)
 # The editor started by CTest on SDL's offscreen driver, never on a desktop (ADR-0029 rule 18): it
 # draws the shell, runs tests/editor/open_edit_save_reopen.json in a fresh project and exits 0, then
 # runs the layout script tests/editor_core/scripts/layouts.json, the viewport script
-# tests/editor_core/scripts/viewport.json and the Content Browser script
-# tests/editor_core/scripts/content_browser.json in the same project.
+# tests/editor_core/scripts/viewport.json, the Content Browser script
+# tests/editor_core/scripts/content_browser.json and the Play In Editor script
+# tests/editor_core/scripts/play_in_editor.json in the same project.
 # Once on the null device, and once on the software GPU (WARP, lavapipe; label gpu), which
 # compiles and draws the UI shader for real; without a Vulkan driver the latter falls back to the
 # null device. Not in Release: editor applications aren't built there.
@@ -78,8 +79,14 @@ if(IRONTHORN_BUILD_TESTS)
             COMMAND ironthorn_editor --project "${directory}/Project" --user-dir "${directory}/User"
                 --automation "${PROJECT_SOURCE_DIR}/tests/editor_core/scripts/content_browser.json" ${arguments}
             CONFIGURATIONS Debug RelWithDebInfo)
+        # The Play In Editor commands and query (ADR-0053 decision 28), started paused and stepped.
+        add_test(NAME editor_automation_${backend}_play
+            COMMAND ironthorn_editor --project "${directory}/Project" --user-dir "${directory}/User"
+                --automation "${PROJECT_SOURCE_DIR}/tests/editor_core/scripts/play_in_editor.json" ${arguments}
+            CONFIGURATIONS Debug RelWithDebInfo)
         set_tests_properties(editor_automation_${backend} editor_automation_${backend}_layouts
-            editor_automation_${backend}_viewport editor_automation_${backend}_content PROPERTIES
+            editor_automation_${backend}_viewport editor_automation_${backend}_content editor_automation_${backend}_play
+            PROPERTIES
             LABELS "${labels}"
             FIXTURES_REQUIRED editor_project_${backend}
             ENVIRONMENT "SDL_VIDEO_DRIVER=offscreen"
@@ -89,5 +96,7 @@ if(IRONTHORN_BUILD_TESTS)
             DEPENDS editor_automation_${backend}_layouts)
         set_tests_properties(editor_automation_${backend}_content PROPERTIES
             DEPENDS editor_automation_${backend}_viewport)
+        set_tests_properties(editor_automation_${backend}_play PROPERTIES
+            DEPENDS editor_automation_${backend}_content)
     endforeach()
 endif()

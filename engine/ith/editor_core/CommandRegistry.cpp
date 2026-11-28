@@ -8,9 +8,12 @@
 namespace ith {
 
 void CommandRegistry::add(CommandDesc command) {
+    const bool flagsFit = (!command.playEditable || command.kind == CommandKind::Edit) &&
+                          (!command.runsDuringInteraction || command.kind == CommandKind::Action);
+    ITH_ASSERT_MSG(flagsFit, "editor: playEditable is for Edit commands, runsDuringInteraction for Actions");
     const bool valid = !command.id.empty() && command.execute && !m_commands.contains(command.id);
     ITH_ASSERT_MSG(valid, "editor: a command needs a new, non-empty id and an execute function");
-    if (!valid) {
+    if (!valid || !flagsFit) {
         return;
     }
     std::string id = command.id;
@@ -33,18 +36,26 @@ std::vector<const CommandDesc*> CommandRegistry::commands() const {
 
 Expected<void> CommandRegistry::check(EditorSession& session, const CommandDesc& command) const {
     EditorDocument& document = session.document();
-    if (command.kind != CommandKind::Query && m_depth == 0 && document.transactions().isOpen()) {
+    const bool interaction = document.transactions().isOpen() || session.active().transactions.isOpen();
+    if (command.kind != CommandKind::Query && !command.runsDuringInteraction && m_depth == 0 && interaction) {
         return makeError("editor.command.interaction_open",
                          command.id + ": an interaction is in progress; finish or cancel it first");
     }
     if (command.kind != CommandKind::Query && document.opening()) {
         return makeError("editor.document.busy", command.id + ": a level is being opened");
     }
-    if (command.kind == CommandKind::Edit && document.playing()) {
+    const bool editsGameWorld = command.playEditable && session.play() != nullptr;
+    if (command.kind == CommandKind::Edit && document.playing() && !editsGameWorld) {
         return makeError("editor.command.playing", command.id + ": the level can't change while playing");
     }
     if (command.canExecute) {
         if (Expected<void> allowed = command.canExecute(session); !allowed) {
+            // The refusals the Play In Editor spec names keep their code (docs/specs/play-in-editor.md 3.14).
+            const std::string& code = allowed.error().code;
+            if (code == "editor.command.playing" || code == "editor.command.interaction_open" ||
+                code == "editor.command.nested" || code == "editor.document.busy" || code.starts_with("editor.play.")) {
+                return allowed;
+            }
             return makeError("editor.command.disabled", command.id + ": " + allowed.error().message);
         }
     }
@@ -77,7 +88,8 @@ Expected<serialization::Value> CommandRegistry::execute(EditorSession& session, 
         --m_depth;
         return result;
     }
-    TransactionScope scope = session.document().transactions().begin(command->displayName);
+    // The active world's: the game world's for a playEditable command while playing (check).
+    TransactionScope scope = session.active().transactions.begin(command->displayName);
     Expected<serialization::Value> result = command->execute(session, args);
     if (result) {
         scope.commit();

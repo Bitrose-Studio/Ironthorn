@@ -80,4 +80,12 @@ struct Gadget {
     AssetRef asset;
 };
 
+// A world resource a game changes while it plays (Play In Editor: every session starts from the
+// editor world's value).
+struct Score {
+    ITH_TYPE(Resource)
+    ITH_FIELD()
+    std::int32_t points = 0;
+};
+
 } // namespace ith::test::editor

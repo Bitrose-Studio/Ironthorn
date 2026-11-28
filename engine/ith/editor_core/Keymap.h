@@ -163,7 +163,8 @@ private:
 // user's layout (Event::layoutKey), so Ctrl + Z is the key that prints Z; other keys are physical
 // keys. A press that matches a binding is consumed, also
 // when the command refuses to run (its error is kept in lastResult()). While an interaction holds a
-// transaction open, Escape cancels it (Transactions::cancelOpen) and other chords are left to the
+// transaction open, in the editor world or, while playing, in the game world, Escape cancels it
+// (Transactions::cancelOpen) and other chords are left to the
 // consumers below. Key repeats run nothing. The keymap must outlive the consumer.
 class KeymapConsumer final : public InputConsumer {
 public:

@@ -49,7 +49,8 @@ public:
     TransactionScope& operator=(const TransactionScope&) = delete;
     TransactionScope(TransactionScope&& other) noexcept;
     TransactionScope& operator=(TransactionScope&& other) noexcept;
-    // Cancels when neither commit() nor cancel() was called.
+    // Cancels when neither commit() nor cancel() was called. Precondition: the Transactions it came
+    // from still exists, unless release() was called.
     ~TransactionScope();
 
     // Applies `patches` to the world now, as one World::applyPatches, and adds their inverse to the
@@ -64,8 +65,13 @@ public:
     // Ends this scope and cancels the transaction.
     void cancel();
 
-    // True until commit() or cancel().
+    // True until commit() or cancel(). Precondition: the Transactions it came from still exists.
     [[nodiscard]] bool active() const noexcept { return live() != nullptr; }
+
+    // Forgets the transaction without touching it: for a scope whose Transactions is gone, as a
+    // game world's is after Stop (EditorSession::stopPlay), which cancelled it first. The scope is
+    // then inactive and its destructor does nothing.
+    void release() noexcept { m_owner = nullptr; }
 
 private:
     friend class Transactions;
@@ -111,6 +117,17 @@ public:
     // their commit and cancel do nothing. Does nothing when no transaction is open.
     void cancelOpen();
 
+    // Ends the open transaction without applying its inverse and records nothing, for a world that
+    // is about to be destroyed (a game world at Stop). Its scopes become inactive as with cancelOpen.
+    // Does nothing when no transaction is open.
+    void abandonOpen() noexcept;
+
+    // Whether something besides these transactions changes the world: a game world's systems
+    // (PlaySession sets it). Then an inverse that no longer applies when a transaction is cancelled
+    // (an entity it restores was despawned by a system) is dropped and logged as a warning instead
+    // of asserting as a bug; the world keeps what the systems made of it.
+    void setForeignWriters(bool foreign) noexcept { m_foreignWriters = foreign; }
+
     // References into stored values that named entities without a stable id, made null (StoredPatches.h).
     [[nodiscard]] std::size_t droppedReferences() const noexcept { return m_dropped; }
 
@@ -140,6 +157,7 @@ private:
     std::vector<EntityPatch> m_inverse;
     std::vector<Uuid> m_selectionBefore;
     std::size_t m_dropped = 0;
+    bool m_foreignWriters = false;
 };
 
 } // namespace ith

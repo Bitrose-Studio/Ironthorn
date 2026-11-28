@@ -7,8 +7,7 @@
 // and comes with the viewport. The "ith.content." commands other than toggle_drawer are the Content
 // context (ADR-0049 rules 3 and 5): they fire only while the Content Browser has the keyboard focus,
 // and win over the same chord's Editor binding there (F2, Delete and Ctrl + D rename, delete and
-// duplicate content). The Play In Editor commands are registered by the editor work that brings
-// them.
+// duplicate content).
 {
   "format": "ith.config",
   "version": 1,

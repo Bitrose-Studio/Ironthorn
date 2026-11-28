@@ -235,14 +235,25 @@ std::string displayNameOf(std::string_view name) {
 DetailsModel::DetailsModel(EditorSession& session) : m_session(&session) {}
 
 DetailsModel::~DetailsModel() {
-    if (m_edit.has_value()) {
+    if (!endForeignEdit() && m_edit.has_value()) {
         m_edit->scope.cancel();
     }
 }
 
+bool DetailsModel::endForeignEdit() {
+    if (!m_edit.has_value() || m_edit->world == m_session->active().identity) {
+        return false;
+    }
+    // Stop destroyed the game world's transactions after cancelling the edit: forget the scope.
+    m_edit->scope.release();
+    m_edit.reset();
+    return true;
+}
+
 void DetailsModel::update() {
-    const EditorChanges& changes = m_session->document().changes();
-    bool needed = false;
+    const ActiveWorld active = m_session->active();
+    const EditorChanges& changes = active.changes;
+    bool needed = endForeignEdit();
     if (m_edit.has_value() && !m_edit->cancelled && !m_edit->scope.active()) {
         // Esc cancelled the interaction: the world has its old values back.
         m_edit->cancelled = true;
@@ -251,16 +262,25 @@ void DetailsModel::update() {
     if (m_edit.has_value() && !m_edit->cancelled) {
         return; // our own interaction is open: its previews are the working copy
     }
-    if (changes.structure() != m_seenStructure || changes.document() != m_seenDocument ||
-        changes.selection() != m_seenSelection) {
+    // Another world (Play, Stop) always rebuilds, whatever its counters say (ADR-0053 decision 12).
+    if (active.identity != m_seenWorld || changes.structure() != m_seenStructure ||
+        changes.document() != m_seenDocument || changes.selection() != m_seenSelection) {
         needed = true;
     }
-    if (changes.values() != m_seenValues) {
+    if (!needed && changes.values() != m_seenValues) {
         const std::optional<std::vector<Uuid>> touched = changes.touchedSince(m_seenValues);
-        needed = needed || !touched.has_value() || std::ranges::any_of(*touched, [this](const Uuid& id) {
-                     return std::ranges::any_of(m_entities, [&id](const Uuid& shown) { return shown == id; });
-                 });
+        if (touched.has_value()) {
+            needed = std::ranges::any_of(*touched, [this](const Uuid& id) {
+                return std::ranges::any_of(m_entities, [&id](const Uuid& shown) { return shown == id; });
+            });
+        } else {
+            // No log (a game world's tick says "everything may have changed"): compare the shown
+            // values with the working copy, so a tick that leaves them alone costs no refresh and
+            // no allocation (spec requirement 47).
+            needed = shownValuesChanged();
+        }
     }
+    m_seenWorld = active.identity;
     m_seenStructure = changes.structure();
     m_seenDocument = changes.document();
     m_seenSelection = changes.selection();
@@ -270,12 +290,30 @@ void DetailsModel::update() {
     }
 }
 
+bool DetailsModel::shownValuesChanged() const {
+    const World& world = m_session->active().world;
+    for (std::size_t entity = 0; entity < m_handles.size() && entity < m_copies.size(); ++entity) {
+        for (std::size_t component = 0; component < m_components.size(); ++component) {
+            const TypeInfo& type = *m_components[component];
+            const void* live = world.get(m_handles[entity], type);
+            if (live == nullptr || type.equals == nullptr || !type.equals(live, m_copies[entity][component].get())) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool DetailsModel::stale() const noexcept {
+    return m_seenWorld != m_session->active().identity;
+}
+
 void DetailsModel::refresh() {
     ++m_refreshes;
-    const World& world = m_session->document().world();
+    const World& world = m_session->active().world;
     m_entities.clear();
     m_handles.clear();
-    for (const Uuid& id : m_session->document().selection().entities()) {
+    for (const Uuid& id : m_session->active().selection.entities()) {
         const Entity entity = world.findByStableId(id);
         if (!entity.isNull()) {
             m_entities.push_back(id);
@@ -290,8 +328,8 @@ void DetailsModel::refresh() {
     m_copies.clear();
     if (!m_handles.empty()) {
         const auto labelOf = [&](std::size_t i) {
-            const auto* label = world.get<const EditorLabel>(m_handles[i]);
-            return label != nullptr ? label->name : m_entities[i].toString();
+            const std::string* label = detail::labelOf(*m_session, world, m_handles[i]);
+            return label != nullptr ? *label : m_entities[i].toString();
         };
         m_label = labelOf(m_handles.size() - 1);
         std::size_t disabled = 0;
@@ -571,7 +609,7 @@ Expected<void> DetailsModel::setValue(std::size_t row, const void* value) {
     }
     OwnedValue copy = OwnedValue::copyOf(*property->type, value);
     clampToField(*property->type, copy.get(), property->field);
-    auto json = serialization::toValue(*property->type, copy.get(), &m_session->entityMapping());
+    auto json = serialization::toValue(*property->type, copy.get(), &m_session->active().entities);
     if (!json) {
         return detail::fromSerialization(json.error());
     }
@@ -597,7 +635,7 @@ Expected<void> DetailsModel::setPresent(std::size_t row, bool present) {
     if (present) {
         const TypeInfo& element = property->type->element();
         const OwnedValue fresh(element);
-        auto json = serialization::toValue(element, fresh.get(), &m_session->entityMapping());
+        auto json = serialization::toValue(element, fresh.get(), &m_session->active().entities);
         if (!json) {
             return detail::fromSerialization(json.error());
         }
@@ -641,10 +679,10 @@ Expected<void> DetailsModel::clearElements(std::size_t row) {
 
 std::vector<const TypeInfo*> DetailsModel::addableComponents() const {
     std::vector<const TypeInfo*> types;
-    if (m_handles.empty()) {
+    if (stale() || m_handles.empty()) {
         return types;
     }
-    const World& world = m_session->document().world();
+    const World& world = m_session->active().world;
     for (const TypeInfo* type : m_session->types().types()) {
         if (!listed(*type) || type->id == typeOf<ChildOf>().id) {
             continue;
@@ -663,11 +701,14 @@ std::vector<const TypeInfo*> DetailsModel::addableComponents() const {
 }
 
 Expected<void> DetailsModel::addComponent(const TypeInfo& type) {
+    if (stale()) {
+        return makeError("editor.details.stale", "the shown entities are of another world; update first");
+    }
     if (m_entities.empty()) {
         return makeError("editor.details.no_entities", "nothing is selected");
     }
     // Only to the entities that don't have it: the others keep their values.
-    const World& world = m_session->document().world();
+    const World& world = m_session->active().world;
     std::vector<Uuid> missing;
     for (std::size_t i = 0; i < m_handles.size(); ++i) {
         if (!world.has(m_handles[i], type)) {
@@ -696,15 +737,22 @@ Expected<void> DetailsModel::removeComponent(const TypeInfo& type) {
 // --- Interactions ---
 
 Expected<void> DetailsModel::beginEdit(std::size_t row) {
+    endForeignEdit();
+    if (stale()) {
+        return makeError("editor.details.stale", "the shown entities are of another world; update first");
+    }
     EditorDocument& document = m_session->document();
-    if (m_edit.has_value() || document.transactions().isOpen()) {
+    const ActiveWorld active = m_session->active();
+    if (m_edit.has_value() || document.transactions().isOpen() || active.transactions.isOpen()) {
         return makeError("editor.command.interaction_open", "an interaction is in progress");
     }
     const DetailsRow* target = propertyRow(row);
     if (target == nullptr) {
         return noProperty();
     }
-    if (document.playing()) {
+    // While a play session runs, the edit is of the game world (ADR-0053 decision 13); the play
+    // flag without a session leaves nothing to edit.
+    if (document.playing() && m_session->play() == nullptr) {
         return makeError("editor.command.playing", "the level can't change while playing");
     }
     if (document.opening()) {
@@ -716,14 +764,18 @@ Expected<void> DetailsModel::beginEdit(std::size_t row) {
     }
     // The same entry ith.entity.set_property records (ADR-0037 rule 6).
     const CommandDesc* command = m_session->commands().find("ith.entity.set_property");
-    m_edit.emplace(Edit{.path = path,
-                        .key = target->key,
-                        .scope = document.transactions().begin(command != nullptr ? command->displayName
-                                                                                  : std::string("Set Property"))});
+    m_edit.emplace(Edit{
+        .path = path,
+        .key = target->key,
+        .scope = active.transactions.begin(command != nullptr ? command->displayName : std::string("Set Property")),
+        .world = active.identity});
     return {};
 }
 
 Expected<void> DetailsModel::previewValue(const void* value) {
+    if (endForeignEdit()) {
+        refresh();
+    }
     if (!m_edit.has_value()) {
         return makeError("editor.details.not_editing", "no edit is in progress");
     }
@@ -758,7 +810,7 @@ Expected<void> DetailsModel::previewValue(const void* value) {
 }
 
 void DetailsModel::commitEdit() {
-    if (!m_edit.has_value()) {
+    if (endForeignEdit() || !m_edit.has_value()) {
         return;
     }
     m_edit->scope.commit();
@@ -767,7 +819,7 @@ void DetailsModel::commitEdit() {
 }
 
 void DetailsModel::cancelEdit() {
-    if (!m_edit.has_value()) {
+    if (endForeignEdit() || !m_edit.has_value()) {
         return;
     }
     m_edit->scope.cancel();
@@ -775,14 +827,18 @@ void DetailsModel::cancelEdit() {
     refresh();
 }
 
+bool DetailsModel::editing() const noexcept {
+    return m_edit.has_value() && m_edit->world == m_session->active().identity;
+}
+
 std::string_view DetailsModel::editingKey() const noexcept {
-    return m_edit.has_value() ? std::string_view(m_edit->key) : std::string_view();
+    return m_edit.has_value() && editing() ? std::string_view(m_edit->key) : std::string_view();
 }
 
 // --- Entity references ---
 
 std::vector<EntityChoice> DetailsModel::entityChoices(std::string_view filter) const {
-    const World& world = m_session->document().world();
+    const World& world = m_session->active().world;
     const std::string needle = toLowerAscii(filter);
     std::vector<EntityChoice> choices;
     for (const Entity entity : detail::outlinerOrder(world)) {
@@ -790,8 +846,8 @@ std::vector<EntityChoice> DetailsModel::entityChoices(std::string_view filter) c
         if (stable == nullptr) {
             continue;
         }
-        const auto* label = world.get<const EditorLabel>(entity);
-        std::string text = label != nullptr ? label->name : stable->id.toString();
+        const std::string* label = detail::labelOf(*m_session, world, entity);
+        std::string text = label != nullptr ? *label : stable->id.toString();
         if (needle.empty() || toLowerAscii(text).find(needle) != std::string::npos) {
             choices.push_back(EntityChoice{.id = stable->id, .label = std::move(text)});
         }
@@ -800,19 +856,19 @@ std::vector<EntityChoice> DetailsModel::entityChoices(std::string_view filter) c
 }
 
 std::string DetailsModel::entityLabel(Entity entity) const {
-    const World& world = m_session->document().world();
-    if (entity.isNull() || !world.isAlive(entity)) {
+    const World& world = m_session->active().world;
+    if (stale() || entity.isNull() || !world.isAlive(entity)) {
         return "None";
     }
-    if (const auto* label = world.get<const EditorLabel>(entity)) {
-        return label->name;
+    if (const std::string* label = detail::labelOf(*m_session, world, entity)) {
+        return *label;
     }
     const auto* stable = world.get<const StableId>(entity);
     return stable != nullptr ? stable->id.toString() : std::string("None");
 }
 
 Entity DetailsModel::entityOf(const Uuid& id) const {
-    return m_session->document().world().findByStableId(id);
+    return m_session->active().world.findByStableId(id);
 }
 
 } // namespace ith

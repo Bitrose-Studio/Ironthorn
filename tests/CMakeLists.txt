@@ -874,6 +874,7 @@ if(TARGET ith_editor_core)
             editor_core/KeymapTests.cpp
             editor_core/LayoutTests.cpp
             editor_core/ModelTests.cpp
+            editor_core/PlaySessionTests.cpp
             editor_core/TransactionTests.cpp
             editor_core/ViewportGizmoTests.cpp
             editor_core/ViewportInputTests.cpp
@@ -891,6 +892,16 @@ if(TARGET ith_editor_core)
         COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
     add_test(NAME content_browser_benchmark COMMAND ith_content_browser_benchmark)
     set_tests_properties(content_browser_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
+
+    # The Play In Editor benchmark (docs/specs/play-in-editor.md, requirements 46 to 48): start and Stop
+    # with 10 000 entities and the session's work per tick. Like ecs_benchmark it only prints numbers.
+    add_executable(ith_play_session_benchmark editor_core/PlaySessionBenchmark.cpp)
+    target_link_libraries(ith_play_session_benchmark PRIVATE ith::editor_core)
+    set_target_properties(ith_play_session_benchmark PROPERTIES
+        FOLDER "Ironthorn/Benchmarks"
+        COMPILE_WARNING_AS_ERROR ${IRONTHORN_WARNINGS_AS_ERRORS})
+    add_test(NAME play_session_benchmark COMMAND ith_play_session_benchmark)
+    set_tests_properties(play_session_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
 
     # A libFuzzer target for the Content Browser's session state reader, which reads a file from the
     # project's Saved folder, in Clang sanitizer builds only, with a short smoke run like the others.

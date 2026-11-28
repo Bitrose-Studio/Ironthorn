@@ -10,6 +10,10 @@
 // Save As to a new path gives the saved level a new id, and over another level file that file's id;
 // the open document takes it with the path once the write succeeds (ADR-0050 item 9,
 // EditorSession::save).
+//
+// All four are refused while playing with "editor.command.playing" (ADR-0053 decision 14): the
+// level can't be replaced under a session, and a save during play would write nothing the user did
+// in the game world; Stop, then save.
 
 #include "ith/asset_database/AssetDatabase.h"
 #include "ith/assets/AssetId.h"
@@ -34,7 +38,7 @@ using serialization::Value;
 
 Expected<void> notPlaying(EditorSession& session) {
     if (session.document().playing()) {
-        return makeError("editor.command.playing", "the level can't be replaced while playing");
+        return makeError("editor.command.playing", "the level can't be replaced or saved while playing");
     }
     return {};
 }
@@ -170,12 +174,14 @@ void registerFileCommands(CommandRegistry& registry) {
                   .tooltip = "Save the level to its file",
                   .category = "File",
                   .kind = CommandKind::Action,
+                  .canExecute = &notPlaying,
                   .execute = &save});
     registry.add({.id = "ith.file.save_as",
                   .displayName = "Save Current Level As",
                   .tooltip = "Save the level to another file, which becomes its file",
                   .category = "File",
                   .kind = CommandKind::Action,
+                  .canExecute = &notPlaying,
                   .execute = &saveAs});
 }
 

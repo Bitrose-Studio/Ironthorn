@@ -1,6 +1,12 @@
 // The built-in Query commands (ADR-0037 rule 17): read-only commands for automation, tests and,
 // later, the MCP adapter. Entities are named by stable id; component values are JSON as toValue
 // writes them, with entities as stable ids.
+//
+// The selection, entity, find and world-hash queries read the active world (EditorSession::active)
+// and its selection; an optional "world": "editor" | "game" reads that one instead, "game" failing
+// with "editor.play.not_running" without a session (ADR-0053 decision 12). Labels in a game world
+// are its editor twins' (detail::labelOf). The document and history queries always describe the
+// document.
 
 #include "ith/ecs/Hierarchy.h"
 #include "ith/ecs/StableId.h"
@@ -26,8 +32,9 @@ using detail::childrenOf;
 using detail::fromSerialization;
 using detail::idValue;
 using detail::invalidArgs;
-using detail::liveEntity;
+using detail::labelOf;
 using detail::optionalId;
+using detail::optionalString;
 using detail::outlinerOrder;
 using detail::requiredString;
 using detail::stableIdOf;
@@ -58,8 +65,41 @@ Expected<Value> documentQuery(EditorSession& session, const Value& /*args*/) {
     return result;
 }
 
-Expected<Value> selectionQuery(EditorSession& session, const Value& /*args*/) {
-    const Selection& selection = session.document().selection();
+// The world a query reads, with its selection and entity mapping.
+struct QueriedWorld {
+    const World& world;
+    const Selection& selection;
+    const serialization::EntityMapping& entities;
+};
+
+// The "world" argument: "editor", "game" (a session must exist) or, when missing, the active world.
+Expected<QueriedWorld> queriedWorld(EditorSession& session, std::string_view command, const Value& args) {
+    Expected<std::optional<std::string_view>> which = optionalString(command, args, "world");
+    if (!which) {
+        return makeUnexpected(std::move(which).error());
+    }
+    const std::string_view name = which->value_or(session.play() != nullptr ? "game" : "editor");
+    if (name == "editor") {
+        return QueriedWorld{.world = session.document().world(),
+                            .selection = session.document().selection(),
+                            .entities = session.entityMapping()};
+    }
+    if (name != "game") {
+        return invalidArgs(command, R"("world" must be "editor" or "game")");
+    }
+    const PlaySession* play = session.play();
+    if (play == nullptr) {
+        return makeError("editor.play.not_running", std::string(command) + ": no play session is running");
+    }
+    return QueriedWorld{.world = play->world(), .selection = play->selection(), .entities = play->entityMapping()};
+}
+
+Expected<Value> selectionQuery(EditorSession& session, const Value& args) {
+    Expected<QueriedWorld> queried = queriedWorld(session, "ith.query.selection", args);
+    if (!queried) {
+        return makeUnexpected(std::move(queried).error());
+    }
+    const Selection& selection = queried->selection;
     Value entities = Value::array();
     for (const Uuid& id : selection.entities()) {
         entities.elements().push_back(idValue(id));
@@ -79,19 +119,24 @@ Expected<Value> entityQuery(EditorSession& session, const Value& args) {
     if (!id->has_value()) {
         return invalidArgs(kCommand, R"("id" is required)");
     }
-    Expected<Entity> entity = liveEntity(session, kCommand, **id);
-    if (!entity) {
-        return makeUnexpected(std::move(entity).error());
+    Expected<QueriedWorld> queried = queriedWorld(session, kCommand, args);
+    if (!queried) {
+        return makeUnexpected(std::move(queried).error());
     }
-    const World& world = session.document().world();
+    const World& world = queried->world;
+    const Entity entity = world.findByStableId(**id);
+    if (entity.isNull()) {
+        return makeError("editor.entity.not_found",
+                         std::string(kCommand) + ": no entity has the id " + (*id)->toString());
+    }
     Value result = Value::object();
     result.set("id", idValue(**id));
-    const auto* label = world.get<const EditorLabel>(*entity);
-    result.set("label", label != nullptr ? Value::string(label->name) : Value());
-    const auto* link = world.get<const ChildOf>(*entity);
+    const std::string* label = labelOf(session, world, entity);
+    result.set("label", label != nullptr ? Value::string(*label) : Value());
+    const auto* link = world.get<const ChildOf>(entity);
     result.set("parent", link != nullptr ? idOrNull(stableIdOf(world, link->parent)) : Value());
     Value children = Value::array();
-    if (const std::vector<Entity>* list = childrenOf(world, *entity)) {
+    if (const std::vector<Entity>* list = childrenOf(world, entity)) {
         for (const Entity child : *list) {
             children.elements().push_back(idOrNull(stableIdOf(world, child)));
         }
@@ -99,11 +144,11 @@ Expected<Value> entityQuery(EditorSession& session, const Value& args) {
     result.set("children", std::move(children));
     Value components = Value::object();
     std::optional<Error> failed;
-    world.forEachComponent(*entity, [&](const TypeInfo& type, const void* value) {
+    world.forEachComponent(entity, [&](const TypeInfo& type, const void* value) {
         if (failed || hasFlags(type.flags, ReflectionFlags::Transient) || type.id == typeOf<StableId>().id) {
             return;
         }
-        Expected<Value, serialization::Error> json = serialization::toValue(type, value, &session.entityMapping());
+        Expected<Value, serialization::Error> json = serialization::toValue(type, value, &queried->entities);
         if (!json) {
             failed = fromSerialization(json.error()).error();
             return;
@@ -120,15 +165,20 @@ Expected<Value> entityQuery(EditorSession& session, const Value& args) {
 }
 
 Expected<Value> findQuery(EditorSession& session, const Value& args) {
-    Expected<std::string_view> label = requiredString("ith.query.find", args, "label");
+    constexpr std::string_view kCommand = "ith.query.find";
+    Expected<std::string_view> label = requiredString(kCommand, args, "label");
     if (!label) {
         return makeUnexpected(std::move(label).error());
     }
-    const World& world = session.document().world();
+    Expected<QueriedWorld> queried = queriedWorld(session, kCommand, args);
+    if (!queried) {
+        return makeUnexpected(std::move(queried).error());
+    }
+    const World& world = queried->world;
     Value ids = Value::array();
     for (const Entity entity : outlinerOrder(world)) {
-        const auto* name = world.get<const EditorLabel>(entity);
-        if (name != nullptr && name->name == *label) {
+        const std::string* name = labelOf(session, world, entity);
+        if (name != nullptr && *name == *label) {
             ids.elements().push_back(idOrNull(stableIdOf(world, entity)));
         }
     }
@@ -151,10 +201,16 @@ Expected<Value> historyQuery(EditorSession& session, const Value& /*args*/) {
     return result;
 }
 
-// A hash of the level text, which is the same for the same world (ADR-0034 rule 9).
-Expected<Value> worldHashQuery(EditorSession& session, const Value& /*args*/) {
+// A hash of the level text, which is the same for the same world (ADR-0034 rule 9). A game world's
+// has no editor-only data and no entity spawned during play (they have no stable id), so it differs
+// from its editor world's.
+Expected<Value> worldHashQuery(EditorSession& session, const Value& args) {
+    Expected<QueriedWorld> queried = queriedWorld(session, "ith.query.world_hash", args);
+    if (!queried) {
+        return makeUnexpected(std::move(queried).error());
+    }
     Expected<std::string, serialization::Error> text =
-        saveLevel(session.document().world(), session.document().levelId(), session.types());
+        saveLevel(queried->world, session.document().levelId(), session.types());
     if (!text) {
         return fromSerialization(text.error());
     }
@@ -166,7 +222,7 @@ Expected<Value> worldHashQuery(EditorSession& session, const Value& /*args*/) {
     }
     Value result = Value::object();
     result.set("hash", Value::string(std::move(hex)));
-    result.set("entities", Value::unsignedInteger(session.document().world().entityCount()));
+    result.set("entities", Value::unsignedInteger(queried->world.entityCount()));
     return result;
 }
 

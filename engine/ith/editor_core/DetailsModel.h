@@ -39,8 +39,14 @@
 // Edits go through commands (ith.entity.set_property, reset_property, insert_element,
 // erase_element, add_component, remove_component, set_enabled, ith.edit.rename) and interactions
 // through Transactions (ADR-0037 rule 6), which refuse ReadOnly fields as the commands do. Numbers
-// are clamped to their field's Min and Max before they are written (ADR-0008 rule 5). Main thread
-// only.
+// are clamped to their field's Min and Max before they are written (ADR-0008 rule 5).
+//
+// Play In Editor (ADR-0053 decisions 12 and 13). The model shows the active world's selection
+// (EditorSession::active): the play selection in the game world while a session runs, with labels
+// from the editor twins. It keys its cache on the active world's identity too, so Play and Stop
+// always rebuild it. Value edits and drags change the game world then, recording nothing; Add and
+// Remove Component, Enabled and Rename are refused by their commands. A drag still open when Stop
+// destroys the game world is dropped at the next call. Main thread only.
 
 #include "ith/editor_core/Transactions.h"
 #include "ith/foundation/Entity.h"
@@ -182,16 +188,21 @@ public:
 
     // The component types Add Component offers: every Component type of the session's registry that
     // may be listed (see the header comment) and that not every shown entity has, by category, then
-    // label.
+    // label. Empty while the active world is not the one the model last saw (after Play or Stop,
+    // before update()), whose handles it would otherwise use.
     [[nodiscard]] std::vector<const TypeInfo*> addableComponents() const;
+    // Adds `type` to the shown entities that lack it. Fails with "editor.details.no_entities" and,
+    // before update() after Play or Stop, with "editor.details.stale".
     Expected<void> addComponent(const TypeInfo& type);
     Expected<void> removeComponent(const TypeInfo& type);
 
     // --- Interactions (a drag: one transaction, live preview, one undo entry) ---
 
-    // Opens the interaction on a Property row. Fails with "editor.command.read_only",
-    // "editor.command.playing", "editor.command.interaction_open" (another one is open),
-    // "editor.document.busy" and "editor.details.no_entities".
+    // Opens the interaction on a Property row, in the active world's transactions: a game world's
+    // records nothing. Fails with "editor.command.read_only", "editor.command.playing" (the play
+    // flag is set but no session runs), "editor.command.interaction_open" (another one is open in
+    // either world), "editor.document.busy", "editor.details.no_entities" and "editor.details.stale"
+    // (before update() after Play or Stop).
     Expected<void> beginEdit(std::size_t row);
 
     // Applies `value` (of the edited row's type, clamped) to every shown entity now and to the
@@ -205,9 +216,11 @@ public:
     // Ends the interaction and puts the values back.
     void cancelEdit();
 
-    [[nodiscard]] bool editing() const noexcept { return m_edit.has_value(); }
+    // True while an interaction of the model is open in the active world; false for one left on a
+    // game world that Stop destroyed.
+    [[nodiscard]] bool editing() const noexcept;
 
-    // The key of the edited row, or empty.
+    // The key of the edited row, or empty (also for an interaction left on a destroyed game world).
     [[nodiscard]] std::string_view editingKey() const noexcept;
 
     // --- Entity references ---
@@ -217,10 +230,11 @@ public:
     [[nodiscard]] std::vector<EntityChoice> entityChoices(std::string_view filter) const;
 
     // The label the picker shows for a reference held in the working copy: "None" for the null
-    // handle, the entity's label, or its stable id without one.
+    // handle, the entity's label, or its stable id without one; "None" too before update() after
+    // Play or Stop, when the handle may be of a destroyed world whose id was recycled.
     [[nodiscard]] std::string entityLabel(Entity entity) const;
 
-    // `id`'s live entity in the editor world, as a reference field holds it; the null handle when
+    // `id`'s live entity in the active world, as a reference field holds it; the null handle when
     // none.
     [[nodiscard]] Entity entityOf(const Uuid& id) const;
 
@@ -229,11 +243,23 @@ private:
     struct Edit {
         PropertyPath path;
         std::string key;
+        // Every access follows endForeignEdit(): once Stop destroyed the game world, the scope's
+        // Transactions is gone and only release() may touch it.
         TransactionScope scope;
         // Esc cancelled it (Transactions::cancelOpen); it ends with commitEdit or cancelEdit.
         bool cancelled = false;
+        // The identity of the world it edits (ActiveWorld::identity).
+        std::uint64_t world = 0;
     };
 
+    // Drops an interaction on a world that is no longer the active one (a game world after Stop,
+    // whose transactions are gone) without touching its scope; returns whether it did.
+    bool endForeignEdit();
+    // The shown entities' live component values differ from the working copy. Allocates nothing.
+    [[nodiscard]] bool shownValuesChanged() const;
+    // The active world is not the one the rows and handles were built from (Play or Stop since the
+    // last update()).
+    [[nodiscard]] bool stale() const noexcept;
     void refresh();
     void buildRows();
     void addValueRows(const PropertyPath& path, const FieldInfo* field, std::string label, std::uint32_t depth);
@@ -262,6 +288,7 @@ private:
     // Keys whose expansion differs from the default.
     std::set<std::string, std::less<>> m_toggled;
     std::optional<Edit> m_edit;
+    std::uint64_t m_seenWorld = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t m_seenStructure = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t m_seenDocument = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t m_seenSelection = std::numeric_limits<std::uint64_t>::max();

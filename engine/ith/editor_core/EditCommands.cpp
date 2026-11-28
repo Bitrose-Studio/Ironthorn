@@ -116,9 +116,11 @@ void addUndoCommands(CommandRegistry& registry) {
 
 // --- Selection ---
 
+// The selection commands act on the active selection: the play selection while playing.
 void setSelection(EditorSession& session, std::span<const Uuid> ids) {
-    if (session.document().selection().replace(ids)) {
-        session.document().changes().bumpSelection();
+    const ActiveWorld active = session.active();
+    if (active.selection.replace(ids)) {
+        active.changes.bumpSelection();
     }
 }
 
@@ -169,12 +171,13 @@ Expected<Value> setSelectionCommand(EditorSession& session, const Value& args) {
     if (!mode) {
         return makeUnexpected(std::move(mode).error());
     }
-    Expected<bool> changed = changeSelection(session.document().selection(), mode->value_or("replace"), ids);
+    const ActiveWorld active = session.active();
+    Expected<bool> changed = changeSelection(active.selection, mode->value_or("replace"), ids);
     if (!changed) {
         return makeUnexpected(std::move(changed).error());
     }
     if (*changed) {
-        session.document().changes().bumpSelection();
+        active.changes.bumpSelection();
     }
     return Value();
 }
@@ -195,7 +198,7 @@ void addSelectionCommands(CommandRegistry& registry) {
         .category = "Edit",
         .kind = CommandKind::Action,
         .execute = [](EditorSession& session, const Value&) -> Expected<Value> {
-            const World& world = session.document().world();
+            const World& world = session.active().world;
             std::vector<Uuid> ids;
             for (const Entity entity : outlinerOrder(world)) {
                 if (const Uuid id = stableIdOf(world, entity); !id.isNil()) {
@@ -314,7 +317,7 @@ Expected<Value> rename(EditorSession& session, const Value& args) {
 
 // The "before" of attach and detach: nullopt when missing, the null entity (the end) when null,
 // else a live sibling under `parent` (null: a root) that isn't one of `moved`.
-Expected<std::optional<Entity>> placement(const EditorSession& session, std::string_view command, const Value& args,
+Expected<std::optional<Entity>> placement(EditorSession& session, std::string_view command, const Value& args,
                                           Entity parent, const std::vector<Entity>& moved) {
     const Value* given = args.kind() == Value::Kind::Object ? args.find("before") : nullptr;
     if (given == nullptr) {
@@ -607,7 +610,7 @@ Expected<Value> insertElement(EditorSession& session, const Value& args) {
     std::vector<EntityPatch> patches;
     for (const Entity entity : *entities) {
         Expected<PropertyPath> element =
-            elementPath(session, *path, index->value_or(vectorSize(session.document().world(), entity, *path)));
+            elementPath(session, *path, index->value_or(vectorSize(session.active().world, entity, *path)));
         if (!element) {
             return makeUnexpected(std::move(element).error());
         }
@@ -823,25 +826,30 @@ void addEntityCommands(CommandRegistry& registry) {
                   .tooltip = "Remove a component from the entities",
                   .category = "Entity",
                   .execute = &removeComponent});
+    // The four value commands run on the game world while playing (ADR-0053 decision 13).
     registry.add({.id = "ith.entity.set_property",
                   .displayName = "Set Property",
                   .tooltip = "Set a value of a component of the entities",
                   .category = "Entity",
+                  .playEditable = true,
                   .execute = &setProperty});
     registry.add({.id = "ith.entity.reset_property",
                   .displayName = "Reset to Default",
                   .tooltip = "Set a value of a component of the entities back to its default",
                   .category = "Entity",
+                  .playEditable = true,
                   .execute = &resetProperty});
     registry.add({.id = "ith.entity.insert_element",
                   .displayName = "Add Element",
                   .tooltip = "Insert an element into a list of a component of the entities",
                   .category = "Entity",
+                  .playEditable = true,
                   .execute = &insertElement});
     registry.add({.id = "ith.entity.erase_element",
                   .displayName = "Remove Element",
                   .tooltip = "Remove an element from a list of a component of the entities",
                   .category = "Entity",
+                  .playEditable = true,
                   .execute = &eraseElement});
     registry.add({.id = "ith.entity.set_enabled",
                   .displayName = "Set Enabled",

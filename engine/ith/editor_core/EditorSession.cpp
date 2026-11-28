@@ -3,7 +3,7 @@
 #include "ith/asset_database/AssetDatabase.h"
 #include "ith/asset_database/AssetHeader.h"
 #include "ith/assets/AssetId.h"
-#include "ith/ecs/StableId.h"
+#include "ith/editor_core/CommandArgs.h"
 #include "ith/editor_core/ContentPaths.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
@@ -23,18 +23,6 @@ namespace ith {
 namespace {
 
 ITH_LOG_CATEGORY(ContentBrowser);
-
-// NOLINTNEXTLINE(misc-const-correctness): the signature EntityMapping::toId has
-Uuid toStableId(void* context, Entity entity) {
-    const World& world = static_cast<const EditorDocument*>(context)->world();
-    const StableId* id = entity.worldId() == world.id() ? world.get<const StableId>(entity) : nullptr;
-    return id != nullptr ? id->id : Uuid();
-}
-
-// NOLINTNEXTLINE(misc-const-correctness): the signature EntityMapping::toEntity has
-Entity fromStableId(void* context, const Uuid& id) {
-    return static_cast<const EditorDocument*>(context)->world().findByStableId(id);
-}
 
 Error fromSerialization(const serialization::Error& error) {
     std::string message = error.message;
@@ -102,13 +90,74 @@ EditorSession::EditorSession(const TypeRegistry& types, EditorSessionOptions opt
       m_content(m_options.assets, m_options.projectDirectory.empty()
                                       ? std::string()
                                       : fs::joinPath(m_options.projectDirectory, kContentBrowserStateFile)),
-      m_mapping{.toId = &toStableId, .toEntity = &fromStableId, .context = &m_document} {
+      m_mapping(detail::stableIdMapping(m_document.world())) {
     registerEditCommands(m_commands);
     registerFileCommands(m_commands);
     registerQueryCommands(m_commands);
     registerLayoutCommands(m_commands);
     registerViewportCommands(m_commands);
     registerContentCommands(m_commands);
+    registerPlayCommands(m_commands);
+}
+
+ActiveWorld EditorSession::active() noexcept {
+    if (m_play) {
+        return {.world = m_play->world(),
+                .transactions = m_play->transactions(),
+                .selection = m_play->selection(),
+                .changes = m_play->changes(),
+                .entities = m_play->entityMapping(),
+                .identity = m_play->identity()};
+    }
+    return {.world = m_document.world(),
+            .transactions = m_document.transactions(),
+            .selection = m_document.selection(),
+            .changes = m_document.changes(),
+            .entities = m_mapping,
+            .identity = 0};
+}
+
+Expected<void> EditorSession::canStartPlay() const {
+    if (m_play) {
+        return makeError("editor.play.running", "a play session is running; stop it first");
+    }
+    if (m_document.opening()) {
+        return makeError("editor.document.busy", "a level is being opened");
+    }
+    if (m_document.transactions().isOpen()) {
+        return makeError("editor.command.interaction_open", "an interaction is in progress; finish or cancel it first");
+    }
+    return {};
+}
+
+Expected<void> EditorSession::startPlay(PlayMode mode, bool paused) {
+    ITH_ASSERT_MSG(m_commands.depth() <= 1, "editor: Play started from inside a nested command");
+    if (Expected<void> allowed = canStartPlay(); !allowed) {
+        return allowed;
+    }
+    Expected<std::unique_ptr<PlaySession>> started = PlaySession::start(
+        m_document.world(), m_document.selection(), m_options.gameSystems, mode, paused, m_playSessions + 1);
+    if (!started) {
+        return makeUnexpected(std::move(started).error());
+    }
+    ++m_playSessions;
+    m_play = std::move(*started);
+    m_document.setPlaying(true);
+    m_document.changes().bumpDocument();
+    return {};
+}
+
+void EditorSession::stopPlay() {
+    ITH_ASSERT_MSG(m_commands.depth() <= 1, "editor: Stop run from inside a nested command");
+    if (!m_play) {
+        return;
+    }
+    // WorldEnding goes here, once the engine has events (ADR-0053 decision 11).
+    // The world is discarded with the transaction: nothing to put back.
+    m_play->transactions().abandonOpen();
+    m_play.reset();
+    m_document.setPlaying(false);
+    m_document.changes().bumpDocument();
 }
 
 void EditorSession::saveViewports() {

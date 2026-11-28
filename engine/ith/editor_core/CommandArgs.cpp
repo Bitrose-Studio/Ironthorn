@@ -3,6 +3,7 @@
 #include "ith/ecs/Hierarchy.h"
 #include "ith/ecs/StableId.h"
 #include "ith/ecs/World.h"
+#include "ith/editor_core/EditorLabel.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/Transactions.h"
 #include "ith/reflection/Patch.h"
@@ -65,9 +66,9 @@ Expected<Uuid> parseId(std::string_view command, std::string_view text) {
     return *id;
 }
 
-// The live entity whose stable id is `id`.
-Expected<Entity> liveEntity(const EditorSession& session, std::string_view command, const Uuid& id) {
-    const Entity entity = session.document().world().findByStableId(id);
+// The live entity of the active world whose stable id is `id`.
+Expected<Entity> liveEntity(EditorSession& session, std::string_view command, const Uuid& id) {
+    const Entity entity = session.active().world.findByStableId(id);
     if (entity.isNull()) {
         return makeError("editor.entity.not_found", std::string(command) + ": no entity has the id " + id.toString());
     }
@@ -91,11 +92,11 @@ Expected<std::optional<Uuid>> optionalId(std::string_view command, const Value& 
 }
 
 // The entities of "ids", or the selection when "ids" is missing; at least one, each live.
-Expected<std::vector<Entity>> targets(const EditorSession& session, std::string_view command, const Value& args) {
+Expected<std::vector<Entity>> targets(EditorSession& session, std::string_view command, const Value& args) {
     std::vector<Uuid> ids;
     const Value* list = args.kind() == Value::Kind::Object ? args.find("ids") : nullptr;
     if (list == nullptr || list->kind() == Value::Kind::Null) {
-        ids = session.document().selection().entities();
+        ids = session.active().selection.entities();
     } else {
         if (list->kind() != Value::Kind::Array) {
             return invalidArgs(command, "\"ids\" must be an array of stable ids");
@@ -141,13 +142,13 @@ Expected<const TypeInfo*> componentType(const EditorSession& session, std::strin
 }
 
 // `json` read as a value of `type`; a missing value is the type's default.
-Expected<OwnedValue> readValue(const EditorSession& session, const TypeInfo& type, const Value* json) {
+Expected<OwnedValue> readValue(EditorSession& session, const TypeInfo& type, const Value* json) {
     OwnedValue value(type);
     if (json == nullptr || json->kind() == Value::Kind::Null) {
         return value;
     }
     const serialization::ValueReadOptions options{.unknownFields = serialization::UnknownFields::Fail,
-                                                  .entities = &session.entityMapping()};
+                                                  .entities = &session.active().entities};
     if (auto read = serialization::fromValue(*json, type, value.get(), options); !read) {
         return fromSerialization(read.error());
     }
@@ -156,6 +157,41 @@ Expected<OwnedValue> readValue(const EditorSession& session, const TypeInfo& typ
 
 Value idValue(const Uuid& id) {
     return Value::string(id.toString());
+}
+
+namespace {
+
+// NOLINTNEXTLINE(misc-const-correctness): the signature EntityMapping::toId has
+Uuid toStableId(void* context, Entity entity) {
+    const World& world = *static_cast<const World*>(context);
+    const StableId* id = entity.worldId() == world.id() ? world.get<const StableId>(entity) : nullptr;
+    return id != nullptr ? id->id : Uuid();
+}
+
+// NOLINTNEXTLINE(misc-const-correctness): the signature EntityMapping::toEntity has
+Entity fromStableId(void* context, const Uuid& id) {
+    return static_cast<const World*>(context)->findByStableId(id);
+}
+
+} // namespace
+
+serialization::EntityMapping stableIdMapping(const World& world) {
+    // The functions only read the world; the context is untyped.
+    return {.toId = &toStableId, .toEntity = &fromStableId, .context = const_cast<World*>(&world)};
+}
+
+const std::string* labelOf(const EditorSession& session, const World& world, Entity entity) {
+    if (const auto* label = world.get<const EditorLabel>(entity)) {
+        return &label->name;
+    }
+    const World& editorWorld = session.document().world();
+    if (&world == &editorWorld) {
+        return nullptr;
+    }
+    const auto* stable = world.get<const StableId>(entity);
+    const Entity twin = stable != nullptr ? editorWorld.findByStableId(stable->id) : Entity();
+    const auto* label = twin.isNull() ? nullptr : editorWorld.get<const EditorLabel>(twin);
+    return label != nullptr ? &label->name : nullptr;
 }
 
 Uuid stableIdOf(const World& world, Entity entity) {
@@ -214,7 +250,7 @@ Entity nextSibling(const World& world, Entity entity) {
 // Applies one set of patches in the open transaction.
 Expected<Value> applyAll(EditorSession& session, std::span<const EntityPatch> patches, Value result) {
     // Joins the transaction the registry opened for the command.
-    TransactionScope scope = session.document().transactions().begin("");
+    TransactionScope scope = session.active().transactions.begin("");
     Expected<void> applied = scope.apply(patches);
     scope.commit();
     if (!applied) {

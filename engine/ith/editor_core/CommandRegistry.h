@@ -16,17 +16,23 @@
 // assets by AssetId, never by handle or pointer.
 //
 // What execute does, by the command's kind:
-// - Edit: changes the editor world, inside one transaction named by displayName. Refused while
-//   playing ("editor.command.playing") and while an interaction keeps a transaction open outside
-//   any command ("editor.command.interaction_open"). A failed execute cancels the transaction, so it
-//   changes nothing. A command run by another command joins its transaction.
-// - Action: changes editor state without its own transaction (undo, redo, save, open); refused
-//   while an interaction is open. Its canExecute decides about Play In Editor.
+// - Edit: changes the active world (EditorSession::active), inside one transaction of its
+//   Transactions named by displayName. While playing, only playEditable commands run, on the game
+//   world, recording nothing a user sees; the others are refused ("editor.command.playing"), as all
+//   are while the play flag is set without a session. Refused while an interaction keeps a
+//   transaction open in either world outside any command ("editor.command.interaction_open"). A
+//   failed execute cancels the transaction, so it changes nothing. A command run by another command
+//   joins its transaction.
+// - Action: changes editor state without its own transaction (undo, redo, save, open, play);
+//   refused while an interaction is open, unless runsDuringInteraction is set (the play commands).
+//   Its canExecute decides about Play In Editor.
 // - Query: reads only; always allowed.
 // While a level is being opened, Edit and Action commands are refused ("editor.document.busy").
-// canExecute, when set, runs first; its error comes back as "editor.command.disabled" with its
-// message, which menus show as the reason. An unknown id is "editor.command.unknown". Main thread
-// only.
+// canExecute, when set, runs next; its error comes back as "editor.command.disabled" with its
+// message, which menus show as the reason, except the refusals the Play In Editor spec names, which
+// keep their code: "editor.command.playing", "editor.command.interaction_open",
+// "editor.command.nested", "editor.document.busy" and every "editor.play.*" code. An unknown id is
+// "editor.command.unknown". Main thread only.
 
 #include "ith/foundation/Expected.h"
 #include "ith/serialization/Value.h"
@@ -58,6 +64,15 @@ struct CommandDesc {
     // The menu it belongs to, e.g. "Edit".
     std::string category;
     CommandKind kind = CommandKind::Edit;
+    // Edit commands only: the command runs on the game world while a play session exists, in a
+    // transaction of its Transactions that is never recorded, instead of being refused (ADR-0053
+    // decision 13). Set on the four value commands of the Details panel only.
+    bool playEditable = false;
+    // Action commands only: the command runs while an interaction holds a transaction open, instead
+    // of being refused with "editor.command.interaction_open" (ADR-0053 decisions 6, 7 and 10). Set
+    // on the play commands: Stop cancels a game-world drag, Step and Pause keep the game going during
+    // one, and Play and Simulate refuse in the spec's order through their canExecute.
+    bool runsDuringInteraction = false;
     // Optional: whether the command can run now; the error says why not.
     std::function<Expected<void>(EditorSession&)> canExecute;
     // Required. Validates `args` (failing with "editor.command.invalid_args") and runs.
@@ -67,8 +82,14 @@ struct CommandDesc {
 class CommandRegistry {
 public:
     // Registers a command. Preconditions (asserted; the command is then not added): a non-empty id
-    // not registered yet, and an execute function.
+    // not registered yet, an execute function, playEditable only on an Edit command and
+    // runsDuringInteraction only on an Action.
     void add(CommandDesc command);
+
+    // How many executes are running: 0 outside any command, 1 inside a command run directly, more
+    // inside a command run by another command. A canExecute sees the depth of its caller (0 for a
+    // command run directly).
+    [[nodiscard]] std::size_t depth() const noexcept { return m_depth; }
 
     // The command with `id`, or null.
     [[nodiscard]] const CommandDesc* find(std::string_view id) const;
