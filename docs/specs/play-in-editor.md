@@ -493,16 +493,24 @@ For each id:
    Transient nor EditorOnly, except `StableId` (immutable identity) and `ChildOf` (the hierarchy is
    structure). The game value is copied, its entity references mapped to the editor world (game
    entity, its stable id, the editor entity with that id; `remapEntities`, ADR-0032 rule 4), and
-   compared with the editor value through `TypeInfo::equals`. A reference to an entity without a
-   stable id, or with no editor twin, becomes the null entity and adds a warning.
+   compared with the editor value through `TypeInfo::equals` (reflected fields only). An entity
+   without a stable id maps to the editor entity in the same slot with the same generation when
+   that one is alive and has no stable id either (the copy keeps slots and generations, so only an
+   entity copied from the editor world matches). Any other reference becomes the null entity, and
+   adds a warning (`editor.play.reference_dropped`) when the component is kept.
 3. **What is kept:** every compared component whose value differs is set in the editor world to the
    mapped game value, as a `set` of the whole value (the empty path), or, for an immutable type
-   (ADR-0030), an Add that replaces it. The values may differ because the user edited them or because a game system
-   changed them (an object that fell and came to rest keeps its resting place).
+   (ADR-0030), an Add that replaces it. Within an entity the Adds are applied before the sets, so a
+   hook an Add runs in the editor world can't overwrite a kept value. The values may differ because
+   the user edited them or because a game system changed them (an object that fell and came to rest
+   keeps its resting place).
 4. **What is reported, not kept** (`ignored`, per entity and component, with the reason): components
    only in the game world (added during play), components only in the editor world (removed during
    play), a changed parent, and a changed enabled state (the `Disabled` tag is a component added or
-   removed). These are structural, and ADR-0017 rule 13 keeps values only.
+   removed). These are structural, and ADR-0017 rule 13 keeps values only. **When the parent
+   changed, the entity's `LocalTransform` is not kept either** and is reported with "parent
+   changed": it is relative to the game parent, so keeping it under the editor parent would move the
+   entity (owner's decision, 2026-11-28).
 
 All the changes of one call are **one transaction** in the editor history, named "Keep Simulation
 Changes", recorded at once even though a session runs (ADR-0037 rule 10's one exception). It makes
@@ -561,7 +569,8 @@ and automation share one path. All play commands are of kind **Action**: they re
   `ith.query.document`'s `playing` is already there. `ith.query.find` matches labels through the
   editor twins (3.8).
 - **Error codes:** `editor.play.running`, `editor.play.not_running`, `editor.play.not_paused`,
-  `editor.play.not_found`, `editor.play.copy_failed`, plus `editor.command.playing`,
+  `editor.play.not_found`, `editor.play.copy_failed`, the warning `editor.play.reference_dropped`
+  (3.12), plus `editor.command.playing`,
   `editor.command.invalid_args` (`frames` out of 1 to 1000, `deltaSeconds` out of (0, 0.1]),
   `editor.command.interaction_open`, `editor.document.busy` and the schedule's `ecs.schedule.*`.
 - **Keymap:** five chords are already in `engine/config/Keymap.json`; this step adds

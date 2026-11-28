@@ -65,6 +65,7 @@ These decisions are still open. Each is needed by the [roadmap](../architecture.
 
 | Topic | Needed by |
 |---|---|
+| Play In Editor as built (amends 0033 rule 16, which ADR-0053 rules 24 to 27 replace, and 0053): Keep Simulation Changes' `editor.play.reference_dropped` warning, its refusals beyond rule 6 (bad ids, an editor transaction open in a nested call), Keep as an Action that records its own entry, a reparented entity's `LocalTransform` reported as "parent changed" and not kept, and the deviations of slices 2 and 3 recorded in the [editor core guide](../development/editor-core.md#play-in-editor) | P2, after ADR-0053's slice 5 |
 | Asset streaming (async, budgeted loading of textures, geometry and audio on the jobs background lane, per-tier budgets, requests ordered by distance, screen size and visibility) | P3, before texture work |
 | Runtime settings and scalability tiers (named settings with their registered cost, read when they change and never per frame; tier presets as config layers; console access in development builds) | P3, before the first renderer feature |
 | Pipeline state caching (prebuilt pipeline caches, warm-up before gameplay, no shader or pipeline compile hitches in shipped games) | P3 |

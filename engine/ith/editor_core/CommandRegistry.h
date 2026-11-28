@@ -25,7 +25,8 @@
 //   joins its transaction.
 // - Action: changes editor state without its own transaction (undo, redo, save, open, play);
 //   refused while an interaction is open, unless runsDuringInteraction is set (the play commands).
-//   Its canExecute decides about Play In Editor.
+//   Its canExecute decides about Play In Editor. An Action may record its own history entry through
+//   the document's transactions: Keep Simulation Changes does, while playing (ADR-0053 decision 27).
 // - Query: reads only; always allowed.
 // While a level is being opened, Edit and Action commands are refused ("editor.document.busy").
 // canExecute, when set, runs next; its error comes back as "editor.command.disabled" with its

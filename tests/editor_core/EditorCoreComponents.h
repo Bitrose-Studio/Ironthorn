@@ -80,6 +80,21 @@ struct Gadget {
     AssetRef asset;
 };
 
+// An immutable component (ADR-0030): changed only by replacing its whole value, never in place.
+struct Badge {
+    ITH_TYPE(Component, Immutable)
+    ITH_FIELD()
+    std::int32_t rank = 0;
+};
+
+// An immutable component whose onInsert hook, set by the one test that uses it
+// (KeepSimulationChangesTests.cpp), copies `level` into the entity's Lamp.
+struct Seal {
+    ITH_TYPE(Component, Immutable)
+    ITH_FIELD()
+    std::int32_t level = 0;
+};
+
 // A world resource a game changes while it plays (Play In Editor: every session starts from the
 // editor world's value).
 struct Score {

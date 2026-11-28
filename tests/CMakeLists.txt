@@ -871,6 +871,7 @@ if(TARGET ith_editor_core)
             editor_core/EditorTestSupport.h
             editor_core/FileTests.cpp
             editor_core/GizmoTests.cpp
+            editor_core/KeepSimulationChangesTests.cpp
             editor_core/KeymapTests.cpp
             editor_core/LayoutTests.cpp
             editor_core/ModelTests.cpp

@@ -99,6 +99,7 @@ EditorSession::EditorSession(const TypeRegistry& types, EditorSessionOptions opt
     registerViewportCommands(m_commands);
     registerContentCommands(m_commands);
     registerPlayCommands(m_commands);
+    registerKeepSimulationChanges(m_commands);
 }
 
 ActiveWorld EditorSession::active() noexcept {

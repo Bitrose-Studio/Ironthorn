@@ -201,7 +201,61 @@ Simulate to Stop; `EditorSession` owns it while it exists (`play()`, null otherw
 | `ith.play.step` | `frames` (1 to 1000, default 1), `deltaSeconds` ((0, 0.1], default 1/60) | `frame`, `elapsed` | `editor.play.not_running`, `editor.play.not_paused`, `editor.command.invalid_args` |
 | `ith.play.possess_or_eject` | `possess` (without it: toggles) | `possessed` | `editor.play.not_running` |
 | `ith.play.free_mouse` | | `captured: false` | `editor.play.not_running` |
+| `ith.play.keep_simulation_changes` | `ids` (stable ids; without it: the play selection) | `kept`, `skipped`, `ignored`, `warnings` | `editor.play.not_running`, `editor.document.busy`, `editor.command.interaction_open`, `editor.command.invalid_args` |
 | `ith.query.play` | | `state`, `possessed`, `paused`, `captured`, `viewport`, `frame`, `elapsed`, `entities`, `spawned` | never |
+
+### Keep Simulation Changes
+
+```cpp
+session.execute("ith.play.keep_simulation_changes", args); // {"ids": [...]}, or {} for the play selection
+```
+
+`KeepSimulationChanges.cpp`, ADR-0053 decisions 24 to 27 and the spec's 3.12. While a session runs,
+paused or not, possessed or not, it copies values from game-world entities back to their editor
+twins. K runs it in the Editor context, so only while the mouse is free; while captured, K is the
+game's.
+
+- **Matching**: each id is looked up in both worlds by stable id. One the game world doesn't have
+  (a system despawned it) is `skipped` with `editor.play.not_found`; one the editor world doesn't
+  have (spawned during play with a new stable id) is `skipped` with "not in the level". Repeated
+  ids count once; an empty play selection keeps nothing.
+- **Compared**: each component type the entity has in both worlds that is neither Transient nor
+  EditorOnly, except `StableId` and `ChildOf`, through `TypeInfo::equals`, which compares
+  reflected fields only. A type that may hold entities (`TypeInfo::containsEntities`) is copied
+  first and its references mapped to the editor world with `remapEntities`, so every `Entity`
+  field must be reflected (the precondition of `ith/reflection/Entities.h`); other types are
+  compared in place and copied only when they differ.
+- **References**: a game entity with a stable id maps to the editor entity with that id. One
+  without maps to the editor entity in the same slot with the same generation, when that one is
+  alive and has no stable id either: `copyWorld` keeps slots and generations and the editor world
+  doesn't change during play, so only an entity copied from the editor world matches. Anything
+  else becomes null, and adds a warning (`editor.play.reference_dropped`, its message starting with
+  the entity's id) only when the component is kept: not for a value that then equals the editor's,
+  and not for a `ChildOf`.
+- **Kept**: every differing component, as a `set` of the whole value, or an Add that replaces it
+  for an immutable type (ADR-0030). Within an entity the Adds come before the sets, so a hook an
+  Add runs can't overwrite a kept value. Those hooks (`onReplace`, `onInsert`) run in the editor
+  world, which has none of the game's resources (no `Time`), and the commands they record are
+  applied to the editor world too. `kept` lists `{id, components}` with the components' type
+  names.
+- **Reported, not applied** (`ignored`, `{id, component, reason}`): a component only the game world
+  has ("added during play"), one only the editor world has ("removed during play"), a different or
+  added or removed `ChildOf` ("parent changed") and an added or removed `Disabled` ("enabled state
+  changed"). When the parent changed, a differing `LocalTransform` is not kept and is reported
+  with "parent changed" too: it is relative to the game parent.
+- **One editor transaction** named "Keep Simulation Changes", recorded at once although a session
+  runs (ADR-0037 rule 10's one exception). It makes the level dirty, carries the editor selection
+  before and after (neither selection changes), and bumps the editor world's counters, so the
+  viewports that draw the editor world show the kept values at once. Undo stays refused until Stop;
+  then one Undo reverts the whole call. A call with nothing to keep records nothing, so a second
+  call with no new differences adds no entry. If the transaction fails (a bug), nothing is kept and
+  its error is returned. The game world doesn't change.
+- **Cost**: linear in the entities given times their components. The play session benchmark
+  measures it on all 10,000 entities (report-only; the spec sets no target).
+- **Refused** without a session (`editor.play.not_running`), during an interaction in either
+  world and when run from inside another command that holds an editor-world transaction open
+  (`editor.command.interaction_open`), and while a level opens (`editor.document.busy`). It is an
+  Action that records its own history entry.
 
 ### Views and input while playing
 
@@ -264,10 +318,10 @@ playKeys.reportUi(textFieldActive, popupOpen); // at the end of the UI's frame
   ids the active world doesn't have change nothing. Focus frames the active selection in the world
   its viewport draws. The gizmo stays hidden while playing.
 
-Not here yet (later slices of ADR-0053): Keep Simulation Changes and its K binding (slice 4), and
-slice 5, the UI and the application:
+Not here yet (slice 5 of ADR-0053), the UI and the application:
 
 - the toolbar, the play state indicators and the Escape report (`PlayInputConsumer::reportUi`);
+- the Outliner's and the Edit menu's Keep Simulation Changes entries;
 - the play viewport drawing `drawnWorld(index)` with the active selection, its redraw key built on
   `active().changes` and the active world's `identity`;
 - transform propagation for the game world before the first viewport that draws it;
@@ -1009,7 +1063,8 @@ contexts, each command in one, chosen by its id
   (`ContentBrowserModel::keyboardFocus`, which `editor_ui` reports), and never otherwise. With the
   focus in the browser's folder tree (`ContentBrowserModel::treeFocus`, also reported by
   `editor_ui`), F2 and Delete rename and delete the current folder instead of the selection;
-- **Editor**: everything else.
+- **Editor**: everything else, Play (Alt + P), Simulate (Alt + S) and Keep Simulation Changes (K)
+  included, so while a session runs they act only with the mouse free.
 
 So Escape stops play, clears the content selection with the focus in the browser, and clears the
 entity selection elsewhere; F2, Delete, Ctrl + D and Ctrl + A work the same way. Ctrl + Space
@@ -1073,8 +1128,9 @@ runner serves the headless tests and the editor's `--automation` run.
   under scaled, rotated, stretched and collapsed parents, one undo entry and none for a second
   End), and the WorldTransforms an opened level gets without an undo entry;
 - the keymap tests: chords, layers and conflicts, the Content context beside the Editor's, the
-  engine's `Keymap.json` (every id registered, the Play In Editor ones too; the viewport
-  keys resolve), and the consumer;
+  engine's `Keymap.json` (every id registered, the Play In Editor ones too, K bound to Keep
+  Simulation Changes in the Editor context only and in conflict with nothing; the viewport keys
+  resolve), and the consumer;
 - the Content Browser tests (`ContentBrowserTests.cpp`, spec requirements 1 to 15, 50 to 52, 54,
   55, 57 and 58) in a temporary project with an asset database: folders, assets, hidden files and
   the tree; every scan problem as an entry or a badge (case conflicts where the file system keeps
@@ -1156,7 +1212,8 @@ runner serves the headless tests and the editor's `--automation` run.
 - the automation tests: the matcher, script errors, every script in `tests/editor_core/scripts`
   run in a fresh project with an asset database (`content_browser.json` browses the levels it
   saves, then creates, renames, duplicates, moves, deletes and imports content; `play_in_editor.json`
-  starts a paused session, steps it and runs every play command and query), and the **coverage
+  starts a paused session, steps it, runs every play command and query, keeps an edited value and
+  undoes it after Stop), and the **coverage
   test**, which fails when a registered command is run by no script. A new command therefore comes
   with a script step;
 - the view-model tests: the tree's rows, filter, expansion and ranges; the Outliner's order,
@@ -1184,8 +1241,8 @@ runner serves the headless tests and the editor's `--automation` run.
   the content file operations working during play; Stop restoring the editor world, history, dirty
   state and selection, and the next Play getting a fresh world; and `bumpAllValues`;
 - the Play In Editor views and input tests (`PlayInputTests.cpp`, spec requirements 1, 18 to 27,
-  32 to 35), through a real `Input` with the editor's consumers in ADR-0053's order and the engine's
-  `Keymap.json`: the selected viewport and the play viewport it gives; Simulate flying the play
+  32 to 35, 42a), through a real `Input` with the editor's consumers in ADR-0053's order and the
+  engine's `Keymap.json`: the selected viewport and the play viewport it gives; Simulate flying the play
   viewport's own camera, restored bit for bit at Stop and never written to `Viewports.json` (also
   by a save during the session); the spectator turning with captured motion and flying with W on
   the Game layer; Eject and Possess with one saved pose, and Simulate possessing at the camera;
@@ -1200,11 +1257,25 @@ runner serves the headless tests and the editor's `--automation` run.
   leaving the `Input` uncaptured; binding during a session asserting; another window's capture
   surviving Stop, Eject and Shift + F1; the spectator still after Shift + F1 and Eject with W held;
   motion that is not finite moving no camera; Possess after an Eject in a Simulate session; and the
-  gate passing the capturing press only with capture on click on;
+  gate passing the capturing press only with capture on click on; K keeping the play selection's
+  changes with the mouse free, reaching the game while captured, and refused with no session
+  (42a);
+- the Keep Simulation Changes tests (`KeepSimulationChangesTests.cpp`, spec requirements 2 (its
+  refusal), 37 to 42): kept values in the editor world at once, its value counter moved and the
+  game world unchanged, one dirtying entry undone in one step after Stop; Transient and EditorOnly
+  components left out; ids only one world has skipped with their reasons; added and removed
+  components, a reparent, a child made a root and `Disabled` added or removed reported and not
+  applied; entity references kept as editor twins, or null with a warning; nothing recorded when
+  nothing differs; the play selection as the default and repeated ids; an immutable component
+  kept as a replacing Add; refused with no session, with bad ids, during a game-world Details
+  drag and from inside a command holding an editor transaction open; a reparented entity's
+  `LocalTransform` reported, not kept, with the parent off the origin; an immutable Add whose hook
+  writes another component applied before the sets; a reference to an editor entity without a
+  stable id kept; no warning for an equal value or a `ChildOf`;
 - the Play In Editor benchmark (`PlaySessionBenchmark.cpp`, CTest `play_session_benchmark`, label
   `benchmark`): start and Stop on 10 000 entities against 100 ms and 50 ms, the session's own work
   per tick against 0.25 ms, allocations per tick and the Outliner and Details work per tick (spec
-  requirements 46 to 48);
+  requirements 46 to 48), and Keep Simulation Changes on every entity, report-only;
 - a randomized model test: thousands of random commands mixed with undo and redo, checked against
   the level text after each entry, plus the P2 step 7 sequence (create, rename, reparent, edit,
   delete, undo all, redo all) compared by level text.

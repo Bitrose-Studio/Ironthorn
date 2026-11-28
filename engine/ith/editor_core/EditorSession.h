@@ -347,7 +347,8 @@ private:
 };
 
 // Register the built-in commands (EditCommands.cpp, FileCommands.cpp, QueryCommands.cpp,
-// LayoutCommands.cpp, ViewportCommands.cpp, ContentCommands.cpp, PlayCommands.cpp).
+// LayoutCommands.cpp, ViewportCommands.cpp, ContentCommands.cpp, PlayCommands.cpp,
+// KeepSimulationChanges.cpp).
 void registerEditCommands(CommandRegistry& registry);
 void registerFileCommands(CommandRegistry& registry);
 void registerQueryCommands(CommandRegistry& registry);
@@ -355,5 +356,6 @@ void registerLayoutCommands(CommandRegistry& registry);
 void registerViewportCommands(CommandRegistry& registry);
 void registerContentCommands(CommandRegistry& registry);
 void registerPlayCommands(CommandRegistry& registry);
+void registerKeepSimulationChanges(CommandRegistry& registry);
 
 } // namespace ith

@@ -162,6 +162,12 @@ TEST_SUITE("editor_core.keymap") {
               "ith.play.free_mouse");
         CHECK(*keymap.commandFor(chord("Keyboard.F8"), ith::KeymapContext::PlayInEditor) ==
               "ith.play.possess_or_eject");
+        // K keeps the simulation changes, in the Editor context (decision 7); a K bound to anything else
+        // would have warned as a conflict above, and the Play In Editor context leaves it to the game.
+        CHECK(*keymap.commandFor(chord("Keyboard.K")) == "ith.play.keep_simulation_changes");
+        CHECK(keymap.chordsOf("ith.play.keep_simulation_changes") == std::vector<Chord>{chord("Keyboard.K")});
+        CHECK(keymap.commandFor(chord("Keyboard.K"), ith::KeymapContext::PlayInEditor) == nullptr);
+        CHECK(ith::contextOf("ith.play.keep_simulation_changes") == ith::KeymapContext::Editor);
         // The viewport's keys (ADR-0042 rule 29) name registered commands, so they warn no more.
         for (const auto& [key, id] :
              {std::pair{"Keyboard.F", "ith.viewport.focus_selection"},

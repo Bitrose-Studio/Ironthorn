@@ -57,6 +57,7 @@ using ith::PickMode;
 using ith::Uuid;
 using ith::Vec3;
 using ith::ViewportTool;
+using ith::World;
 using ith::test::editor::idOf;
 using ith::test::editor::idText;
 using ith::test::editor::run;
@@ -824,5 +825,47 @@ TEST_SUITE("editor_core.play_input") {
         rig.click(200.0f, 200.0f);
         CHECK(rig.captured());
         CHECK(rig.game.empty());
+    }
+
+    TEST_CASE("K keeps the play selection's changes with the mouse free, is the game's while captured, and "
+              "fails with no session (42a)") {
+        Rig rig;
+        createShape(rig.session, 1, 0.0f);
+        const auto editorX = [&] {
+            const World& world = rig.session.document().world();
+            return world.get<const ith::LocalTransform>(world.findByStableId(idOf(1)))->value.translation.x;
+        };
+        const std::size_t entries = rig.session.document().history().entries().size();
+        // No session: K runs the command, which refuses and changes nothing.
+        rig.tap(Key::K);
+        REQUIRE_FALSE(rig.shortcuts.lastResult().hasValue());
+        CHECK(rig.shortcuts.lastResult().error().code == "editor.play.not_running");
+        CHECK(rig.session.document().history().entries().size() == entries);
+
+        run(rig.session, "ith.play.play");
+        run(rig.session, "ith.selection.set", R"({"entities": [")" + idText(1) + R"("]})");
+        World& game = rig.session.play()->mutableWorld();
+        game.get<ith::LocalTransform>(game.findByStableId(idOf(1)))->value.translation.x = 3.0f;
+
+        // Captured: K is the game's and keeps nothing.
+        rig.click(200.0f, 200.0f);
+        REQUIRE(rig.captured());
+        rig.game.clear();
+        rig.tap(Key::K);
+        CHECK(rig.game.sawKey(Key::K));
+        CHECK(editorX() == 0.0f);
+        CHECK(rig.session.document().history().entries().size() == entries);
+
+        // Mouse free: K keeps the play selection's changes and reaches no game consumer.
+        rig.tap(Key::F1, KeyModifiers::Shift);
+        REQUIRE_FALSE(rig.captured());
+        rig.game.clear();
+        rig.tap(Key::K);
+        CHECK_FALSE(rig.game.sawKey(Key::K));
+        CHECK(rig.shortcuts.lastResult().hasValue());
+        CHECK(editorX() == 3.0f);
+        REQUIRE(rig.session.document().history().entries().size() == entries + 1);
+        CHECK(rig.session.document().history().entries().back().name == "Keep Simulation Changes");
+        CHECK(rig.state() == "running");
     }
 }

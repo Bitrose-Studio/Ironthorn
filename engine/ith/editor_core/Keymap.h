@@ -15,9 +15,8 @@
 // Loading reports, without failing:
 // - "editor.keymap.invalid_chord": a chord that doesn't parse, or a value that is not an array of
 //   chords; the chord is skipped;
-// - "editor.keymap.unknown_command": a command id the registry doesn't have (yet: viewport and
-//   Play In Editor commands are registered by later editor modules); its chords are kept, so the
-//   command works once it is registered;
+// - "editor.keymap.unknown_command": a command id the registry doesn't have (the module that
+//   registers it isn't loaded); its chords are kept, so the command works once it is registered;
 // - "editor.keymap.conflict": a chord bound to two commands of one context. The command bound in
 //   the higher layer wins; within one layer, the lower id.
 //
@@ -28,7 +27,8 @@
 // - Content: every "ith.content." command except ith.content.toggle_drawer; the keymap consumer
 //   looks a chord up here first while the Content Browser has the keyboard focus
 //   (ContentBrowserModel::keyboardFocus), and never otherwise;
-// - Editor: every other command, which the keymap consumer handles.
+// - Editor: every other command, which the keymap consumer handles; Play, Simulate and Keep
+//   Simulation Changes (K) among them, so while a session runs they act only with the mouse free.
 // Conflicts are checked per context. So Escape can stop play, clear the content selection with the
 // focus in the Content Browser, and clear the entity selection elsewhere.
 

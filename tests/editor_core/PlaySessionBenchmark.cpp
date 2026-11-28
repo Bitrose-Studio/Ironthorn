@@ -16,7 +16,8 @@
 // counted by replacing the global operator new in this program, except under TSan (see below).
 // Details compares its shown values with its working copy after a tick and refreshes only when one
 // changed; a tick that does change a shown value still rebuilds the working copy and rows
-// (allocating), as updating them in place is deferred.
+// (allocating), as updating them in place is deferred. Keep Simulation Changes on all 10 000
+// entities is measured too, report-only (the spec sets no target for it).
 
 #include "ith/ecs/Hierarchy.h"
 #include "ith/ecs/Schedule.h"
@@ -31,6 +32,7 @@
 #include "ith/foundation/Uuid.h"
 #include "ith/gameplay/GameWorld.h"
 #include "ith/reflection/TypeRegistry.h"
+#include "ith/serialization/Value.h"
 #include "ith/shapes/ShapeRenderer.h"
 
 #include <algorithm>
@@ -95,6 +97,7 @@ using namespace ith;
 constexpr int kEntities = 10'000;
 constexpr int kStartRuns = 21;
 constexpr int kTickRuns = 501;
+constexpr int kKeepRuns = 5;
 constexpr double kStartTargetMs = 100.0;
 constexpr double kStopTargetMs = 50.0;
 constexpr double kTickTargetMs = 0.25;
@@ -226,6 +229,33 @@ int main() {
     std::printf("  Outliner rebuilds over %d ticks: %llu; Details refreshes: %llu (of %zu shown entity)\n", kTickRuns,
                 static_cast<unsigned long long>(outliner.rebuilds() - rebuildsBefore),
                 static_cast<unsigned long long>(details.refreshes() - refreshesBefore), details.entities().size());
+
+    // Keep Simulation Changes on every entity (report-only: the spec sets no target): once with a
+    // moved LocalTransform on each, applied as one transaction, and once with nothing left to keep.
+    serialization::Value all = serialization::Value::array();
+    play.mutableWorld().query<const StableId>().forEach(
+        [&](const StableId& id) { all.elements().push_back(serialization::Value::string(id.id.toString())); });
+    serialization::Value keepArgs = serialization::Value::object();
+    keepArgs.set("ids", std::move(all));
+    std::vector<double> keeps;
+    std::vector<double> unchanged;
+    for (int run = 0; run < kKeepRuns; ++run) {
+        play.mutableWorld().query<LocalTransform>().forEach(
+            [](LocalTransform& local) { local.value.translation.x += 1.0f; });
+        Stopwatch stopwatch;
+        if (!session.execute("ith.play.keep_simulation_changes", keepArgs)) {
+            std::printf("  Keep Simulation Changes failed; skipped\n");
+            break;
+        }
+        keeps.push_back(stopwatch.elapsedMilliseconds());
+        stopwatch.restart();
+        static_cast<void>(session.execute("ith.play.keep_simulation_changes", keepArgs));
+        unchanged.push_back(stopwatch.elapsedMilliseconds());
+    }
+    if (!keeps.empty()) {
+        report("Keep Simulation Changes, every entity changed", median(keeps), 0.0);
+        report("Keep Simulation Changes, nothing to keep", median(unchanged), 0.0);
+    }
     session.stopPlay();
     return 0;
 }

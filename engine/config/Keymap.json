@@ -2,9 +2,10 @@
 // id to its chords. A chord is a stable control name (ADR-0013) after optional "Ctrl+", "Shift+"
 // and "Alt+" modifiers; [] unbinds a command in a higher layer. Stop, free mouse and possess or
 // eject are the Play In Editor keys, which work only while a game runs (ADR-0029 rule 7), so Escape
-// stops play there and clears the selection in the editor. The viewport navigation of ADR-0008
-// rule 4 (fly, orbit, dolly, pan, fly speed, Alt + drag to duplicate) is held input, not commands,
-// and comes with the viewport. The "ith.content." commands other than toggle_drawer are the Content
+// stops play there and clears the selection in the editor. K keeps the selected entities'
+// simulation changes; it is an Editor key, so it runs only while the mouse is free (ADR-0053 rule
+// 21), and fails without a session. The viewport navigation of ADR-0008 rule 4 (fly, orbit, dolly,
+// pan, fly speed, Alt + drag to duplicate) is held input, not commands, and comes with the viewport. The "ith.content." commands other than toggle_drawer are the Content
 // context (ADR-0049 rules 3 and 5): they fire only while the Content Browser has the keyboard focus,
 // and win over the same chord's Editor binding there (F2, Delete and Ctrl + D rename, delete and
 // duplicate content).
@@ -44,7 +45,8 @@
       "ith.play.simulate": ["Alt+Keyboard.S"],
       "ith.play.stop": ["Keyboard.Escape"],
       "ith.play.free_mouse": ["Shift+Keyboard.F1"],
-      "ith.play.possess_or_eject": ["Keyboard.F8"]
+      "ith.play.possess_or_eject": ["Keyboard.F8"],
+      "ith.play.keep_simulation_changes": ["Keyboard.K"]
     }
   }
 }
