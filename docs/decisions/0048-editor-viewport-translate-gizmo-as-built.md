@@ -1,6 +1,7 @@
 # ADR-0048: Editor viewport translate gizmo as built (amends 0037, 0042, 0047)
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0055](0055-editor-viewport-rotate-and-scale-gizmos.md)
 - **Date:** 2026-11-27
 - **Related:** amends [ADR-0037](0037-editor-commands-transactions-selection-and-automation.md)
   rule 6, [ADR-0042](0042-editor-viewport.md) rules 12 and 23 to 26, and

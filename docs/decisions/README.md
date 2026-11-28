@@ -46,19 +46,20 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0039](0039-file-system-windows-read-retry-measured.md) | File system: Windows read retry after a replace, measured (amends 0038) | Accepted |
 | [0040](0040-editor-docking-panels-and-layouts.md) | Editor docking, panels and layouts (amends 0029) | Accepted |
 | [0041](0041-editor-amendments-after-outliner-and-details.md) | Editor amendments after the Outliner and Details (amends 0035, 0037) | Accepted |
-| [0042](0042-editor-viewport.md) | Editor world and viewport (amends 0029, 0037) | Accepted, amended by [0043](0043-editor-ui-user-texture-state.md), [0045](0045-editor-viewport-amendments-after-the-viewport-panel.md), [0046](0046-editor-viewport-horizontal-field-of-view.md), [0047](0047-editor-viewport-picking-as-built.md), [0048](0048-editor-viewport-translate-gizmo-as-built.md), [0053](0053-play-in-editor-and-simulate.md) |
+| [0042](0042-editor-viewport.md) | Editor world and viewport (amends 0029, 0037) | Accepted, amended by [0043](0043-editor-ui-user-texture-state.md), [0045](0045-editor-viewport-amendments-after-the-viewport-panel.md), [0046](0046-editor-viewport-horizontal-field-of-view.md), [0047](0047-editor-viewport-picking-as-built.md), [0048](0048-editor-viewport-translate-gizmo-as-built.md), [0053](0053-play-in-editor-and-simulate.md), [0055](0055-editor-viewport-rotate-and-scale-gizmos.md) |
 | [0043](0043-editor-ui-user-texture-state.md) | Editor UI user textures: the renderer owns the import state (amends 0042) | Accepted, amended by [0045](0045-editor-viewport-amendments-after-the-viewport-panel.md) |
 | [0044](0044-gpu-profiling-zones.md) | GPU profiling zones (amends 0007, 0009) | Accepted |
 | [0045](0045-editor-viewport-amendments-after-the-viewport-panel.md) | Editor viewport amendments after the Viewport panel (amends 0042, 0043) | Accepted, amended by [0046](0046-editor-viewport-horizontal-field-of-view.md), [0047](0047-editor-viewport-picking-as-built.md) |
 | [0046](0046-editor-viewport-horizontal-field-of-view.md) | Editor viewport horizontal field of view (amends 0042, 0045) | Accepted |
 | [0047](0047-editor-viewport-picking-as-built.md) | Editor viewport picking as built (amends 0042, 0045) | Accepted, amended by [0048](0048-editor-viewport-translate-gizmo-as-built.md) |
-| [0048](0048-editor-viewport-translate-gizmo-as-built.md) | Editor viewport translate gizmo as built (amends 0037, 0042, 0047) | Accepted |
+| [0048](0048-editor-viewport-translate-gizmo-as-built.md) | Editor viewport translate gizmo as built (amends 0037, 0042, 0047) | Accepted, amended by [0055](0055-editor-viewport-rotate-and-scale-gizmos.md) |
 | [0049](0049-editor-content-browser-v1.md) | Editor Content Browser v1 (amends 0015, 0037) | Accepted, amended by [0050](0050-editor-content-browser-browse-slice-as-built.md), [0051](0051-platform-open-file-dialog-as-built.md), [0052](0052-editor-content-browser-file-operations-as-built.md) |
 | [0050](0050-editor-content-browser-browse-slice-as-built.md) | Editor Content Browser browse slice as built (amends 0015, 0029, 0034, 0049) | Accepted, amended by [0052](0052-editor-content-browser-file-operations-as-built.md) |
 | [0051](0051-platform-open-file-dialog-as-built.md) | Platform open-file dialog as built (amends 0049) | Accepted |
 | [0052](0052-editor-content-browser-file-operations-as-built.md) | Editor Content Browser file operations as built (amends 0049, 0050) | Accepted |
 | [0053](0053-play-in-editor-and-simulate.md) | Play In Editor and Simulate (amends 0013, 0014, 0016, 0017, 0029, 0037, 0042) | Accepted, amended by [0054](0054-play-in-editor-as-built.md) |
 | [0054](0054-play-in-editor-as-built.md) | Play In Editor as built (amends 0027, 0033, 0037, 0053) | Accepted |
+| [0055](0055-editor-viewport-rotate-and-scale-gizmos.md) | Editor viewport rotate and scale gizmos (amends 0042, 0048) | Accepted |
 
 ## Planned
 
