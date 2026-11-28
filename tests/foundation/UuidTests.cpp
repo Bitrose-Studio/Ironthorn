@@ -2,6 +2,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <set>
@@ -136,5 +137,28 @@ TEST_SUITE("foundation.uuid") {
         CHECK(low.toString() < high.toString());
         CHECK(ith::Uuid(1, 4) < low);
         CHECK(std::hash<ith::Uuid>()(low) == std::hash<ith::Uuid>()(ith::Uuid(1, 5)));
+    }
+
+    TEST_CASE("equality compares both halves") {
+        CHECK(ith::Uuid(1, 2) == ith::Uuid(1, 2));
+        CHECK(ith::Uuid(1, 2) != ith::Uuid(1, 3));
+        CHECK(ith::Uuid(1, 2) != ith::Uuid(0, 2));
+        CHECK(ith::Uuid() == ith::Uuid(0, 0));
+        static_assert(ith::Uuid(7, 8) == ith::Uuid(7, 8));
+    }
+
+    TEST_CASE("value algorithms work on ranges of Uuids") {
+        // A defaulted == let one standard library pick a vectorized find that rejects 16-byte
+        // elements at compile time; these calls must keep compiling and give the right answers.
+        std::vector<ith::Uuid> ids = {ith::Uuid(1, 1), ith::Uuid(2, 2), ith::Uuid(2, 2), ith::Uuid(3, 3)};
+        CHECK(std::ranges::find(ids, ith::Uuid(2, 2)) == ids.begin() + 1);
+        CHECK(std::ranges::find(ids, ith::Uuid(4, 4)) == ids.end());
+        CHECK(std::find(ids.begin(), ids.end(), ith::Uuid(3, 3)) == ids.begin() + 3);
+        CHECK(std::ranges::count(ids, ith::Uuid(2, 2)) == 2);
+        ids.erase(std::ranges::unique(ids).begin(), ids.end());
+        CHECK(ids == std::vector<ith::Uuid>{ith::Uuid(1, 1), ith::Uuid(2, 2), ith::Uuid(3, 3)});
+        CHECK(std::erase(ids, ith::Uuid(1, 1)) == 1);
+        CHECK(std::ranges::find(ids, ith::Uuid(1, 1)) == ids.end());
+        CHECK(ids.size() == 2);
     }
 }

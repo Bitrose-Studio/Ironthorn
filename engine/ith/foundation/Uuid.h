@@ -55,6 +55,16 @@ public:
     // The last 64 bits (digits 17-32 of the text form).
     [[nodiscard]] constexpr std::uint64_t low() const noexcept { return m_low; }
 
+    // Two Uuids are equal when both halves are.
+    //
+    // Written out rather than defaulted on purpose: a defaulted == makes Uuid trivially equality
+    // comparable to clang, and some standard libraries then send std::find, std::count,
+    // std::ranges::unique and similar algorithms over Uuids to vectorized code that only handles
+    // 1, 2, 4 and 8-byte elements, which fails to compile for 16 bytes.
+    [[nodiscard]] constexpr bool operator==(const Uuid& other) const noexcept {
+        return m_high == other.m_high && m_low == other.m_low;
+    }
+
     // Uuids order by high(), then low(): the same order as their text forms.
     constexpr auto operator<=>(const Uuid&) const noexcept = default;
 
