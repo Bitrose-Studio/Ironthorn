@@ -13,10 +13,10 @@
 // The times are medians of repeated runs. A tick is measured as a whole (ith.play.step's tick, the
 // Outliner and Details polling) and the engine's one game-world system, transform propagation, is
 // measured alone on the same world; the session's own work is the difference. Allocations are
-// counted by replacing the global operator new in this program. Details compares its shown values
-// with its working copy after a tick and refreshes only when one changed; a tick that does change a
-// shown value still rebuilds the working copy and rows (allocating), as updating them in place is
-// deferred.
+// counted by replacing the global operator new in this program, except under TSan (see below).
+// Details compares its shown values with its working copy after a tick and refreshes only when one
+// changed; a tick that does change a shown value still rebuilds the working copy and rows
+// (allocating), as updating them in place is deferred.
 
 #include "ith/ecs/Hierarchy.h"
 #include "ith/ecs/Schedule.h"
@@ -45,12 +45,30 @@ ITH_DECLARE_REFLECTION_MODULE(ecs)
 ITH_DECLARE_REFLECTION_MODULE(editor_core)
 ITH_DECLARE_REFLECTION_MODULE(shapes)
 
+// TSan's runtime defines the global allocation functions itself, so replacing them here fails to
+// link (multiple definitions). Under TSan the benchmark keeps its timings and reports the allocation
+// counts as unavailable rather than a misleading 0. ASan's runtime allows the replacement.
+#if defined(__SANITIZE_THREAD__)
+#define ITH_BENCHMARK_TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define ITH_BENCHMARK_TSAN 1
+#endif
+#endif
+
 namespace {
+
+#ifdef ITH_BENCHMARK_TSAN
+constexpr bool kCountsAllocations = false;
+#else
+constexpr bool kCountsAllocations = true;
+#endif
 
 std::atomic<std::size_t> g_allocations{0};
 
 } // namespace
 
+#ifndef ITH_BENCHMARK_TSAN
 // Counts every allocation of the program; the aligned and nothrow forms end up here or keep their own
 // pairs.
 void* operator new(std::size_t size) {
@@ -68,6 +86,7 @@ void operator delete(void* memory) noexcept {
 void operator delete(void* memory, std::size_t /*size*/) noexcept {
     std::free(memory);
 }
+#endif
 
 namespace {
 
@@ -197,8 +216,13 @@ int main() {
     report("  of which the tick alone (Time, schedule, counters)", median(sessionOnly), 0.0);
     report("transform propagation alone (the game-world system)", systems, 0.0);
     report("session's own work per tick", std::max(tick - systems, 0.0), kTickTargetMs);
-    std::printf("  allocations per tick: %.2f in the tick, %.2f in the view models' polling\n",
-                static_cast<double>(sessionAllocations) / kTickRuns, static_cast<double>(tickAllocations) / kTickRuns);
+    if (kCountsAllocations) {
+        std::printf("  allocations per tick: %.2f in the tick, %.2f in the view models' polling\n",
+                    static_cast<double>(sessionAllocations) / kTickRuns,
+                    static_cast<double>(tickAllocations) / kTickRuns);
+    } else {
+        std::printf("  allocations per tick: unavailable (TSan build: its runtime owns operator new)\n");
+    }
     std::printf("  Outliner rebuilds over %d ticks: %llu; Details refreshes: %llu (of %zu shown entity)\n", kTickRuns,
                 static_cast<unsigned long long>(outliner.rebuilds() - rebuildsBefore),
                 static_cast<unsigned long long>(details.refreshes() - refreshesBefore), details.entities().size());
