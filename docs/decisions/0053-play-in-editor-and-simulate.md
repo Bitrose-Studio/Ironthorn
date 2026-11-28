@@ -1,6 +1,7 @@
 # ADR-0053: Play In Editor and Simulate (amends 0013, 0014, 0016, 0017, 0029, 0037, 0042)
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0054](0054-play-in-editor-as-built.md)
 - **Date:** 2026-11-28
 - **Related:** the [Play In Editor spec](../specs/play-in-editor.md) (behaviour and acceptance
   tests; this ADR wins where they differ); amends [ADR-0013](0013-input.md) rule 10,

@@ -779,7 +779,7 @@ keymap and automation share one path.
   (releases still reach ImGui, so nothing stays held) and reports Escape's users every frame
   ([Input routing](#input-routing)).
 
-**As built** (recorded in ADR-0054, Play In Editor as built, to be written): the notice is the Keep
+**As built** (recorded in [ADR-0054](../decisions/0054-play-in-editor-as-built.md)): the notice is the Keep
 command's prompt, so K, the menu and the Outliner show it alike, and `runMenuCommand` keeps a result
 a prompt reported; `startPlay` chooses `ith.viewport.1` when the selected viewport's panel is
 closed, and the shell only opens the play viewport's panel; the play viewport's elapsed time comes

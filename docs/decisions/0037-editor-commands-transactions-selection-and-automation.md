@@ -3,7 +3,8 @@
 - **Status:** Accepted
 - **Amended by:** [ADR-0041](0041-editor-amendments-after-outliner-and-details.md),
   [ADR-0042](0042-editor-viewport.md), [ADR-0048](0048-editor-viewport-translate-gizmo-as-built.md),
-  [ADR-0049](0049-editor-content-browser-v1.md), [ADR-0053](0053-play-in-editor-and-simulate.md)
+  [ADR-0049](0049-editor-content-browser-v1.md), [ADR-0053](0053-play-in-editor-and-simulate.md),
+  [ADR-0054](0054-play-in-editor-as-built.md)
 - **Date:** 2026-11-22
 - **Related:** amends [ADR-0033](0033-reflection-property-paths-and-patches.md) rule 12
   (`applyPatches`), [ADR-0032](0032-entity-references-stable-ids-and-world-copy.md) (stable ids

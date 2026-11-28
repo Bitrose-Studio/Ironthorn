@@ -150,7 +150,8 @@ session.play()->tick(input.frameTimeNs());                   // the editor, once
 session.stopPlay();                                          // or ith.play.stop
 ```
 
-[ADR-0053](../decisions/0053-play-in-editor-and-simulate.md) and the
+[ADR-0053](../decisions/0053-play-in-editor-and-simulate.md), as built in
+[ADR-0054](../decisions/0054-play-in-editor-as-built.md), and the
 [spec](../specs/play-in-editor.md). `ith::PlaySession` (`PlaySession.h`) is one run from Play or
 Simulate to Stop; `EditorSession` owns it while it exists (`play()`, null otherwise).
 

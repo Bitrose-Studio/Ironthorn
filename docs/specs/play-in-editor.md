@@ -9,7 +9,8 @@
   ADR-0053 records them, settles ADR-0042 rule 1 and makes the amendments they need (ADR-0013
   rule 10, ADR-0014, ADR-0016 rule 15, ADR-0017 rule 10, ADR-0029 rule 7, ADR-0037 rules 1, 4, 10
   and 17, ADR-0042 rules 1 and 3). Where this spec and ADR-0053 differ, the ADR wins; the spec has
-  been brought in line with it
+  been brought in line with it. What the build settled or changed is recorded in
+  [ADR-0054](../decisions/0054-play-in-editor-as-built.md), Play In Editor as built
 - **Date:** 2026-11-28
 - **Decided by:** [ADR-0053](../decisions/0053-play-in-editor-and-simulate.md)
 - **Builds on:** [ADR-0003](../decisions/0003-clean-room.md) (clean room),
@@ -642,8 +643,10 @@ sessions started paused and advanced with `ith.play.step`.
     counts its runs reports 3 after `step {frames: 3}` and 0 runs on the editor world.
 11. A game-world system's first run sees every component as added (`Added` filter), as after a level
     load.
-12. Two sessions in a row each start with `Time.elapsed` 0, `frame` 0, and fresh app-scoped
-    resources: a test resource changed in the first session has its default value in the second.
+12. Two sessions in a row each start with `Time.elapsed` 0, `frame` 0, and the level's world
+    resources: a world resource that a game system changed in the first session has the editor
+    world's value again in the second, and the editor world's value is unchanged. App-level
+    resources, once they exist, start fresh in every session (ADR-0054 item 4).
 
 ### 4.3 Time, pause and step
 

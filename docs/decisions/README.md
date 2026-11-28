@@ -31,17 +31,17 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0024](0024-asset-document-envelope-and-extension.md) | Asset documents: the envelope id and native asset extensions (amends 0015, 0020) | Accepted, amended by [0034](0034-level-documents.md) |
 | [0025](0025-job-system.md) | The job system (amends 0012) | Accepted, amended by [0026](0026-job-system-rules-corrected.md), [0035](0035-file-system-configuration-and-main-thread-queue.md) |
 | [0026](0026-job-system-rules-corrected.md) | Job system: rules corrected after the first implementation (amends 0025) | Accepted |
-| [0027](0027-input-rules-completed.md) | Input: rules completed after the first implementation (amends 0012, 0013) | Accepted, amended by [0035](0035-file-system-configuration-and-main-thread-queue.md) |
+| [0027](0027-input-rules-completed.md) | Input: rules completed after the first implementation (amends 0012, 0013) | Accepted, amended by [0035](0035-file-system-configuration-and-main-thread-queue.md), [0054](0054-play-in-editor-as-built.md) |
 | [0028](0028-render-graph-v1.md) | Render graph v1 | Accepted |
 | [0029](0029-editor-ui-toolkit.md) | Editor UI toolkit | Accepted, amended by [0035](0035-file-system-configuration-and-main-thread-queue.md), [0040](0040-editor-docking-panels-and-layouts.md), [0042](0042-editor-viewport.md), [0050](0050-editor-content-browser-browse-slice-as-built.md), [0053](0053-play-in-editor-and-simulate.md) |
 | [0030](0030-ecs-hooks-registration-and-immutable-components.md) | ECS: component hooks registration and immutable components (amends 0014, 0018) | Accepted |
 | [0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md) | ECS: hierarchy, enabled state and transform propagation completed (amends 0014) | Accepted, amended by [0034](0034-level-documents.md) |
 | [0032](0032-entity-references-stable-ids-and-world-copy.md) | Entity references, stable ids and world copy (amends 0014, 0018, 0020) | Accepted, amended by [0034](0034-level-documents.md), [0037](0037-editor-commands-transactions-selection-and-automation.md) |
-| [0033](0033-reflection-property-paths-and-patches.md) | Reflection property paths and patches (amends 0015, 0018, 0020) | Accepted, amended by [0037](0037-editor-commands-transactions-selection-and-automation.md) |
+| [0033](0033-reflection-property-paths-and-patches.md) | Reflection property paths and patches (amends 0015, 0018, 0020) | Accepted, amended by [0037](0037-editor-commands-transactions-selection-and-automation.md), [0054](0054-play-in-editor-as-built.md) |
 | [0034](0034-level-documents.md) | Level documents (amends 0015, 0024, 0031, 0032) | Accepted, amended by [0050](0050-editor-content-browser-browse-slice-as-built.md) |
 | [0035](0035-file-system-configuration-and-main-thread-queue.md) | File system, layered configuration and the main-thread queue (amends 0025, 0027, 0029) | Accepted, amended by [0036](0036-file-system-windows-atomic-replace-corrected.md), [0041](0041-editor-amendments-after-outliner-and-details.md) |
 | [0036](0036-file-system-windows-atomic-replace-corrected.md) | File system: Windows atomic replace corrected after the first implementation (amends 0035) | Accepted, amended by [0038](0038-file-system-windows-read-retry-during-replace.md) |
-| [0037](0037-editor-commands-transactions-selection-and-automation.md) | Editor commands, transactions, selection and automation (amends 0008, 0032, 0033) | Accepted, amended by [0041](0041-editor-amendments-after-outliner-and-details.md), [0042](0042-editor-viewport.md), [0048](0048-editor-viewport-translate-gizmo-as-built.md), [0049](0049-editor-content-browser-v1.md), [0053](0053-play-in-editor-and-simulate.md) |
+| [0037](0037-editor-commands-transactions-selection-and-automation.md) | Editor commands, transactions, selection and automation (amends 0008, 0032, 0033) | Accepted, amended by [0041](0041-editor-amendments-after-outliner-and-details.md), [0042](0042-editor-viewport.md), [0048](0048-editor-viewport-translate-gizmo-as-built.md), [0049](0049-editor-content-browser-v1.md), [0053](0053-play-in-editor-and-simulate.md), [0054](0054-play-in-editor-as-built.md) |
 | [0038](0038-file-system-windows-read-retry-during-replace.md) | File system: Windows read retry while a replace is in flight (amends 0036) | Accepted, amended by [0039](0039-file-system-windows-read-retry-measured.md) |
 | [0039](0039-file-system-windows-read-retry-measured.md) | File system: Windows read retry after a replace, measured (amends 0038) | Accepted |
 | [0040](0040-editor-docking-panels-and-layouts.md) | Editor docking, panels and layouts (amends 0029) | Accepted |
@@ -57,7 +57,8 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0050](0050-editor-content-browser-browse-slice-as-built.md) | Editor Content Browser browse slice as built (amends 0015, 0029, 0034, 0049) | Accepted, amended by [0052](0052-editor-content-browser-file-operations-as-built.md) |
 | [0051](0051-platform-open-file-dialog-as-built.md) | Platform open-file dialog as built (amends 0049) | Accepted |
 | [0052](0052-editor-content-browser-file-operations-as-built.md) | Editor Content Browser file operations as built (amends 0049, 0050) | Accepted |
-| [0053](0053-play-in-editor-and-simulate.md) | Play In Editor and Simulate (amends 0013, 0014, 0016, 0017, 0029, 0037, 0042) | Accepted |
+| [0053](0053-play-in-editor-and-simulate.md) | Play In Editor and Simulate (amends 0013, 0014, 0016, 0017, 0029, 0037, 0042) | Accepted, amended by [0054](0054-play-in-editor-as-built.md) |
+| [0054](0054-play-in-editor-as-built.md) | Play In Editor as built (amends 0027, 0033, 0037, 0053) | Accepted |
 
 ## Planned
 
@@ -65,7 +66,6 @@ These decisions are still open. Each is needed by the [roadmap](../architecture.
 
 | Topic | Needed by |
 |---|---|
-| Play In Editor as built (amends 0033 rule 16, which ADR-0053 rules 24 to 27 replace, and 0053): Keep Simulation Changes' `editor.play.reference_dropped` warning, its refusals beyond rule 6 (bad ids, an editor transaction open in a nested call), Keep as an Action that records its own entry, a reparented entity's `LocalTransform` reported as "parent changed" and not kept, and the deviations of slices 2 and 3 recorded in the [editor core guide](../development/editor-core.md#play-in-editor) | P2, after ADR-0053's slice 5 |
 | Asset streaming (async, budgeted loading of textures, geometry and audio on the jobs background lane, per-tier budgets, requests ordered by distance, screen size and visibility) | P3, before texture work |
 | Runtime settings and scalability tiers (named settings with their registered cost, read when they change and never per frame; tier presets as config layers; console access in development builds) | P3, before the first renderer feature |
 | Pipeline state caching (prebuilt pipeline caches, warm-up before gameplay, no shader or pipeline compile hitches in shipped games) | P3 |

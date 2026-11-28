@@ -105,11 +105,14 @@ public:
     Expected<serialization::Value> execute(EditorSession& session, std::string_view id,
                                            const serialization::Value& args = {});
 
-    // Sets the prompt of the command `id`: what a shortcut or a menu does for a command that needs
-    // input from the user first (Rename starts editing the name in the Outliner). The prompt returns
-    // true when it started gathering the input, which later runs the command with its arguments,
-    // and false to let invoke() run the command without arguments. Set by the module that brings the
-    // UI; an empty function removes it. Precondition (asserted): `id` is registered.
+    // Sets the prompt of the command `id`: what a shortcut or a menu does instead of running the
+    // command without arguments. Usually the command needs input from the user first (Rename starts
+    // editing the name in the Outliner): the prompt starts gathering it, which later runs the command
+    // with its arguments. A prompt may also run the command at once itself, to show its result (Keep
+    // Simulation Changes' notice, ADR-0054 item 28). The prompt returns true when it handled the
+    // gesture in either way, and false to let invoke() run the command without arguments. Set by the
+    // module that brings the UI; an empty function removes it. Precondition (asserted): `id` is
+    // registered.
     void setPrompt(std::string_view id, std::function<bool(EditorSession&)> prompt);
 
     // A user's gesture for the command `id` (a shortcut, a menu item): the checks of execute, then

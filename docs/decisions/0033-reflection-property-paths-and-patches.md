@@ -1,7 +1,8 @@
 # ADR-0033: Reflection property paths and patches
 
 - **Status:** Accepted
-- **Amended by:** [ADR-0037](0037-editor-commands-transactions-selection-and-automation.md)
+- **Amended by:** [ADR-0037](0037-editor-commands-transactions-selection-and-automation.md),
+  [ADR-0054](0054-play-in-editor-as-built.md)
 - **Date:** 2026-11-22
 - **Related:** amends [ADR-0018](0018-reflection.md) (reflection) rule 10,
   [ADR-0020](0020-serialization-rules-completed.md) (serialization) and
