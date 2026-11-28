@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Amended by:** [ADR-0030](0030-ecs-hooks-registration-and-immutable-components.md),
   [ADR-0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md),
-  [ADR-0032](0032-entity-references-stable-ids-and-world-copy.md)
+  [ADR-0032](0032-entity-references-stable-ids-and-world-copy.md), [ADR-0053](0053-play-in-editor-and-simulate.md)
 - **Date:** 2026-11-20
 - **Related:** [ADR-0001](0001-cpp-language-and-safety-rules.md) (no exceptions, no RTTI,
   generational handles, jobs), [ADR-0004](0004-modules-and-layering.md) (`core` layer, no

@@ -1,6 +1,7 @@
 # ADR-0017: Runtime and editor separation
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0053](0053-play-in-editor-and-simulate.md)
 - **Date:** 2026-11-20
 - **Related:** [ADR-0001](0001-cpp-language-and-safety-rules.md) (build configurations, no RTTI
   in runtime modules), [ADR-0004](0004-modules-and-layering.md) (layers, the runtime never

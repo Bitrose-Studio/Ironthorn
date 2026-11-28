@@ -17,11 +17,11 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0010](0010-serialization.md) | Serialization formats and versioning | Accepted, amended by [0020](0020-serialization-rules-completed.md) |
 | [0011](0011-shader-language-and-pipeline.md) | Shader language and pipeline | Accepted, amended by [0023](0023-build-time-shaders-for-samples-and-tests.md) |
 | [0012](0012-windowing-and-event-loop.md) | Windowing and the platform event loop | Accepted, amended by [0025](0025-job-system.md), [0027](0027-input-rules-completed.md) |
-| [0013](0013-input.md) | Input: events, state, routing and consumption | Accepted, amended by [0027](0027-input-rules-completed.md) |
-| [0014](0014-ecs-storage-and-world.md) | ECS storage and the world | Accepted, amended by [0030](0030-ecs-hooks-registration-and-immutable-components.md), [0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md), [0032](0032-entity-references-stable-ids-and-world-copy.md) |
+| [0013](0013-input.md) | Input: events, state, routing and consumption | Accepted, amended by [0027](0027-input-rules-completed.md), [0053](0053-play-in-editor-and-simulate.md) |
+| [0014](0014-ecs-storage-and-world.md) | ECS storage and the world | Accepted, amended by [0030](0030-ecs-hooks-registration-and-immutable-components.md), [0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md), [0032](0032-entity-references-stable-ids-and-world-copy.md), [0053](0053-play-in-editor-and-simulate.md) |
 | [0015](0015-asset-identity-and-reimport.md) | Asset identity and non-destructive reimport | Accepted, amended by [0024](0024-asset-document-envelope-and-extension.md), [0033](0033-reflection-property-paths-and-patches.md), [0034](0034-level-documents.md), [0049](0049-editor-content-browser-v1.md), [0050](0050-editor-content-browser-browse-slice-as-built.md) |
-| [0016](0016-gameplay-model-on-the-ecs.md) | Gameplay model on the ECS | Accepted |
-| [0017](0017-runtime-and-editor-separation.md) | Runtime and editor separation | Accepted |
+| [0016](0016-gameplay-model-on-the-ecs.md) | Gameplay model on the ECS | Accepted, amended by [0053](0053-play-in-editor-and-simulate.md) |
+| [0017](0017-runtime-and-editor-separation.md) | Runtime and editor separation | Accepted, amended by [0053](0053-play-in-editor-and-simulate.md) |
 | [0018](0018-reflection.md) | Reflection | Accepted, amended by [0019](0019-reflection-rules-corrected.md), [0030](0030-ecs-hooks-registration-and-immutable-components.md), [0032](0032-entity-references-stable-ids-and-world-copy.md), [0033](0033-reflection-property-paths-and-patches.md) |
 | [0019](0019-reflection-rules-corrected.md) | Reflection: rules corrected after the first implementation | Accepted |
 | [0020](0020-serialization-rules-completed.md) | Serialization: rules completed after the first implementation | Accepted, amended by [0024](0024-asset-document-envelope-and-extension.md), [0032](0032-entity-references-stable-ids-and-world-copy.md), [0033](0033-reflection-property-paths-and-patches.md) |
@@ -33,7 +33,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0026](0026-job-system-rules-corrected.md) | Job system: rules corrected after the first implementation (amends 0025) | Accepted |
 | [0027](0027-input-rules-completed.md) | Input: rules completed after the first implementation (amends 0012, 0013) | Accepted, amended by [0035](0035-file-system-configuration-and-main-thread-queue.md) |
 | [0028](0028-render-graph-v1.md) | Render graph v1 | Accepted |
-| [0029](0029-editor-ui-toolkit.md) | Editor UI toolkit | Accepted, amended by [0035](0035-file-system-configuration-and-main-thread-queue.md), [0040](0040-editor-docking-panels-and-layouts.md), [0042](0042-editor-viewport.md), [0050](0050-editor-content-browser-browse-slice-as-built.md) |
+| [0029](0029-editor-ui-toolkit.md) | Editor UI toolkit | Accepted, amended by [0035](0035-file-system-configuration-and-main-thread-queue.md), [0040](0040-editor-docking-panels-and-layouts.md), [0042](0042-editor-viewport.md), [0050](0050-editor-content-browser-browse-slice-as-built.md), [0053](0053-play-in-editor-and-simulate.md) |
 | [0030](0030-ecs-hooks-registration-and-immutable-components.md) | ECS: component hooks registration and immutable components (amends 0014, 0018) | Accepted |
 | [0031](0031-ecs-hierarchy-enabled-state-and-transform-propagation.md) | ECS: hierarchy, enabled state and transform propagation completed (amends 0014) | Accepted, amended by [0034](0034-level-documents.md) |
 | [0032](0032-entity-references-stable-ids-and-world-copy.md) | Entity references, stable ids and world copy (amends 0014, 0018, 0020) | Accepted, amended by [0034](0034-level-documents.md), [0037](0037-editor-commands-transactions-selection-and-automation.md) |
@@ -41,12 +41,12 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0034](0034-level-documents.md) | Level documents (amends 0015, 0024, 0031, 0032) | Accepted, amended by [0050](0050-editor-content-browser-browse-slice-as-built.md) |
 | [0035](0035-file-system-configuration-and-main-thread-queue.md) | File system, layered configuration and the main-thread queue (amends 0025, 0027, 0029) | Accepted, amended by [0036](0036-file-system-windows-atomic-replace-corrected.md), [0041](0041-editor-amendments-after-outliner-and-details.md) |
 | [0036](0036-file-system-windows-atomic-replace-corrected.md) | File system: Windows atomic replace corrected after the first implementation (amends 0035) | Accepted, amended by [0038](0038-file-system-windows-read-retry-during-replace.md) |
-| [0037](0037-editor-commands-transactions-selection-and-automation.md) | Editor commands, transactions, selection and automation (amends 0008, 0032, 0033) | Accepted, amended by [0041](0041-editor-amendments-after-outliner-and-details.md), [0042](0042-editor-viewport.md), [0048](0048-editor-viewport-translate-gizmo-as-built.md), [0049](0049-editor-content-browser-v1.md) |
+| [0037](0037-editor-commands-transactions-selection-and-automation.md) | Editor commands, transactions, selection and automation (amends 0008, 0032, 0033) | Accepted, amended by [0041](0041-editor-amendments-after-outliner-and-details.md), [0042](0042-editor-viewport.md), [0048](0048-editor-viewport-translate-gizmo-as-built.md), [0049](0049-editor-content-browser-v1.md), [0053](0053-play-in-editor-and-simulate.md) |
 | [0038](0038-file-system-windows-read-retry-during-replace.md) | File system: Windows read retry while a replace is in flight (amends 0036) | Accepted, amended by [0039](0039-file-system-windows-read-retry-measured.md) |
 | [0039](0039-file-system-windows-read-retry-measured.md) | File system: Windows read retry after a replace, measured (amends 0038) | Accepted |
 | [0040](0040-editor-docking-panels-and-layouts.md) | Editor docking, panels and layouts (amends 0029) | Accepted |
 | [0041](0041-editor-amendments-after-outliner-and-details.md) | Editor amendments after the Outliner and Details (amends 0035, 0037) | Accepted |
-| [0042](0042-editor-viewport.md) | Editor world and viewport (amends 0029, 0037) | Accepted, amended by [0043](0043-editor-ui-user-texture-state.md), [0045](0045-editor-viewport-amendments-after-the-viewport-panel.md), [0046](0046-editor-viewport-horizontal-field-of-view.md), [0047](0047-editor-viewport-picking-as-built.md), [0048](0048-editor-viewport-translate-gizmo-as-built.md) |
+| [0042](0042-editor-viewport.md) | Editor world and viewport (amends 0029, 0037) | Accepted, amended by [0043](0043-editor-ui-user-texture-state.md), [0045](0045-editor-viewport-amendments-after-the-viewport-panel.md), [0046](0046-editor-viewport-horizontal-field-of-view.md), [0047](0047-editor-viewport-picking-as-built.md), [0048](0048-editor-viewport-translate-gizmo-as-built.md), [0053](0053-play-in-editor-and-simulate.md) |
 | [0043](0043-editor-ui-user-texture-state.md) | Editor UI user textures: the renderer owns the import state (amends 0042) | Accepted, amended by [0045](0045-editor-viewport-amendments-after-the-viewport-panel.md) |
 | [0044](0044-gpu-profiling-zones.md) | GPU profiling zones (amends 0007, 0009) | Accepted |
 | [0045](0045-editor-viewport-amendments-after-the-viewport-panel.md) | Editor viewport amendments after the Viewport panel (amends 0042, 0043) | Accepted, amended by [0046](0046-editor-viewport-horizontal-field-of-view.md), [0047](0047-editor-viewport-picking-as-built.md) |
@@ -57,6 +57,7 @@ next number. An accepted ADR is changed only by a new ADR that supersedes it.
 | [0050](0050-editor-content-browser-browse-slice-as-built.md) | Editor Content Browser browse slice as built (amends 0015, 0029, 0034, 0049) | Accepted, amended by [0052](0052-editor-content-browser-file-operations-as-built.md) |
 | [0051](0051-platform-open-file-dialog-as-built.md) | Platform open-file dialog as built (amends 0049) | Accepted |
 | [0052](0052-editor-content-browser-file-operations-as-built.md) | Editor Content Browser file operations as built (amends 0049, 0050) | Accepted |
+| [0053](0053-play-in-editor-and-simulate.md) | Play In Editor and Simulate (amends 0013, 0014, 0016, 0017, 0029, 0037, 0042) | Accepted |
 
 ## Planned
 

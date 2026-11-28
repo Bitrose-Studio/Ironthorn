@@ -1,6 +1,7 @@
 # ADR-0016: Gameplay model on the ECS
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0053](0053-play-in-editor-and-simulate.md)
 - **Date:** 2026-11-20
 - **Related:** [ADR-0004](0004-modules-and-layering.md) (layers),
   [ADR-0008](0008-editor-familiar-to-unreal-developers.md) (Actor is an editor word),

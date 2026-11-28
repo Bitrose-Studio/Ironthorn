@@ -4,7 +4,7 @@
 - **Amended by:** [ADR-0035](0035-file-system-configuration-and-main-thread-queue.md),
   [ADR-0040](0040-editor-docking-panels-and-layouts.md),
   [ADR-0042](0042-editor-viewport.md),
-  [ADR-0050](0050-editor-content-browser-browse-slice-as-built.md)
+  [ADR-0050](0050-editor-content-browser-browse-slice-as-built.md), [ADR-0053](0053-play-in-editor-and-simulate.md)
 - **Date:** 2026-11-22
 - **Related:** [ADR-0001](0001-cpp-language-and-safety-rules.md) (no exceptions or RTTI,
   `ITH_ASSERT`), [ADR-0003](0003-clean-room.md), [ADR-0004](0004-modules-and-layering.md)
