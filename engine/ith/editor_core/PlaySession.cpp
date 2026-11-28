@@ -4,6 +4,7 @@
 #include "ith/ecs/StableId.h"
 #include "ith/ecs/WorldCopy.h"
 #include "ith/editor_core/CommandArgs.h"
+#include "ith/editor_core/Viewports.h"
 #include "ith/foundation/Assert.h"
 #include "ith/foundation/Log.h"
 #include "ith/gameplay/GameWorld.h"
@@ -31,8 +32,10 @@ PlaySession::PlaySession(PlayMode mode, bool paused, std::uint64_t identity)
 
 Expected<std::unique_ptr<PlaySession>> PlaySession::start(const World& editorWorld, const Selection& editorSelection,
                                                           std::span<const SystemDescriptor> gameSystems, PlayMode mode,
-                                                          bool paused, std::uint64_t identity) {
+                                                          bool paused, std::uint64_t identity, std::size_t viewport,
+                                                          const EditorCamera& camera) {
     ITH_ASSERT_MSG(identity != 0, "editor: a play session's identity is never the editor world's");
+    ITH_ASSERT_MSG(viewport < kMaxViewports, "editor: a session plays in one of the four viewports");
     // The constructor is private, so make_unique can't reach it; the pointer is owned at once.
     std::unique_ptr<PlaySession> session(new PlaySession(mode, paused, identity));
     if (Expected<void> built = buildGameSchedule(session->m_schedule, gameSystems); !built) {
@@ -45,6 +48,8 @@ Expected<std::unique_ptr<PlaySession>> PlaySession::start(const World& editorWor
     // WorldStarted goes here, once the engine has events (ADR-0053 decision 11).
     session->m_world.insertResource(Time{});
     session->m_selection.replace(editorSelection.entities());
+    session->m_viewport = viewport < kMaxViewports ? viewport : 0;
+    session->m_savedCamera = camera;
     session->m_seenStructure = session->m_world.structureGeneration();
     // A new world for every panel: its counters start moved, so nothing reads it as unchanged.
     session->m_changes.bumpStructure();
@@ -52,6 +57,21 @@ Expected<std::unique_ptr<PlaySession>> PlaySession::start(const World& editorWor
     session->m_changes.bumpDocument();
     session->m_changes.bumpAllValues();
     return session;
+}
+
+void PlaySession::setPossessed(bool possessed, EditorCamera& camera) noexcept {
+    if (possessed == m_possessed) {
+        return;
+    }
+    if (possessed) {
+        // The spectator resumes where it was ejected; with no Eject yet, at the camera.
+        if (m_spectatorPose.has_value()) {
+            camera = *m_spectatorPose;
+        }
+    } else {
+        m_spectatorPose = camera; // the camera stays where the spectator was
+    }
+    m_possessed = possessed;
 }
 
 void PlaySession::setPaused(bool paused) noexcept {

@@ -13,7 +13,8 @@
 // rectangle the panel last reported. The transform tool, the gizmo space and snapping are one
 // editor-wide state next to them. Panels draw the store, the ith.viewport commands change it and
 // headless tests drive it. None of it is level content: it never dirties the level or makes an
-// undo entry.
+// undo entry. The selected viewport, the instance the last mouse press on a viewport image went to,
+// is where Play In Editor starts (ADR-0053 decision 5, amending ADR-0042 rule 3).
 //
 // Cameras are remembered per level. saveLevel keeps the cameras for a level and writes the
 // viewports file (<project>/Saved/Editor/Viewports.json) when what it holds changed; restoreLevel
@@ -22,7 +23,10 @@
 // first time either is called. A missing file (a fresh project) means default cameras, silently; an
 // unreadable one means default cameras and one warning in the "EditorViewports" log category. A
 // failed write is logged once until a write succeeds.
-// The tool, the gizmo space, snapping and the game-view flags are session state and are not saved.
+// The tool, the gizmo space, snapping, the game-view flags and the selected viewport are session
+// state and are not saved. While a play session runs, the play viewport's camera is the play camera;
+// EditorSession saves it at the start, restores it at Stop and saves the restored one, so the file
+// never holds a pose from a session.
 //
 // The file is an ith.editor_viewports document, version 1; its data holds the cameras by level
 // asset id, then by viewport instance id. A camera's missing field keeps its default, and a field
@@ -152,6 +156,24 @@ public:
     // Precondition (asserted): index < kMaxViewports; otherwise the last one's.
     [[nodiscard]] static std::string instanceId(std::size_t index);
 
+    // The index of the viewport instance id `instance` ("ith.viewport.1" is 0), or std::nullopt for
+    // any other id.
+    [[nodiscard]] static std::optional<std::size_t> indexOf(std::string_view instance) noexcept;
+
+    // The index of the viewport whose last reported image contains the point at `x`, `y` in window
+    // pixels and was hovered in the last frame (ViewportState::imageHovered), or std::nullopt. An
+    // image without area contains no point.
+    [[nodiscard]] std::optional<std::size_t> imageAt(float x, float y) const noexcept;
+
+    // The selected viewport's index: the viewport whose image the last mouse press went to (the
+    // viewport consumer sets it), 0 ("ith.viewport.1") at first (ADR-0053 decision 5). Play In
+    // Editor starts in it.
+    [[nodiscard]] std::size_t selected() const noexcept { return m_selected; }
+
+    // Selects viewport `index`. Precondition (asserted): index < kMaxViewports; otherwise nothing
+    // changes.
+    void setSelected(std::size_t index) noexcept;
+
     // The transform tool; Translate at first.
     [[nodiscard]] ViewportTool tool() const noexcept { return m_tool; }
 
@@ -191,6 +213,7 @@ private:
 
     std::string m_file;
     std::array<ViewportState, kMaxViewports> m_states;
+    std::size_t m_selected = 0;
     ViewportTool m_tool = ViewportTool::Translate;
     GizmoSpace m_gizmoSpace = GizmoSpace::World;
     bool m_snapEnabled = true;

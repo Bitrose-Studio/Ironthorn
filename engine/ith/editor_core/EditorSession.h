@@ -26,7 +26,9 @@
 // sets the document's play flag; stopPlay discards the session. While one exists, active() is the
 // game world's set, so the selection commands, the four value commands of the Details panel, the
 // world queries and the view models act on the game world; the file commands, the history and the
-// document keep using document().
+// document keep using document(). The session plays in the selected viewport (Viewports::selected),
+// whose camera it saves at the start and restores at Stop; with an Input bound (setPlayInput) it
+// turns capture on click on while possessed and releases the mouse on Shift + F1, Eject and Stop.
 
 #include "ith/ecs/Schedule.h"
 #include "ith/editor_core/CommandRegistry.h"
@@ -38,6 +40,7 @@
 #include "ith/editor_core/Viewports.h"
 #include "ith/foundation/Expected.h"
 #include "ith/jobs/JobCounter.h"
+#include "ith/platform_events/Event.h"
 #include "ith/serialization/Document.h"
 
 #include <cstddef>
@@ -51,6 +54,7 @@
 namespace ith {
 
 class AssetDatabase;
+class Input;
 class JobSystem;
 class TypeRegistry;
 
@@ -105,7 +109,8 @@ public:
     EditorSession& operator=(const EditorSession&) = delete;
     EditorSession(EditorSession&&) = delete;
     EditorSession& operator=(EditorSession&&) = delete;
-    // Waits for a file operation that is still running (waitIdle).
+    // Stops a session that still runs (stopPlay), then waits for a file operation that is still
+    // running (waitIdle).
     ~EditorSession();
 
     [[nodiscard]] EditorDocument& document() noexcept { return m_document; }
@@ -143,7 +148,8 @@ public:
     [[nodiscard]] const ContentBrowserModel& content() const noexcept { return m_content; }
 
     // Keeps the open level's cameras and writes the viewports file when it changed (ADR-0042 rule
-    // 4). An untitled level, which has no file yet, keeps none. The editor calls it at exit.
+    // 4). An untitled level, which has no file yet, keeps none. The editor calls it at exit. While a
+    // session runs, the play viewport's camera saved at its start is kept, never a session pose.
     void saveViewports();
 
     [[nodiscard]] const TypeRegistry& types() const noexcept { return *m_types; }
@@ -165,21 +171,54 @@ public:
 
     // Starts Play (possessed) or Simulate (ejected) on the editor world as it is in memory, paused
     // when `paused` (ADR-0053 decision 7): canStartPlay, PlaySession::start with
-    // options().gameSystems, then the document's play flag. Fails, changing nothing, with
+    // options().gameSystems in the selected viewport (Viewports::selected), saving its camera, then
+    // the document's play flag. Play turns capture on click on for the bound window
+    // (setPlayInput); the mouse is captured only by a click. Fails, changing nothing, with
     // canStartPlay's errors, the schedule's "ecs.schedule.*" error (logged) and
     // "editor.play.copy_failed". Precondition (asserted): not called from inside a command run by
     // another command (CommandRegistry::depth at most 1), whose scopes may point at the game world.
     Expected<void> startPlay(PlayMode mode, bool paused = false);
-
     // Stops the session (ADR-0053 decision 10); does nothing without one. It can't fail: an open
     // game-world transaction is dropped without replaying it (Transactions::abandonOpen; the world
-    // goes with it), the session and its world are destroyed, and the play flag is cleared. The
-    // editor world, its history, dirty state and selection are as before Play. A scope still held on
-    // the game world's transactions (a Details drag) must then be dropped with
-    // TransactionScope::release, never ended. Game-world entity handles must not be kept across
-    // Stop: world ids are recycled, so the next session's world may have the same id. Precondition
-    // (asserted): as for startPlay.
+    // goes with it), the bound window's mouse capture is released (another window's is left alone)
+    // and its capture on click turned off, the play viewport's waiting click is dropped and its
+    // camera restored bit for bit to its pose at the start, the session and its world are
+    // destroyed, and the play flag is cleared. The editor world, its history, dirty state, selection
+    // and every camera are as before Play. A scope still held on the game world's transactions (a
+    // Details drag) must then be dropped with TransactionScope::release, never ended. Game-world
+    // entity handles must not be kept across Stop: world ids are recycled, so the next session's
+    // world may have the same id. The destructor calls it too. Precondition (asserted): as for
+    // startPlay.
     void stopPlay();
+
+    // Possesses or ejects the running session (PlaySession::setPossessed with the play viewport's
+    // camera; ADR-0053 decisions 18 and 20). Possessing turns capture on click on for the bound
+    // window; ejecting turns it off and releases the bound window's capture. Precondition
+    // (asserted): a session runs; otherwise nothing changes.
+    void setPossessed(bool possessed);
+
+    // Shift + F1 (ADR-0053 decision 20): releases the bound window's mouse capture (another window's
+    // is left alone) and keeps the session and capture on click as they are, so the next click into
+    // the play viewport captures again.
+    void freeMouse();
+
+    // The Input and window Play In Editor captures the mouse in: the editor window's (ADR-0027 rule
+    // 3). Null (headless, the default): nothing is captured and mouseCaptured() is false. The
+    // application binds it before any session starts and unbinds it with setPlayInput(nullptr,
+    // kNoWindow) after stopping the session and before the Input is destroyed: the session uses the
+    // bound Input in Stop, also from its destructor. Precondition (asserted): no session runs;
+    // otherwise the binding stays.
+    void setPlayInput(Input* input, WindowId window) noexcept;
+
+    // The bound Input, or null.
+    [[nodiscard]] Input* playInput() const noexcept { return m_input; }
+
+    // Whether a session runs and the bound window has the mouse captured for the game.
+    [[nodiscard]] bool mouseCaptured() const;
+
+    // The world viewport `viewport` (Viewports::at) draws (ADR-0053 decision 16): the game world for
+    // the play viewport while a session runs, the editor world otherwise.
+    [[nodiscard]] const World& drawnWorld(std::size_t viewport) const noexcept;
 
     // Runs a command: commands().execute(*this, id, args).
     Expected<serialization::Value> execute(std::string_view id, const serialization::Value& args = {});
@@ -271,6 +310,8 @@ private:
     struct FileOperation;
 
     Expected<void> checkIdle() const;
+    // Releases the mouse when the bound window holds the capture.
+    void releaseEditorMouse();
     void start(std::unique_ptr<FileOperation> operation);
     static void runFileStep(FileOperation& operation);
     // Before a Save As writes: when the file at the path is a level, the text gets that level's id.
@@ -298,6 +339,9 @@ private:
     std::size_t m_reportedDropped = 0;
     // The identity the last play session got.
     std::uint64_t m_playSessions = 0;
+    // Where Play In Editor captures the mouse (setPlayInput); not owned.
+    Input* m_input = nullptr;
+    WindowId m_inputWindow = kNoWindow;
     // Last, so it is destroyed first: nothing outlives the world it refers to.
     std::unique_ptr<PlaySession> m_play;
 };

@@ -3,6 +3,8 @@
 #include "ith/config/Config.h"
 #include "ith/editor_core/CommandRegistry.h"
 #include "ith/editor_core/EditorSession.h"
+#include "ith/editor_core/PlaySession.h"
+#include "ith/editor_core/Viewports.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
 #include "ith/input/ControlNames.h"
@@ -93,6 +95,15 @@ std::string toString(const Chord& chord) {
         text += "Alt+";
     }
     return text + std::string(controlName(chord.key));
+}
+
+Chord chordOf(const Event& event) noexcept {
+    Chord chord{.key = event.key, .modifiers = event.modifiers & kChordModifiers};
+    // Letters follow the layout: the key that prints Z is Z for shortcuts.
+    if (event.layoutKey >= U'a' && event.layoutKey <= U'z') {
+        chord.key = static_cast<Key>(static_cast<std::uint16_t>(Key::A) + (event.layoutKey - U'a'));
+    }
+    return chord;
 }
 
 Keymap Keymap::load(const Config& config, const CommandRegistry& registry, std::vector<Error>& warnings) {
@@ -201,9 +212,42 @@ std::vector<Chord> Keymap::chordsOf(std::string_view command) const {
 }
 
 InputReply KeymapConsumer::onInputEvent(const Event& event) {
-    if (event.type != EventType::KeyDown || event.repeat) {
+    const PlaySession* play = m_session->play();
+    if (play == nullptr) {
+        return event.type == EventType::KeyDown && !event.repeat ? shortcut(event) : InputReply::NotConsumed;
+    }
+    // While the mouse is captured every key is the game's (ADR-0053 decision 21); the Play In Editor
+    // keys were handled above.
+    const Input* input = m_session->playInput();
+    if (input != nullptr && input->mouseCaptured(event.window)) {
         return InputReply::NotConsumed;
     }
+    // The gate (ADR-0053 decision 22): with the mouse free, nothing below the editor gets keyboard
+    // or mouse input, bound or not, except the press that capture on click takes.
+    switch (event.type) {
+        case EventType::KeyDown:
+            if (!event.repeat) {
+                static_cast<void>(shortcut(event));
+            }
+            return InputReply::Consumed;
+        case EventType::MouseButtonDown: {
+            const std::optional<std::size_t> viewport = m_session->viewports().imageAt(event.x, event.y);
+            const bool capturing = play->possessed() && input != nullptr && input->captureOnClick(event.window) &&
+                                   viewport == play->viewport();
+            return capturing ? InputReply::NotConsumed : InputReply::Consumed;
+        }
+        case EventType::MouseMoved:
+        case EventType::MouseWheel:
+            return InputReply::Consumed;
+        case EventType::GamepadButtonDown:
+        case EventType::GamepadAxisMoved:
+            return play->possessed() ? InputReply::NotConsumed : InputReply::Consumed;
+        default:
+            return InputReply::NotConsumed; // releases, text and hotplug: Input ignores the reply
+    }
+}
+
+InputReply KeymapConsumer::shortcut(const Event& event) {
     // An interaction in either world: the editor world's, or the game world's while playing.
     Transactions& editor = m_session->document().transactions();
     Transactions& active = m_session->active().transactions;
@@ -215,11 +259,7 @@ InputReply KeymapConsumer::onInputEvent(const Event& event) {
         }
         return InputReply::NotConsumed;
     }
-    Chord chord{.key = event.key, .modifiers = event.modifiers & kChordModifiers};
-    // Letters follow the layout: the key that prints Z is Z for shortcuts.
-    if (event.layoutKey >= U'a' && event.layoutKey <= U'z') {
-        chord.key = static_cast<Key>(static_cast<std::uint16_t>(Key::A) + (event.layoutKey - U'a'));
-    }
+    const Chord chord = chordOf(event);
     const std::string* command = nullptr;
     if (m_session->content().keyboardFocus()) {
         // The asset view's own keys: nothing runs, not even an Editor binding of the same chord.

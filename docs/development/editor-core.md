@@ -168,9 +168,10 @@ Simulate to Stop; `EditorSession` owns it while it exists (`play()`, null otherw
   sessions tick only that way. After every tick the game world's `EditorChanges` bump `structure`
   when `World::structureGeneration()` moved, and `bumpAllValues()`.
 - **Stop** (`stopPlay`) can't fail: it drops an open game-world interaction without a replay
-  (`abandonOpen`), destroys the session (world, schedule, `Time`, play selection) and clears the
-  play flag. The editor world, history,
-  dirty state and selection are as before Play. The two lifecycle points are marked in code
+  (`abandonOpen`), releases the mouse and turns capture on click off, drops the play viewport's
+  waiting click, restores its camera bit for bit, destroys the session (world, schedule, `Time`,
+  play selection, spectator pose) and clears the play flag. The editor world, history, dirty state,
+  selection and every camera are as before Play. The two lifecycle points are marked in code
   ("`WorldStarted` goes here", "`WorldEnding` goes here") until the engine has events.
 - **The active world** (`active()`, an `ith::ActiveWorld`): the game world's world, `Transactions`,
   play selection, `EditorChanges` and entity mapping while a session exists, the document's
@@ -202,10 +203,79 @@ Simulate to Stop; `EditorSession` owns it while it exists (`play()`, null otherw
 | `ith.play.free_mouse` | | `captured: false` | `editor.play.not_running` |
 | `ith.query.play` | | `state`, `possessed`, `paused`, `captured`, `viewport`, `frame`, `elapsed`, `entities`, `spawned` | never |
 
-Not here yet (later slices of ADR-0053): the selected viewport (the play viewport is always
-`ith.viewport.1`), the camera saved at start and restored at Stop, the spectator, Possess and Eject
-beyond the flag, mouse capture (`captured` is always false), the Play In Editor input consumer,
-Keep Simulation Changes and its K binding, and the UI.
+### Views and input while playing
+
+```cpp
+session.setPlayInput(&input, window.id());   // once, before any session: where capture happens
+ith::SpectatorConsumer spectator(session);
+ith::PlayInputConsumer playKeys(session, keymap);
+input.addConsumer({.window = id, .layer = ith::ConsumerLayer::Game, .consumer = &spectator});
+// ... the keymap's, the viewports' and the UI's consumers, then, last, so it is on top:
+input.addConsumer({.window = id, .layer = ith::ConsumerLayer::Editor, .consumer = &playKeys});
+// each frame, after processEvents:
+if (spectator.update(deltaSeconds)) { idle.requestFrame(); }
+playKeys.reportUi(textFieldActive, popupOpen); // at the end of the UI's frame
+```
+
+`PlayInput.h`, ADR-0053 decisions 5 and 16 to 22.
+
+- **The selected viewport** (`Viewports::selected`): the viewport the last mouse press on a viewport
+  image went to, `ith.viewport.1` at first. A session plays there (`PlaySession::viewport`);
+  `ith.query.play` and the Play and Simulate results name it. It is session state, not saved.
+- **The play camera** is the play viewport's own camera. The session keeps its pose from the start
+  (`PlaySession::savedCamera`) and Stop puts it back; `saveViewports` during a session writes that
+  pose, so `Viewports.json` never holds a session pose. Simulate and an ejected session fly it with
+  every editor control.
+- **The spectator** (`ith::SpectatorConsumer`, `Game` layer): while possessed and captured, mouse
+  motion turns the play camera as RMB look does and the physical W/A/S/D/Q/E keys fly it at its
+  speed step (`update` moves it, the first frame of a movement for at most `kMaxFlyStepSeconds`).
+  Motion that is not finite is ignored. With the mouse free or the session ejected it moves nothing
+  and forgets the keys it held. It gets input exactly when a game would, which the keymap consumer
+  decides.
+- **Possess and Eject** (`EditorSession::setPossessed`, F8) keep one spectator pose: Eject leaves the
+  camera where the spectator was and keeps that pose; Possess moves the camera back to it, or, with
+  no Eject yet in the session (it started with Simulate), leaves it where it is. Possessing turns
+  capture on click on for the bound window; ejecting turns it off and releases the mouse.
+- **Capture.** With an `Input` bound (`setPlayInput`), Play turns capture on click on. While
+  possessed, the viewport consumer leaves presses, motion and the wheel over the play viewport's
+  image alone, and the keymap consumer passes that press on while capture on click is on, so capture
+  on click takes it: the mouse is captured, nothing is picked and no game consumer sees the press.
+  Shift + F1 (`ith.play.free_mouse`, `EditorSession::freeMouse`), Eject, Stop and focus loss end
+  capture, and only the bound window's: another window's capture is left alone. Headless, with
+  nothing bound, the mouse is never captured.
+- **The binding's lifetime:** bind before any session starts; stop the session and unbind
+  (`setPlayInput(nullptr, kNoWindow)`) before the `Input` is destroyed. `setPlayInput` asserts that
+  no session runs, and the `EditorSession` destructor stops a session still running, through the
+  bound `Input`.
+- **The Play In Editor consumer** (`ith::PlayInputConsumer`, `Editor` layer, on top): while a
+  session runs, a press bound in the Play In Editor context runs its command and is consumed.
+  Escape (`ith.play.stop`) passes on, while the mouse is free, when an interaction holds a
+  transaction open in either world (the keymap consumer cancels it) or the UI's last `reportUi`
+  said a text field is active or a popup is open; while captured it always stops. Shift + F1 and F8
+  always run.
+- **The keymap consumer while playing:** with the mouse captured it runs nothing and consumes
+  nothing, so W, K, Delete, Ctrl + Z and Ctrl + S reach the game. With the mouse free it runs its
+  chords and consumes every key press, mouse press, motion and wheel event, bound or not (the
+  gate), except a possessed press on the play viewport's image; gamepad presses and axes pass on
+  only while possessed.
+- **Picking and Focus:** `applyPick(session, viewport, texel, mode)` reads the texel in the world
+  that viewport draws (`EditorSession::drawnWorld`: the game world in the play viewport, the editor
+  world elsewhere) and applies the hit's stable id to the active selection; spawned entities and
+  ids the active world doesn't have change nothing. Focus frames the active selection in the world
+  its viewport draws. The gizmo stays hidden while playing.
+
+Not here yet (later slices of ADR-0053): Keep Simulation Changes and its K binding (slice 4), and
+slice 5, the UI and the application:
+
+- the toolbar, the play state indicators and the Escape report (`PlayInputConsumer::reportUi`);
+- the play viewport drawing `drawnWorld(index)` with the active selection, its redraw key built on
+  `active().changes` and the active world's `identity`;
+- transform propagation for the game world before the first viewport that draws it;
+- the Viewport panel dropping its in-flight instance picks when the play identity changes;
+- the ImGui consumer neither consuming nor forwarding keys while the mouse is captured;
+- opening `ith.viewport.1` when the selected viewport's panel is closed;
+- in `editor/Main.cpp`: `setPlayInput` (and unbinding at exit), the consumer order, the spectator's
+  `update`, the tick and the idle rule, and Quit stopping the session.
 
 ## Editor camera
 
@@ -281,9 +351,10 @@ panel is open or not: the `camera`, the `gameView` flag and the image rectangle 
 whether the image is hovered with nothing on top of it (`imageHovered`), the last `click` on
 the image that the panel hasn't taken yet (see [Click picking](#click-picking)), and the gizmo
 handle a drag in it holds (`gizmoDrag`, see [Translate gizmo](#translate-gizmo)). Next to
-them is one editor-wide state: the transform tool (translate at first), the gizmo space (world) and
-snapping (on, 0.1 m). Panels draw the store, the commands below change it and tests drive it
-directly. None of it dirties the level or makes an undo entry.
+them is one editor-wide state: the transform tool (translate at first), the gizmo space (world),
+snapping (on, 0.1 m) and the selected viewport, where Play In Editor starts (`selected()`, the
+last one a press on its image went to). Panels draw the store, the commands below change it and
+tests drive it directly. None of it dirties the level or makes an undo entry.
 
 ```cpp
 ith::ViewportState* viewport = session.viewports().find("ith.viewport.1");
@@ -304,8 +375,9 @@ newer version, a camera with a speed step outside 1–8 or a pitch outside (−�
 cameras and one warning in the `EditorViewports` log category; the next save replaces it. A
 camera's missing field keeps its default and a field it doesn't have is ignored silently, so a
 camera written with the vertical `fovY` of before ADR-0046 keeps its position, yaw and pitch and
-gets the default `fovX`. The tool, the gizmo space, snapping and the game-view flags are session
-state and are not saved. Follow-up: pruning the entries of levels that no longer exist.
+gets the default `fovX`. The tool, the gizmo space, snapping, the game-view flags and the selected
+viewport are session state and are not saved. Follow-up: pruning the entries of levels that no
+longer exist.
 
 The Viewport commands ([ADR-0042](../decisions/0042-editor-viewport.md) rule 29) are bound in
 `Keymap.json`. Those that take a `"viewport"` argument use `ith::kDefaultViewport`
@@ -354,7 +426,8 @@ of `ith.viewport.1` ([editor UI](editor-ui.md#viewport)).
 `ith::ViewportConsumer` (`ViewportInput.h`, [ADR-0042](../decisions/0042-editor-viewport.md) rules
 6 to 12) is the viewport consumer of an editor window's input stack. The application adds it after
 the keymap consumer and before creating the UI, so the stack is, top first: the UI's consumer, the
-viewports', the keymap's (ADR-0042 rule 8 amends ADR-0029 rule 7). Each frame, after
+viewports', the keymap's (ADR-0042 rule 8 amends ADR-0029 rule 7), with the Play In Editor consumer
+on top of them ([Views and input while playing](#views-and-input-while-playing)). Each frame, after
 `processEvents`, it calls `update` with the frame's time:
 
 ```cpp
@@ -451,16 +524,18 @@ Only a press that misses them, or lands on the pivot itself, stays a click candi
 
 - `pickTexel(entity)` is what the shapes pass writes into the `R32G32Uint` id target: the slot
   index + 1 and the generation. The empty texel (index 0) means no entity, and the target is
-  cleared to it. The world id isn't stored: the target only shows the editor world.
+  cleared to it. The world id isn't stored: the target shows one world, the one its viewport draws.
 - `pickedEntity(texel, worldId)` turns a texel back into a handle.
-- `applyPick(session, texel, mode)` changes the selection through `ith.selection.set`:
+- `applyPick(session, viewport, texel, mode)` reads the texel in the world viewport `viewport`
+  draws (`EditorSession::drawnWorld`) and changes the active selection through `ith.selection.set`:
 
 | Texel | `Replace` (click) | `Toggle` (Ctrl) | `Add` (Shift) |
 |---|---|---|---|
 | Empty space | Clears the selection | Nothing | Nothing |
 | A live entity with a stable id | Selects it alone | Toggles it | Adds it as primary |
 | A stale entity (despawned since the frame was drawn: `isAlive` fails) | Nothing | Nothing | Nothing |
-| An entity without a `StableId` (ADR-0037 rule 5) | Nothing | Nothing | Nothing |
+| An entity without a `StableId` (ADR-0037 rule 5; spawned during play) | Nothing | Nothing | Nothing |
+| While playing, an entity whose stable id the game world doesn't have | Nothing | Nothing | Nothing |
 
 ### Translate gizmo
 
@@ -951,7 +1026,10 @@ between frames, so keys in the same batch of events reach the right context.
 invokes the bound command of a key press (`CommandRegistry::invoke`, so a prompt can ask for
 input); letter keys follow the user's layout, so Ctrl + Z is the key that prints Z. While an
 interaction holds a transaction open, in the editor world or the game world, Escape cancels it
-(`Transactions::cancelOpen`) and other keys go on to the consumers below.
+(`Transactions::cancelOpen`) and other keys go on to the consumers below. While a Play In Editor
+session runs it yields every key to the game while the mouse is captured, and keeps every key and
+mouse event from the game while it is free
+([Views and input while playing](#views-and-input-while-playing)).
 
 ## Preferences
 
@@ -1105,6 +1183,24 @@ runner serves the headless tests and the editor's `--automation` run.
   new key; the structural, history and file refusals writing nothing;
   the content file operations working during play; Stop restoring the editor world, history, dirty
   state and selection, and the next Play getting a fresh world; and `bumpAllValues`;
+- the Play In Editor views and input tests (`PlayInputTests.cpp`, spec requirements 1, 18 to 27,
+  32 to 35), through a real `Input` with the editor's consumers in ADR-0053's order and the engine's
+  `Keymap.json`: the selected viewport and the play viewport it gives; Simulate flying the play
+  viewport's own camera, restored bit for bit at Stop and never written to `Viewports.json` (also
+  by a save during the session); the spectator turning with captured motion and flying with W on
+  the Game layer; Eject and Possess with one saved pose, and Simulate possessing at the camera;
+  capture on click on the play viewport only, picking nothing and reaching no game consumer; keys
+  while captured reaching the game and running no shortcut; Shift + F1, F8 and Escape; the keymap
+  gate with the mouse free (an unbound key, the mouse, a press outside the play viewport, gamepads
+  only while possessed); Escape yielding to a reported text field and popup and to a Details drag,
+  then stopping; focus loss; Simulate's editor controls; picks against the drawn world changing
+  the play selection (spawned entities and ids the game world lost changing nothing), the hidden
+  gizmo and Focus in the drawn world; Stop dropping the play viewport's click and ending capture;
+  a headless session without a bound `Input`; the session destroyed during a possessed session
+  leaving the `Input` uncaptured; binding during a session asserting; another window's capture
+  surviving Stop, Eject and Shift + F1; the spectator still after Shift + F1 and Eject with W held;
+  motion that is not finite moving no camera; Possess after an Eject in a Simulate session; and the
+  gate passing the capturing press only with capture on click on;
 - the Play In Editor benchmark (`PlaySessionBenchmark.cpp`, CTest `play_session_benchmark`, label
   `benchmark`): start and Stop on 10 000 entities against 100 ms and 50 ms, the session's own work
   per tick against 0.25 ms, allocations per tick and the Outliner and Details work per tick (spec

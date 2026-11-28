@@ -142,23 +142,24 @@ Expected<Value> cycleTool(EditorSession& session, const Value& /*args*/) {
 // --- Focus ---
 
 Expected<void> somethingSelected(EditorSession& session) {
-    if (session.document().selection().empty()) {
+    if (session.active().selection.empty()) {
         return makeError("editor.selection.empty", "Select something to focus on");
     }
     return {};
 }
 
-// Frames the union of the selected entities' world bounds; an entity without a shape adds its
-// position.
+// Frames the union of the active selection's world bounds in the world the viewport draws (ADR-0053
+// decision 16); an entity without a shape adds its position.
 Expected<Value> focusSelection(EditorSession& session, const Value& args) {
     constexpr std::string_view kCommand = "ith.viewport.focus_selection";
     Expected<NamedViewport> viewport = viewportArg(session, kCommand, args);
     if (!viewport) {
         return makeUnexpected(std::move(viewport).error());
     }
-    const World& world = session.document().world();
+    const std::optional<std::size_t> index = Viewports::indexOf(viewport->instance);
+    const World& world = session.drawnWorld(index.value_or(0));
     std::optional<Aabb> bounds;
-    for (const Uuid& id : session.document().selection().entities()) {
+    for (const Uuid& id : session.active().selection.entities()) {
         const Entity entity = world.findByStableId(id);
         if (entity.isNull()) {
             continue;

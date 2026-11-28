@@ -874,6 +874,7 @@ if(TARGET ith_editor_core)
             editor_core/KeymapTests.cpp
             editor_core/LayoutTests.cpp
             editor_core/ModelTests.cpp
+            editor_core/PlayInputTests.cpp
             editor_core/PlaySessionTests.cpp
             editor_core/TransactionTests.cpp
             editor_core/ViewportGizmoTests.cpp

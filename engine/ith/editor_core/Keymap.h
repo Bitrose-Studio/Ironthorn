@@ -23,7 +23,8 @@
 //
 // Three contexts, each command in one, chosen by its id (ADR-0049 rule 3, amending ADR-0037 rule 4):
 // - Play In Editor: the keys of ADR-0008 rule 4 (kPlayInEditorCommands: stop, free the mouse,
-//   possess or eject), which the Play In Editor consumer handles while a game runs (ADR-0029 rule 7);
+//   possess or eject), which the Play In Editor consumer (PlayInputConsumer, PlayInput.h) handles
+//   while a session runs (ADR-0029 rule 7, ADR-0053 decision 19);
 // - Content: every "ith.content." command except ith.content.toggle_drawer; the keymap consumer
 //   looks a chord up here first while the Content Browser has the keyboard focus
 //   (ContentBrowserModel::keyboardFocus), and never otherwise;
@@ -123,6 +124,11 @@ inline constexpr std::array<Chord, 3> kContentOwnedChords = {{
 // The text form parseChord reads, modifiers in the order Ctrl, Shift, Alt.
 [[nodiscard]] std::string toString(const Chord& chord);
 
+// The chord of the key event `event` as shortcuts read it: its key with Ctrl, Shift and Alt; a
+// letter key is the letter the user's layout prints (Event::layoutKey), so Ctrl + Z is the key that
+// prints Z, and other keys are physical keys.
+[[nodiscard]] Chord chordOf(const Event& event) noexcept;
+
 class Keymap {
 public:
     // Reads Keymap.json from each layer of `config`, lowest first.
@@ -166,6 +172,18 @@ private:
 // transaction open, in the editor world or, while playing, in the game world, Escape cancels it
 // (Transactions::cancelOpen) and other chords are left to the
 // consumers below. Key repeats run nothing. The keymap must outlive the consumer.
+//
+// While a Play In Editor session runs (ADR-0053 decisions 21 and 22), it is the lowest Editor-layer
+// consumer and decides what the game below gets:
+// - with the mouse captured (EditorSession::playInput's Input::mouseCaptured for the event's window),
+//   it runs nothing and consumes nothing, so every key reaches the game (the Play In Editor consumer
+//   above handles Escape, Shift + F1 and F8);
+// - with the mouse free, it runs its chords as above and consumes every key press, repeat, mouse
+//   press, motion and wheel event that reaches it, bound or not, so no Ui or Game consumer gets any.
+//   A mouse press on the play viewport's image while possessed, with capture on click on for the
+//   event's window, is passed on, so capture on click takes it. Gamepad presses and axes pass on
+//   while possessed and are consumed while ejected.
+// The application adds it before every other Editor-layer consumer, so it is the lowest of them.
 class KeymapConsumer final : public InputConsumer {
 public:
     KeymapConsumer(EditorSession& session, const Keymap& keymap) noexcept : m_session(&session), m_keymap(&keymap) {}
@@ -179,6 +197,10 @@ public:
     [[nodiscard]] const Expected<void>& lastResult() const noexcept { return m_lastResult; }
 
 private:
+    // Looks up the chord of a key press (not a repeat) and runs its command: Consumed when a binding
+    // matched, whether or not the command ran, and NotConsumed otherwise.
+    InputReply shortcut(const Event& event);
+
     EditorSession* m_session;
     const Keymap* m_keymap;
     Expected<void> m_lastResult;

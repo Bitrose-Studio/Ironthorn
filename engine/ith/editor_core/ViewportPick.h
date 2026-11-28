@@ -6,17 +6,19 @@
 //   // the shapes pass, per draw:
 //   const ith::PickTexel texel = ith::pickTexel(entity);     // R = slot index + 1, G = generation
 //   // a frame or two after a click, the texel under it read back:
-//   ith::applyPick(session, texel, click.mode);              // ith.selection.set with the click's mode
+//   ith::applyPick(session, index, texel, click.mode);       // ith.selection.set with the click's mode
 //
 // The id target (rhi::Format::R32G32Uint) holds, per pixel, the entity drawn nearest there: R is its
 // slot index + 1 and G its generation; R = 0 means no entity (the target is cleared to 0). Its world
-// is the editor world, so the world id isn't stored; the generation makes a stale hit checkable.
+// is the world the viewport draws, so the world id isn't stored; the generation makes a stale hit
+// checkable.
 // Main thread only, like the session.
 
 #include "ith/editor_core/Viewports.h"
 #include "ith/foundation/Entity.h"
 #include "ith/foundation/Expected.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace ith {
@@ -41,11 +43,16 @@ struct PickTexel {
 // (index 0).
 [[nodiscard]] Entity pickedEntity(PickTexel texel, std::uint8_t worldId) noexcept;
 
-// Applies a read-back click to the session's selection through ith.selection.set (ADR-0042
-// rule 22). Empty space (index 0) clears the selection for PickMode::Replace and changes nothing for
-// Toggle and Add. A hit on an entity of the document's world replaces, toggles or adds its stable
-// id. A stale hit (the entity was despawned since the frame was drawn) and a hit on an entity
-// without a StableId change nothing (ADR-0037 rule 5). Fails only with the command's error.
-Expected<void> applyPick(EditorSession& session, PickTexel texel, PickMode mode);
+// Applies a click read back from viewport `viewport`'s id target (Viewports::at) to the active
+// selection through ith.selection.set (ADR-0042 rule 22, ADR-0053 decision 16). The texel names an
+// entity of the world that viewport draws (EditorSession::drawnWorld: the game world for the play
+// viewport, the editor world otherwise); the hit's stable id is applied to the active selection, the
+// play selection while a session runs. Empty space (index 0) clears the selection for
+// PickMode::Replace and changes nothing for Toggle and Add. A hit replaces, toggles or adds its
+// stable id. A stale hit (the entity was despawned since the frame was drawn), a hit on an entity
+// without a StableId (ADR-0037 rule 5; entities spawned during play) and a hit whose stable id the
+// active world doesn't have change nothing. Fails only with the command's error. Precondition
+// (asserted): viewport < kMaxViewports.
+Expected<void> applyPick(EditorSession& session, std::size_t viewport, PickTexel texel, PickMode mode);
 
 } // namespace ith

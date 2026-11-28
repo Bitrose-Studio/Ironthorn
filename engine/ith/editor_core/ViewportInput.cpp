@@ -2,6 +2,7 @@
 
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/Gizmo.h"
+#include "ith/editor_core/PlaySession.h"
 #include "ith/editor_core/ViewportGizmo.h"
 #include "ith/editor_core/Viewports.h"
 #include "ith/foundation/Assert.h"
@@ -103,24 +104,7 @@ InputReply ViewportConsumer::onInputEvent(const Event& event) {
             }
             return InputReply::NotConsumed; // Input ignores the reply to a release
         case EventType::MouseMoved:
-            if (m_drag.has_value()) {
-                if (m_drag->gesture == ViewportGesture::Gizmo) {
-                    // Previewed once per frame, in update().
-                    m_gizmoPointer = Vec2{event.x, event.y};
-                    m_gizmoMoved = true;
-                } else if (m_drag->gesture != ViewportGesture::Click) {
-                    CameraInput input = inputFor(m_drag->gesture);
-                    // Fly's look motion is relative mode's raw motion; other drags move in window
-                    // coordinates, the same on every display scale.
-                    const float scale = m_drag->gesture == ViewportGesture::Fly ? 1.0f : 1.0f / m_pixelDensity;
-                    input.mouseDelta = Vec2{event.deltaX, event.deltaY} * scale;
-                    apply(m_drag->viewport, input, 0.0f);
-                } else if (!withinSlop(m_drag->start, event.x, event.y, m_displayScale)) {
-                    m_drag->click.reset(); // a drag now; it stays one even if the pointer comes back
-                }
-                return InputReply::Consumed;
-            }
-            return viewportAt(event.x, event.y).has_value() ? InputReply::Consumed : InputReply::NotConsumed;
+            return onMouseMoved(event);
         case EventType::MouseWheel: {
             if (m_drag.has_value()) {
                 // While flying the wheel steps the speed, keeping fractions for the next notch; other
@@ -138,7 +122,7 @@ InputReply ViewportConsumer::onInputEvent(const Event& event) {
                 return InputReply::Consumed;
             }
             const std::optional<std::size_t> viewport = viewportAt(event.x, event.y);
-            if (!viewport.has_value()) {
+            if (!viewport.has_value() || gameHas(*viewport)) {
                 return InputReply::NotConsumed;
             }
             if (event.deltaY != 0.0f) {
@@ -160,6 +144,34 @@ InputReply ViewportConsumer::onInputEvent(const Event& event) {
     }
 }
 
+InputReply ViewportConsumer::onMouseMoved(const Event& event) {
+    if (m_drag.has_value()) {
+        if (m_drag->gesture == ViewportGesture::Gizmo) {
+            // Previewed once per frame, in update().
+            m_gizmoPointer = Vec2{event.x, event.y};
+            m_gizmoMoved = true;
+        } else if (m_drag->gesture == ViewportGesture::Click) {
+            if (!withinSlop(m_drag->start, event.x, event.y, m_displayScale)) {
+                m_drag->click.reset(); // a drag now; it stays one even if the pointer comes back
+            }
+        } else if (std::isfinite(event.deltaX) && std::isfinite(event.deltaY)) {
+            // A camera drag; motion that is not finite moves nothing.
+            CameraInput input = inputFor(m_drag->gesture);
+            // Fly's look motion is relative mode's raw motion; other drags move in window
+            // coordinates, the same on every display scale.
+            const float scale = m_drag->gesture == ViewportGesture::Fly ? 1.0f : 1.0f / m_pixelDensity;
+            input.mouseDelta = Vec2{event.deltaX, event.deltaY} * scale;
+            apply(m_drag->viewport, input, 0.0f);
+        }
+        return InputReply::Consumed;
+    }
+    if (const std::optional<std::size_t> viewport = viewportAt(event.x, event.y);
+        viewport.has_value() && !gameHas(*viewport)) {
+        return InputReply::Consumed;
+    }
+    return InputReply::NotConsumed;
+}
+
 InputReply ViewportConsumer::onMouseButtonDown(const Event& event) {
     // One drag at a time: presses of other buttons during it are swallowed.
     if (m_drag.has_value()) {
@@ -168,6 +180,11 @@ InputReply ViewportConsumer::onMouseButtonDown(const Event& event) {
     const std::optional<std::size_t> viewport = viewportAt(event.x, event.y);
     if (!viewport.has_value()) {
         return InputReply::NotConsumed;
+    }
+    // The selected viewport is where the next session plays (ADR-0053 decision 5).
+    m_viewports->setSelected(*viewport);
+    if (gameHas(*viewport)) {
+        return InputReply::NotConsumed; // capture on click takes it (ADR-0053 decision 20)
     }
     const bool alt = hasModifiers(event.modifiers, KeyModifiers::Alt);
     // A press on a gizmo handle drags it, before it can be a click candidate or an orbit.
@@ -258,23 +275,27 @@ InputReply ViewportConsumer::onKeyDown(const Event& event) {
     return InputReply::Consumed;
 }
 
-bool* ViewportConsumer::flyKey(Key key) noexcept {
+bool* flyKey(CameraInput& input, Key key) noexcept {
     switch (key) {
         case Key::W:
-            return &m_flyKeys.forward;
+            return &input.forward;
         case Key::S:
-            return &m_flyKeys.back;
+            return &input.back;
         case Key::A:
-            return &m_flyKeys.left;
+            return &input.left;
         case Key::D:
-            return &m_flyKeys.right;
+            return &input.right;
         case Key::Q:
-            return &m_flyKeys.down;
+            return &input.down;
         case Key::E:
-            return &m_flyKeys.up;
+            return &input.up;
         default:
             return nullptr;
     }
+}
+
+bool* ViewportConsumer::flyKey(Key key) noexcept {
+    return ith::flyKey(m_flyKeys, key);
 }
 
 bool ViewportConsumer::update(float deltaSeconds) {
@@ -345,16 +366,12 @@ void ViewportConsumer::focusLost() {
 }
 
 std::optional<std::size_t> ViewportConsumer::viewportAt(float x, float y) const noexcept {
-    for (std::size_t index = 0; index < kMaxViewports; ++index) {
-        const ViewportState& state = m_viewports->at(index);
-        const Vec2 position = state.imagePosition;
-        const Vec2 size = state.imageSize;
-        if (state.imageHovered && size.x > 0.0f && size.y > 0.0f && x >= position.x && x < position.x + size.x &&
-            y >= position.y && y < position.y + size.y) {
-            return index;
-        }
-    }
-    return std::nullopt;
+    return m_viewports->imageAt(x, y);
+}
+
+bool ViewportConsumer::gameHas(std::size_t index) const noexcept {
+    const PlaySession* play = m_session->play();
+    return play != nullptr && play->possessed() && play->viewport() == index;
 }
 
 void ViewportConsumer::apply(std::size_t index, const CameraInput& input, float deltaSeconds) noexcept {

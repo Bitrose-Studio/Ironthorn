@@ -293,8 +293,8 @@ The first tick runs in the next editor frame (3.5).
   ADR-0016 rule 9's data operations on the `Controls` link.
 - **Possess and Eject keep one saved pose** (ADR-0053 rule 18). **Eject** leaves the viewport's
   camera where the spectator was ("the camera stays where the player was") and saves that pose.
-  **Possess** resumes the spectator at the saved pose; in a session that started with Simulate, at
-  the camera's current pose (there is no player start in P2).
+  **Possess** resumes the spectator at the saved pose; with no Eject yet in the session (it started
+  with Simulate), at the camera's current pose (there is no player start in P2).
 - **Game view while possessed:** the play viewport draws as game view (no grid, no selection tint,
   no gizmo, ADR-0042 rule 20) whatever its flag says. Ejected, it follows the viewport's own
   game-view flag (G).
@@ -658,9 +658,8 @@ sessions started paused and advanced with `ith.play.step`.
 19. Play starts the spectator at the viewport camera's pose; injected captured mouse motion turns
     it and W moves it at the viewport's speed step, through a `Game`-layer consumer.
 20. Eject leaves the viewport's camera at the spectator's pose and saves it; Possess resumes the
-    spectator at the saved pose; a session started with Simulate possesses at the camera's current
-    pose.
-21. The other viewport instances keep their cameras and draw the editor world during a session.
+    spectator at the saved pose; with no Eject yet in the session (it started with Simulate), Possess
+    takes the camera's current pose.
 
 ### 4.5 Input
 

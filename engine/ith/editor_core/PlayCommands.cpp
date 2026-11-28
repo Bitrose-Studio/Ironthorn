@@ -10,10 +10,10 @@
 // keeps these codes.
 //
 // Headless sessions have no frame loop: automation starts them paused ("paused": true) and advances
-// them with ith.play.step, which runs exact ticks. Views and input (the selected viewport, the camera
-// saved at start, the spectator, capture) come with the editor's views; until then Possess and Eject
-// only switch the flag, the play viewport is always "ith.viewport.1", and the mouse is never
-// captured.
+// them with ith.play.step, which runs exact ticks. A session plays in the selected viewport; Possess
+// and Eject (EditorSession::setPossessed) move its camera between the spectator and the editor
+// controls and turn capture on click on and off, and Free the Mouse releases a captured mouse. Without
+// a bound Input (headless) nothing is ever captured.
 
 #include "ith/editor_core/CommandArgs.h"
 #include "ith/editor_core/EditorSession.h"
@@ -94,7 +94,7 @@ Value stateOf(const PlaySession& play) {
     result.set("state", Value::string("running"));
     result.set("possessed", Value::boolean(play.possessed()));
     result.set("paused", Value::boolean(play.paused()));
-    result.set("viewport", Value::string(std::string(kDefaultViewport)));
+    result.set("viewport", Value::string(Viewports::instanceId(play.viewport())));
     return result;
 }
 
@@ -162,14 +162,14 @@ Expected<Value> possessOrEject(EditorSession& session, const Value& args) {
     if (!possess) {
         return makeUnexpected(std::move(possess).error());
     }
-    PlaySession& play = *session.play();
-    play.setPossessed(possess->value_or(!play.possessed()));
+    session.setPossessed(possess->value_or(!session.play()->possessed()));
     Value result = Value::object();
-    result.set("possessed", Value::boolean(play.possessed()));
+    result.set("possessed", Value::boolean(session.play()->possessed()));
     return result;
 }
 
-Expected<Value> freeMouse(EditorSession& /*session*/, const Value& /*args*/) {
+Expected<Value> freeMouse(EditorSession& session, const Value& /*args*/) {
+    session.freeMouse();
     Value result = Value::object();
     result.set("captured", Value::boolean(false));
     return result;
@@ -185,7 +185,7 @@ Expected<Value> playQuery(EditorSession& session, const Value& /*args*/) {
         result.set("viewport", Value());
     }
     const Time* time = play != nullptr ? play->time() : nullptr;
-    result.set("captured", Value::boolean(false));
+    result.set("captured", Value::boolean(session.mouseCaptured()));
     result.set("frame", Value::unsignedInteger(time != nullptr ? time->frame : 0));
     result.set("elapsed", Value::real(time != nullptr ? time->elapsed : 0.0));
     result.set("entities", Value::unsignedInteger(play != nullptr ? play->world().entityCount() : 0));

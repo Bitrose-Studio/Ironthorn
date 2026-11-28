@@ -389,6 +389,28 @@ TEST_CASE("Capture on click: a click that a UI layer consumes doesn't capture") 
     CHECK(game.seen.empty());
 }
 
+TEST_CASE("Capture on click: a consumer that turns it off during the press leaves the mouse free") {
+    ith::Input input;
+    Recorder editor; // a Stop or an Eject on the press: capture on click goes off, the press goes on
+    Recorder game;
+    editor.reply = [&input](const ith::Event& event) {
+        if (event.type == ith::EventType::MouseButtonDown) {
+            input.setCaptureOnClick(kWindow, false);
+        }
+        return ith::InputReply::NotConsumed;
+    };
+    input.addConsumer({.window = kWindow, .layer = ith::ConsumerLayer::Editor, .consumer = &editor});
+    input.addConsumer({.window = kWindow, .consumer = &game});
+    input.setCaptureOnClick(kWindow, true);
+    frame(input, {focus(ith::EventType::WindowFocusGained), mouseDown(ith::MouseButton::Left)});
+    CHECK_FALSE(input.mouseCaptured(kWindow));
+    CHECK(editor.count(ith::EventType::MouseButtonDown) == 1);
+    CHECK(game.seen.empty()); // routed above the game only, as a capturing click is
+    // The next click, with capture on click off, reaches the game.
+    frame(input, {mouseUp(ith::MouseButton::Left), mouseDown(ith::MouseButton::Left)});
+    CHECK(game.count(ith::EventType::MouseButtonDown) == 1);
+}
+
 TEST_CASE("Single-player gives player 0 every device, including gamepads that connect later") {
     ith::Input input;
     REQUIRE(input.devices().size() == 1);

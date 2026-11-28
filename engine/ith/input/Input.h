@@ -219,7 +219,9 @@ public:
     // Capture on click (ADR-0027 rule 3), off by default; the application turns it on for a game
     // window or the Play In Editor viewport. While it is on, `window` has focus and the mouse
     // isn't captured, a mouse press that the Editor and Ui layers leave unconsumed captures the
-    // mouse and is consumed by the capture: no Game consumer sees the press or its release.
+    // mouse and is consumed by the capture: no Game consumer sees the press or its release. When a
+    // consumer above the game turns it off while it handles that press, nothing is captured and the
+    // press still reaches no Game consumer.
     void setCaptureOnClick(WindowId window, bool enabled);
     [[nodiscard]] bool captureOnClick(WindowId window) const;
 

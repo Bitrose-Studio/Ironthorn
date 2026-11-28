@@ -47,7 +47,8 @@ Entity pickedEntity(PickTexel texel, std::uint8_t worldId) noexcept {
     return Entity::fromParts(texel.index - 1, texel.generation, worldId);
 }
 
-Expected<void> applyPick(EditorSession& session, PickTexel texel, PickMode mode) {
+Expected<void> applyPick(EditorSession& session, std::size_t viewport, PickTexel texel, PickMode mode) {
+    ITH_ASSERT_MSG(viewport < kMaxViewports, "there are only four viewports");
     Value entities = Value::array();
     if (texel.index == 0) {
         // Empty space: a plain click clears the selection; Ctrl and Shift keep it.
@@ -55,7 +56,8 @@ Expected<void> applyPick(EditorSession& session, PickTexel texel, PickMode mode)
             return {};
         }
     } else {
-        const World& world = session.document().world();
+        // The texel names an entity of the world this viewport draws (ADR-0053 decision 16).
+        const World& world = session.drawnWorld(viewport < kMaxViewports ? viewport : 0);
         const Entity entity = pickedEntity(texel, world.id());
         if (!world.isAlive(entity)) {
             return {}; // despawned since the frame was drawn
@@ -63,6 +65,9 @@ Expected<void> applyPick(EditorSession& session, PickTexel texel, PickMode mode)
         const auto* id = world.get<const StableId>(entity);
         if (id == nullptr) {
             return {}; // only entities with a stable id are selectable (ADR-0037 rule 5)
+        }
+        if (session.active().world.findByStableId(id->id).isNull()) {
+            return {}; // an editor entity the game world has despawned: nothing to select there
         }
         entities.elements().push_back(Value::string(id->id.toString()));
     }

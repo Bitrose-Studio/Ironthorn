@@ -26,19 +26,6 @@ using serialization::Value;
 using CameraSet = std::array<EditorCamera, kMaxViewports>;
 using CameraMap = std::map<Uuid, CameraSet>;
 
-// The index of the viewport instance id `instance`, or nullopt.
-std::optional<std::size_t> indexOf(std::string_view instance) {
-    const std::string_view prefix = "ith.viewport.";
-    if (instance.size() != prefix.size() + 1 || !instance.starts_with(prefix)) {
-        return std::nullopt;
-    }
-    const char digit = instance.back();
-    if (digit < '1' || digit > static_cast<char>('0' + kMaxViewports)) {
-        return std::nullopt;
-    }
-    return static_cast<std::size_t>(digit - '1');
-}
-
 bool isFinite(const Vec3& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 }
@@ -76,7 +63,7 @@ Expected<CameraMap> parseCameras(std::string_view text, std::string_view source)
         }
         CameraSet cameras{};
         for (const Value::Member& viewport : level.value.members()) {
-            const std::optional<std::size_t> index = indexOf(viewport.key);
+            const std::optional<std::size_t> index = Viewports::indexOf(viewport.key);
             if (!index.has_value()) {
                 continue;
             }
@@ -119,6 +106,38 @@ ViewportState& Viewports::at(std::size_t index) noexcept {
 const ViewportState& Viewports::at(std::size_t index) const noexcept {
     ITH_ASSERT_MSG(index < kMaxViewports, "there are only four viewports");
     return m_states[index < kMaxViewports ? index : kMaxViewports - 1];
+}
+
+std::optional<std::size_t> Viewports::indexOf(std::string_view instance) noexcept {
+    const std::string_view prefix = "ith.viewport.";
+    if (instance.size() != prefix.size() + 1 || !instance.starts_with(prefix)) {
+        return std::nullopt;
+    }
+    const char digit = instance.back();
+    if (digit < '1' || digit > static_cast<char>('0' + kMaxViewports)) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(digit - '1');
+}
+
+std::optional<std::size_t> Viewports::imageAt(float x, float y) const noexcept {
+    for (std::size_t index = 0; index < kMaxViewports; ++index) {
+        const ViewportState& state = m_states[index];
+        const Vec2 position = state.imagePosition;
+        const Vec2 size = state.imageSize;
+        if (state.imageHovered && size.x > 0.0f && size.y > 0.0f && x >= position.x && x < position.x + size.x &&
+            y >= position.y && y < position.y + size.y) {
+            return index;
+        }
+    }
+    return std::nullopt;
+}
+
+void Viewports::setSelected(std::size_t index) noexcept {
+    ITH_ASSERT_MSG(index < kMaxViewports, "there are only four viewports");
+    if (index < kMaxViewports) {
+        m_selected = index;
+    }
 }
 
 std::string Viewports::instanceId(std::size_t index) {

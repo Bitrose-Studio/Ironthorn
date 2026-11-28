@@ -61,6 +61,12 @@
 //
 // The wheel over an image without a drag dollies that viewport's camera by steps.
 //
+// Every press on an image that isn't swallowed by a held drag makes its viewport the selected one
+// (Viewports::setSelected), where the next Play In Editor session starts (ADR-0053 decision 5).
+// While a session is possessed, presses, motion and the wheel over the play viewport's image are left
+// alone (not consumed, no gesture, no click), so capture on click takes the press (ADR-0053 decision
+// 20); ejected, the play viewport has every editor control, on the game world's view.
+//
 // Keys (the letter-key rule, rule 10): while fly is active, every key press without Ctrl or Alt is
 // consumed: the physical keys W/A/S/D move along the camera's axes and Q/E down and up in world
 // space, and other keys are swallowed, so W doesn't switch the tool mid-flight. Chords with Ctrl or
@@ -101,6 +107,10 @@ inline constexpr float kMaxFlyStepSeconds = 1.0f / 30.0f;
 // LMB press and its release for them to be a click (ADR-0042 rule 12; ADR-0047 item 1): the same
 // physical size at any display scale, on every platform.
 inline constexpr float kClickSlop = 4.0f;
+
+// The field of `input` that the physical fly key `key` holds (W forward, S back, A left, D right, Q
+// down, E up), or null for any other key.
+[[nodiscard]] bool* flyKey(CameraInput& input, Key key) noexcept;
 
 // What a held viewport drag does (ADR-0042 rule 12).
 enum class ViewportGesture : std::uint8_t {
@@ -179,6 +189,7 @@ private:
     };
 
     InputReply onMouseButtonDown(const Event& event);
+    InputReply onMouseMoved(const Event& event);
     InputReply onKeyDown(const Event& event);
     // Starts a gizmo drag for an LMB press at window pixel `press` on viewport `index` when it hits a
     // handle of the gizmo the viewport shows; returns whether it did.
@@ -190,6 +201,9 @@ private:
     void endGizmo(std::size_t viewport, Vec2 release);
     // The field of m_flyKeys that the physical key `key` holds, or null.
     bool* flyKey(Key key) noexcept;
+    // Whether viewport `index` is the play viewport of a possessed session, whose mouse events go on
+    // to capture on click and the game.
+    [[nodiscard]] bool gameHas(std::size_t index) const noexcept;
     // Applies `input` to viewport `index`'s camera, and notes whether it changed.
     void apply(std::size_t index, const CameraInput& input, float deltaSeconds) noexcept;
 

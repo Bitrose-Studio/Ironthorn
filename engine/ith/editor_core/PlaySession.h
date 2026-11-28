@@ -23,9 +23,16 @@
 // EditorChanges move: `structure` when World::structureGeneration() moved, and `values` as
 // "everything may have changed" (EditorChanges::bumpAllValues), so the Outliner rebuilds only on
 // structure and Details re-reads only what it shows. Main thread only, like the editor session.
+//
+// Views (ADR-0053 decisions 5, 7, 10, 17 and 18): the session plays in one viewport, the selected
+// one at its start. That viewport's own camera is the play camera: the session keeps its pose from
+// the start (savedCamera), which EditorSession puts back at Stop. Ejected, the camera has every
+// editor control; possessed, the spectator (SpectatorConsumer, PlayInput.h) flies the same camera.
+// Possess and Eject keep one spectator pose (setPossessed).
 
 #include "ith/ecs/Schedule.h"
 #include "ith/ecs/World.h"
+#include "ith/editor_core/EditorCamera.h"
 #include "ith/editor_core/EditorChanges.h"
 #include "ith/editor_core/Selection.h"
 #include "ith/editor_core/Transactions.h"
@@ -58,13 +65,15 @@ public:
     // A session over a copy of `editorWorld` (ADR-0053 decision 7): the game-world schedule built
     // from `gameSystems`, a new World filled by copyWorld with excludeEditorOnly, a default Time,
     // and the play selection set to `editorSelection`. Possessed for Play, not for Simulate; paused
-    // when `paused`. `identity` is what the view models key on (EditorSession::active). Fails with
-    // the schedule's "ecs.schedule.*" error and with "editor.play.copy_failed" when copyWorld refuses
-    // (the editor world is being iterated; a bug); nothing is left behind then. Reads nothing from
-    // disk and writes nothing.
+    // when `paused`. `identity` is what the view models key on (EditorSession::active). It plays in
+    // viewport `viewport` (Viewports::at), whose camera at the start is `camera`: the session keeps
+    // that pose to be restored at Stop. Fails with the schedule's "ecs.schedule.*" error and with
+    // "editor.play.copy_failed" when copyWorld refuses (the editor world is being iterated; a bug);
+    // nothing is left behind then. Reads nothing from disk and writes nothing. Precondition
+    // (asserted): viewport < kMaxViewports.
     [[nodiscard]] static Expected<std::unique_ptr<PlaySession>>
     start(const World& editorWorld, const Selection& editorSelection, std::span<const SystemDescriptor> gameSystems,
-          PlayMode mode, bool paused, std::uint64_t identity);
+          PlayMode mode, bool paused, std::uint64_t identity, std::size_t viewport, const EditorCamera& camera);
 
     PlaySession(const PlaySession&) = delete;
     PlaySession& operator=(const PlaySession&) = delete;
@@ -111,7 +120,21 @@ public:
     // The game has the view and, when captured, the input (Play); false while ejected.
     [[nodiscard]] bool possessed() const noexcept { return m_possessed; }
 
-    void setPossessed(bool possessed) noexcept { m_possessed = possessed; }
+    // Possesses or ejects (ADR-0053 decision 18); `camera` is the play viewport's camera, which the
+    // spectator flies while possessed. Eject leaves the camera where the spectator was and keeps that
+    // pose as the spectator pose. Possess moves the camera to the spectator pose, or, before any
+    // Eject (a session started with Simulate), leaves it where it is. Setting the current state
+    // changes nothing.
+    void setPossessed(bool possessed, EditorCamera& camera) noexcept;
+
+    // The play viewport's index (Viewports::at): the selected viewport at the start.
+    [[nodiscard]] std::size_t viewport() const noexcept { return m_viewport; }
+
+    // The play viewport's camera as it was at the start, which Stop restores bit for bit.
+    [[nodiscard]] const EditorCamera& savedCamera() const noexcept { return m_savedCamera; }
+
+    // The pose the spectator resumes at on Possess: the camera at the last Eject; nullopt before any.
+    [[nodiscard]] const std::optional<EditorCamera>& spectatorPose() const noexcept { return m_spectatorPose; }
 
     // The editor's Pause: no tick runs. Not Time::paused, the game's own pause.
     [[nodiscard]] bool paused() const noexcept { return m_paused; }
@@ -146,6 +169,9 @@ private:
     bool m_possessed;
     bool m_paused;
     std::uint64_t m_identity;
+    std::size_t m_viewport = 0;
+    EditorCamera m_savedCamera;
+    std::optional<EditorCamera> m_spectatorPose;
     World m_world;
     Schedule m_schedule;
     UndoHistory m_history{UndoLimits{.maxEntries = 0, .maxBytes = 0}};

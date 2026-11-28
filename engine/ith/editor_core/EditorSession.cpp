@@ -9,6 +9,7 @@
 #include "ith/file_system/Path.h"
 #include "ith/foundation/Assert.h"
 #include "ith/foundation/Log.h"
+#include "ith/input/Input.h"
 #include "ith/jobs/JobSystem.h"
 #include "ith/level/Level.h"
 #include "ith/serialization/Document.h"
@@ -135,8 +136,10 @@ Expected<void> EditorSession::startPlay(PlayMode mode, bool paused) {
     if (Expected<void> allowed = canStartPlay(); !allowed) {
         return allowed;
     }
-    Expected<std::unique_ptr<PlaySession>> started = PlaySession::start(
-        m_document.world(), m_document.selection(), m_options.gameSystems, mode, paused, m_playSessions + 1);
+    const std::size_t viewport = m_viewports.selected();
+    Expected<std::unique_ptr<PlaySession>> started =
+        PlaySession::start(m_document.world(), m_document.selection(), m_options.gameSystems, mode, paused,
+                           m_playSessions + 1, viewport, m_viewports.at(viewport).camera);
     if (!started) {
         return makeUnexpected(std::move(started).error());
     }
@@ -144,6 +147,9 @@ Expected<void> EditorSession::startPlay(PlayMode mode, bool paused) {
     m_play = std::move(*started);
     m_document.setPlaying(true);
     m_document.changes().bumpDocument();
+    if (m_input != nullptr && m_play->possessed()) {
+        m_input->setCaptureOnClick(m_inputWindow, true);
+    }
     return {};
 }
 
@@ -155,18 +161,78 @@ void EditorSession::stopPlay() {
     // WorldEnding goes here, once the engine has events (ADR-0053 decision 11).
     // The world is discarded with the transaction: nothing to put back.
     m_play->transactions().abandonOpen();
+    releaseEditorMouse();
+    if (m_input != nullptr) {
+        m_input->setCaptureOnClick(m_inputWindow, false);
+    }
+    ViewportState& viewport = m_viewports.at(m_play->viewport());
+    viewport.click.reset(); // a click on the game world names none of the editor world's entities
+    viewport.camera = m_play->savedCamera();
     m_play.reset();
     m_document.setPlaying(false);
     m_document.changes().bumpDocument();
 }
 
-void EditorSession::saveViewports() {
-    if (!m_document.path().empty()) {
-        m_viewports.saveLevel(m_document.levelId());
+void EditorSession::setPossessed(bool possessed) {
+    ITH_ASSERT_MSG(m_play != nullptr, "editor: Possess and Eject need a play session");
+    if (!m_play) {
+        return;
+    }
+    m_play->setPossessed(possessed, m_viewports.at(m_play->viewport()).camera);
+    if (m_input != nullptr) {
+        m_input->setCaptureOnClick(m_inputWindow, possessed);
+    }
+    if (!possessed) {
+        releaseEditorMouse();
     }
 }
 
+void EditorSession::freeMouse() {
+    releaseEditorMouse();
+}
+
+void EditorSession::releaseEditorMouse() {
+    // Only the editor window's capture: another window's (a game window) is not Play In Editor's.
+    if (m_input != nullptr && m_input->mouseCaptured(m_inputWindow)) {
+        m_input->releaseMouse();
+    }
+}
+
+void EditorSession::setPlayInput(Input* input, WindowId window) noexcept {
+    ITH_ASSERT_MSG(m_play == nullptr, "editor: the play input is bound and unbound only while no session runs");
+    if (m_play != nullptr) {
+        return;
+    }
+    m_input = input;
+    m_inputWindow = window;
+}
+
+bool EditorSession::mouseCaptured() const {
+    return m_play != nullptr && m_input != nullptr && m_input->mouseCaptured(m_inputWindow);
+}
+
+const World& EditorSession::drawnWorld(std::size_t viewport) const noexcept {
+    return m_play != nullptr && m_play->viewport() == viewport ? m_play->world() : m_document.world();
+}
+
+void EditorSession::saveViewports() {
+    if (m_document.path().empty()) {
+        return;
+    }
+    if (!m_play) {
+        m_viewports.saveLevel(m_document.levelId());
+        return;
+    }
+    // The pose from before the session, not one flown during it.
+    EditorCamera& camera = m_viewports.at(m_play->viewport()).camera;
+    const EditorCamera flown = std::exchange(camera, m_play->savedCamera());
+    m_viewports.saveLevel(m_document.levelId());
+    camera = flown;
+}
+
 EditorSession::~EditorSession() {
+    // A session still running gives the mouse back through the bound Input, which outlives it.
+    stopPlay();
     waitIdle();
 }
 

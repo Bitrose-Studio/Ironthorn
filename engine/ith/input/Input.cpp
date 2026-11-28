@@ -194,8 +194,10 @@ void Input::processMouseDown(const Event& event) {
     }
     if (window != kNoWindow && window == m_focusedWindow && captureOnClick(window)) {
         // The capturing click: the layers above the game may take it; otherwise the capture
-        // consumes it, so it never reaches the game and its release reaches no game consumer.
-        if (!routeStack(event, window, Layers::AboveGame, kKeyboardMouse)) {
+        // consumes it, so it never reaches the game and its release reaches no game consumer. A
+        // consumer that turned capture on click off while it saw the press (a Stop or an Eject)
+        // wins: nothing is captured, and the press still never reaches the game.
+        if (!routeStack(event, window, Layers::AboveGame, kKeyboardMouse) && captureOnClick(window)) {
             m_captureWindow = window;
         }
         return;

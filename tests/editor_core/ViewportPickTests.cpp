@@ -42,7 +42,7 @@ PickTexel create(ith::EditorSession& session, std::uint64_t n) {
 }
 
 void pick(ith::EditorSession& session, PickTexel texel, PickMode mode) {
-    const ith::Expected<void> applied = ith::applyPick(session, texel, mode);
+    const ith::Expected<void> applied = ith::applyPick(session, 0, texel, mode);
     REQUIRE_MESSAGE(applied.hasValue(), (applied ? std::string() : applied.error().message));
 }
 

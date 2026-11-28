@@ -626,12 +626,13 @@ void ViewportPanel::readPicks(std::uint64_t open) {
         }
         const PickMode mode = instance.pick->mode;
         instance.pick.reset();
-        if (m_session->document().transactions().isOpen()) {
-            continue; // a gizmo drag began since the click: it wins, and selecting would be refused
+        if (m_session->document().transactions().isOpen() || m_session->active().transactions.isOpen()) {
+            continue; // a drag began since the click (a gizmo, or Details on the game world): it wins
         }
         std::array<std::uint32_t, 2> texel{};
         std::memcpy(texel.data(), memory.data() + index * rhi::kTextureCopyOffsetAlignment, sizeof(texel));
-        if (const Expected<void> applied = applyPick(*m_session, {.index = texel[0], .generation = texel[1]}, mode);
+        if (const Expected<void> applied =
+                applyPick(*m_session, index, {.index = texel[0], .generation = texel[1]}, mode);
             !applied) {
             ITH_LOG_WARNING(Viewport, "{}", applied.error().message);
         }
