@@ -68,7 +68,10 @@
 // ith.content.toggle_drawer, on Escape with nothing selected (ith.content.dismiss), on a click
 // outside it while it has no popup open, when a level opens from it, and when the panel is in the
 // layout (one browser on screen at a time). Each frame drawDrawer() reports where the panel and the
-// drawer were drawn, which the UI's input consumer hit-tests mouse presses against.
+// drawer were drawn, and the folder tree within them, which the UI's input consumer hit-tests mouse
+// presses against, whether the browser has the keyboard focus and whether the folder tree has it
+// (ContentBrowserModel::setTreeFocus: F2 and Delete then act on the current folder, whose rename
+// field opens on its tree row).
 //
 // Opening a level while the open one has unsaved changes asks Save / Don't Save / Cancel first and
 // runs ith.content.open again with the answer.
@@ -302,6 +305,11 @@ private:
     bool m_scrollToFocus = false;
     // Whether the panel had the keyboard focus this frame; drawDrawer() reports it.
     bool m_panelFocused = false;
+    // Whether the folder tree (panel or drawer) had the keyboard focus this frame; drawDrawer()
+    // reports it.
+    bool m_treeFocused = false;
+    // Where the folder tree was drawn this frame (panel or drawer); drawDrawer() reports them.
+    std::vector<ContentScreenRect> m_treeRects;
     bool m_drawerWasOpen = false;
     // The tree's width while the splitter is dragged, as a share of the browser's width.
     std::optional<float> m_dragTree;

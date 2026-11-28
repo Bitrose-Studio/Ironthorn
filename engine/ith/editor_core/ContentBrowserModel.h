@@ -383,6 +383,11 @@ public:
     // Expands or collapses `folder` in the tree (session state). Unknown folders are ignored.
     void setExpanded(std::string_view folder, bool expanded);
 
+    // Expands every folder above `folder` (session state), so the tree shows its row; nothing
+    // changes when they are expanded already, or for an unknown folder. The panel calls it for a
+    // folder renamed on its tree row.
+    void revealInTree(std::string_view folder);
+
     // The search text and the type filter (spec 3.5). Changing either rebuilds the shown items and
     // takes the items that are no longer shown out of the selection. A search text longer than
     // kMaxContentSearchSize is cut at a UTF-8 character boundary.
@@ -444,15 +449,32 @@ public:
     // follow in the same batch of events go to the right context.
     [[nodiscard]] bool keyboardFocus() const noexcept { return m_keyboardFocus; }
 
-    void setKeyboardFocus(bool focused) noexcept { m_keyboardFocus = focused; }
+    // Sets keyboardFocus() and gives the focus to the asset view, not the tree (treeFocus() is false
+    // until setTreeFocus).
+    void setKeyboardFocus(bool focused) noexcept {
+        m_keyboardFocus = focused;
+        m_treeFocus = false;
+    }
 
-    // Where the browser was drawn in the UI's last frame (the panel, the drawer, or neither), as
-    // editor_ui reports it every frame.
-    void setScreenRects(std::vector<ContentScreenRect> rects) { m_screenRects = std::move(rects); }
+    // Whether the keyboard focus is in the folder tree (keyboardFocus() and the tree's window has it):
+    // ith.content.rename and ith.content.delete without a target then act on the current folder, the
+    // tree's selected folder (spec 3.6). editor_ui sets it every UI frame, after setKeyboardFocus;
+    // between frames a mouse press updates it (pointerPressed).
+    [[nodiscard]] bool treeFocus() const noexcept { return m_keyboardFocus && m_treeFocus; }
+
+    void setTreeFocus(bool focused) noexcept { m_treeFocus = focused; }
+
+    // Where the browser was drawn in the UI's last frame (the panel, the drawer, or neither), and
+    // where its folder tree was drawn within them, as editor_ui reports it every frame.
+    void setScreenRects(std::vector<ContentScreenRect> rects, std::vector<ContentScreenRect> treeRects = {}) {
+        m_screenRects = std::move(rects);
+        m_treeRects = std::move(treeRects);
+    }
 
     // A mouse press at (`x`, `y`) in UI coordinates, seen by the UI's input consumer before the
     // events after it are routed: the browser has the keyboard focus when the press is inside one of
-    // the last frame's rectangles, and loses it otherwise.
+    // the last frame's rectangles, and loses it otherwise; the tree has it when the press is inside
+    // one of the tree's rectangles.
     void pointerPressed(float x, float y) noexcept;
 
     // The folder tree's share of the browser's width, in (0, 1); kDefaultContentTreeWidth at first.
@@ -518,6 +540,8 @@ private:
     void writeState();
     void rebuildTree();
     void rebuildView();
+    // Adds the folders above `folder` to the expanded ones; true when one was not yet.
+    bool expandAncestors(std::string_view folder);
     // Ends a pending rename whose item is gone.
     void dropStalePrompt();
     // Takes keys that are not shown out of the selection, anchor and focus.
@@ -566,7 +590,9 @@ private:
     std::optional<ContentPrompt> m_prompt;
     bool m_drawerOpen = false;
     bool m_keyboardFocus = false;
+    bool m_treeFocus = false;
     std::vector<ContentScreenRect> m_screenRects;
+    std::vector<ContentScreenRect> m_treeRects;
     float m_treeWidth = kDefaultContentTreeWidth;
     float m_drawerHeight = 0.0f;
     std::uint64_t m_generation = 0;

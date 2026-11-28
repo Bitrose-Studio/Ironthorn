@@ -1168,6 +1168,132 @@ TEST_SUITE("editor_ui.content_browser") {
         CHECK(fixture.exists("Textures/x.ithasset"));
     }
 
+    TEST_CASE("with the focus in the folder tree, F2 renames the current folder on its row and Delete asks "
+              "about it (spec 3.6, 3.8, 3.11)") {
+        ContentFixture fixture;
+        fixture.asset("S/Rock.ithasset");
+        fixture.run("ith.content.rescan");
+        fixture.run("ith.content.navigate", R"({"folder": "S"})");
+        fixture.frames(3);
+        fixture.clickItem("S/Rock.ithasset");
+        CHECK_FALSE(fixture.session.content().treeFocus());
+
+        // A click on the current folder's row gives the tree the focus; the content selection stays.
+        const UiRect s = *fixture.panel.folderRect("S");
+        fixture.click(s.centerX(), s.centerY());
+        REQUIRE(fixture.session.content().treeFocus());
+        CHECK(fixture.selected() == std::vector<std::string>{"S/Rock.ithasset"});
+
+        fixture.key(Key::F2);
+        fixture.frames(1);
+        REQUIRE(fixture.prompt() != nullptr);
+        CHECK(fixture.prompt()->kind == ContentPromptKind::Rename);
+        CHECK(fixture.prompt()->item.path == "S");
+        const std::optional<UiRect> field = fixture.panel.controlRect("rename");
+        REQUIRE(field.has_value());
+        CHECK(field->centerY() == doctest::Approx(s.centerY()).epsilon(0.05));
+        REQUIRE(fixture.ui.ui->wantsTextInput());
+        fixture.key(Key::Escape);
+        fixture.frames(1);
+        CHECK(fixture.prompt() == nullptr);
+
+        // The tree keeps the focus: Delete asks about the folder, not the selected asset.
+        REQUIRE(fixture.session.content().treeFocus());
+        fixture.key(Key::Delete);
+        fixture.frames(1);
+        REQUIRE(fixture.panel.dialog() == ContentDialog::Delete);
+        const serialization::Value* items = fixture.prompt()->details.find("preview")->find("items");
+        REQUIRE(items->elements().size() == 1);
+        CHECK(items->elements()[0].find("path")->asString() == "S");
+        CHECK(items->elements()[0].find("kind")->asString() == "folder");
+        fixture.key(Key::Escape);
+        fixture.frames(1);
+        CHECK(fixture.prompt() == nullptr);
+        CHECK(fixture.exists("S/Rock.ithasset"));
+    }
+
+    TEST_CASE("a press and F2 or Delete in one batch act on the part of the browser the press lands in") {
+        ContentFixture fixture;
+        fixture.asset("S/Rock.ithasset");
+        fixture.run("ith.content.rescan");
+        fixture.run("ith.content.navigate", R"({"folder": "S"})");
+        fixture.frames(3);
+        fixture.clickItem("S/Rock.ithasset");
+        const UiRect rock = fixture.rect("S/Rock.ithasset");
+        const UiRect s = *fixture.panel.folderRect("S");
+        // The tree's empty space below its rows: a press there changes nothing but the focus.
+        const float treeX = s.centerX();
+        const float treeY = s.centerY() + s.height * 4.0f;
+        // Press, release and a key before any UI frame: the press alone decides where the key goes.
+        const auto pressThen = [&fixture](float x, float y, Key key) {
+            fixture.move(x, y);
+            fixture.ui.events(
+                {Event{
+                     .type = EventType::MouseButtonDown, .mouseButton = MouseButton::Left, .clicks = 1, .x = x, .y = y},
+                 Event{.type = EventType::MouseButtonUp, .mouseButton = MouseButton::Left, .x = x, .y = y},
+                 Event{.type = EventType::KeyDown, .key = key}});
+        };
+
+        SUBCASE("a press on an asset, then Delete, previews the asset, not the tree's folder") {
+            fixture.click(treeX, treeY);
+            REQUIRE(fixture.session.content().treeFocus());
+            pressThen(rock.centerX(), rock.centerY(), Key::Delete);
+            CHECK_FALSE(fixture.session.content().treeFocus());
+            REQUIRE(fixture.prompt() != nullptr);
+            REQUIRE(fixture.prompt()->kind == ContentPromptKind::Delete);
+            const serialization::Value* items = fixture.prompt()->details.find("preview")->find("items");
+            REQUIRE(items->elements().size() == 1);
+            CHECK(items->elements()[0].find("path")->asString() == "S/Rock.ithasset");
+        }
+
+        SUBCASE("a press in the tree, then F2, renames the current folder, not the selected asset") {
+            REQUIRE(fixture.session.content().keyboardFocus());
+            REQUIRE_FALSE(fixture.session.content().treeFocus());
+            pressThen(treeX, treeY, Key::F2);
+            CHECK(fixture.session.content().treeFocus());
+            REQUIRE(fixture.prompt() != nullptr);
+            CHECK(fixture.prompt()->kind == ContentPromptKind::Rename);
+            CHECK(fixture.prompt()->item.path == "S");
+        }
+        fixture.frames(2);
+        CHECK(fixture.exists("S/Rock.ithasset"));
+    }
+
+    TEST_CASE("F2 in the tree on a current folder below a collapsed one expands the tree to draw the field") {
+        ContentFixture fixture;
+        fixture.asset("A/B/Rock.ithasset");
+        fixture.run("ith.content.rescan");
+        fixture.run("ith.content.navigate", R"({"folder": "A/B"})");
+        fixture.frames(3);
+        REQUIRE(fixture.panel.folderRect("A/B").has_value());
+        fixture.session.content().setExpanded("A", false);
+        fixture.frames(2);
+        CHECK_FALSE(fixture.session.content().isExpanded("A"));
+        CHECK_FALSE(fixture.panel.folderRect("A/B").has_value());
+
+        // A click on the tree's empty space below its rows gives it the focus and changes nothing else.
+        const UiRect a = *fixture.panel.folderRect("A");
+        fixture.click(a.centerX(), a.centerY() + a.height * 4.0f);
+        REQUIRE(fixture.session.content().treeFocus());
+        CHECK(fixture.session.content().currentFolder() == "A/B");
+
+        fixture.key(Key::F2);
+        REQUIRE(fixture.prompt() != nullptr);
+        CHECK(fixture.prompt()->item.path == "A/B");
+        CHECK(fixture.session.content().isExpanded("A"));
+        const std::optional<UiRect> row = fixture.panel.folderRect("A/B");
+        const std::optional<UiRect> field = fixture.panel.controlRect("rename");
+        REQUIRE(row.has_value());
+        REQUIRE(field.has_value());
+        CHECK(field->centerY() == doctest::Approx(row->centerY()).epsilon(0.05));
+        REQUIRE(fixture.ui.ui->wantsTextInput());
+        fixture.type("C");
+        fixture.key(Key::Enter);
+        fixture.frames(1);
+        CHECK(fixture.exists("A/C/Rock.ithasset"));
+        CHECK(fixture.session.content().currentFolder() == "A/C");
+    }
+
     TEST_CASE("the status bar's Content Drawer button toggles the drawer on the press (spec 3.16)") {
         ContentFixture fixture;
         fixture.shell = true;

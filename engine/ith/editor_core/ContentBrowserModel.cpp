@@ -470,17 +470,32 @@ Expected<void> ContentBrowserModel::navigate(std::string_view folder) {
     if (!folderExists(folder)) {
         return makeError("editor.content.not_found", "'" + std::string(folder) + "' is not a folder in Content");
     }
-    m_folder = std::string(folder);
-    for (std::string ancestor = detail::contentParent(folder); !ancestor.empty();
-         ancestor = detail::contentParent(ancestor)) {
-        m_expanded.insert(ancestor);
-    }
+    m_folder = std::string(folder); // `folder` may view m_folder itself: only m_folder from here on
+    expandAncestors(m_folder);
     m_search.clear();
     clearSelection();
     rebuildTree();
     rebuildView();
     writeState();
     return {};
+}
+
+bool ContentBrowserModel::expandAncestors(std::string_view folder) {
+    bool added = false;
+    for (std::string ancestor = detail::contentParent(folder); !ancestor.empty();
+         ancestor = detail::contentParent(ancestor)) {
+        added = m_expanded.insert(ancestor).second || added;
+    }
+    return added;
+}
+
+void ContentBrowserModel::revealInTree(std::string_view folder) {
+    if (!folderExists(folder) || !expandAncestors(folder)) {
+        return;
+    }
+    rebuildTree();
+    writeState();
+    changed();
 }
 
 bool ContentBrowserModel::navigateUp() {
@@ -528,6 +543,8 @@ void ContentBrowserModel::setSearch(std::string text) {
 void ContentBrowserModel::pointerPressed(float x, float y) noexcept {
     m_keyboardFocus =
         std::ranges::any_of(m_screenRects, [x, y](const ContentScreenRect& rect) { return rect.contains(x, y); });
+    m_treeFocus =
+        std::ranges::any_of(m_treeRects, [x, y](const ContentScreenRect& rect) { return rect.contains(x, y); });
 }
 
 void ContentBrowserModel::setFilter(ContentFilter filter) {

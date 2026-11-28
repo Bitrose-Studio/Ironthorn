@@ -962,6 +962,107 @@ TEST_SUITE("editor_core.content_files") {
         CHECK(exists(p.file("S/A.ithasset")));
     }
 
+    TEST_CASE("with the focus in the folder tree, rename and delete without a target act on the current folder "
+              "(spec 3.6, 3.8, 3.11)") {
+        Project p;
+        p.native("S/A.ithasset");
+        p.native("S/Sub/B.ithasset");
+        p.rescan();
+        p.navigate("S");
+        p.select({"S/A.ithasset"}, "replace");
+        const ContentKey folderKey{.id = AssetId(), .path = "S"};
+
+        SUBCASE("tree focus: the current folder") {
+            p.model().setKeyboardFocus(true);
+            p.model().setTreeFocus(true);
+            REQUIRE(p.model().treeFocus());
+            const Value prompt = p.execute("ith.content.rename");
+            CHECK(textOf(prompt, "path") == "S");
+            CHECK(textOf(prompt, "name") == "S");
+            REQUIRE(p.model().prompt() != nullptr);
+            CHECK(p.model().prompt()->kind == ith::ContentPromptKind::Rename);
+            CHECK(p.model().prompt()->item == folderKey);
+
+            const Value preview = p.execute("ith.content.delete");
+            CHECK_FALSE(preview.find("deleted")->asBool());
+            CHECK(pathsOf(*preview.find("preview")->find("items")) == std::vector<std::string>{"S"});
+            REQUIRE(p.model().prompt() != nullptr);
+            CHECK(p.model().prompt()->kind == ith::ContentPromptKind::Delete);
+
+            // An explicit target still wins over the tree's folder.
+            const Value item = p.execute("ith.content.rename", R"({"item": {"path": "S/A.ithasset"}})");
+            CHECK(textOf(item, "path") == "S/A.ithasset");
+            const Value items = p.execute("ith.content.delete", R"({"items": [{"path": "S/Sub"}]})");
+            CHECK(pathsOf(*items.find("preview")->find("items")) == std::vector<std::string>{"S/Sub"});
+
+            // The answers without a target rename and delete the folder itself.
+            const Value renamed = p.execute("ith.content.rename", R"({"name": "T"})");
+            CHECK(textOf(renamed, "path") == "T");
+            CHECK(exists(p.file("T/A.ithasset")));
+            CHECK_FALSE(exists(p.file("S")));
+            CHECK(p.model().currentFolder() == "T");
+            const Value deleted = p.execute("ith.content.delete", R"({"confirmed": true})");
+            CHECK(pathsOf(*deleted.find("deleted")) == std::vector<std::string>{"T"});
+            CHECK_FALSE(exists(p.file("T")));
+            CHECK(undoFree(p));
+        }
+
+        SUBCASE("content focus: the content selection") {
+            p.model().setKeyboardFocus(true);
+            p.model().setTreeFocus(false);
+            CHECK(textOf(p.execute("ith.content.rename"), "path") == "S/A.ithasset");
+            CHECK(pathsOf(*p.execute("ith.content.delete").find("preview")->find("items")) ==
+                  std::vector<std::string>{"S/A.ithasset"});
+        }
+
+        SUBCASE("the tree's focus counts only while the browser has the keyboard focus") {
+            p.model().setKeyboardFocus(true);
+            p.model().setTreeFocus(true);
+            p.model().setKeyboardFocus(true); // a new report starts in the asset view
+            CHECK_FALSE(p.model().treeFocus());
+            p.model().setTreeFocus(true);
+            p.model().setScreenRects({});
+            p.model().pointerPressed(5.0f, 5.0f); // outside the browser
+            CHECK_FALSE(p.model().treeFocus());
+            CHECK(textOf(p.execute("ith.content.rename"), "path") == "S/A.ithasset");
+        }
+
+        SUBCASE("revealInTree expands the folders above a folder, and ignores what isn't one") {
+            p.model().setExpanded("S", false);
+            const auto rows = [&p] {
+                std::vector<std::string> paths;
+                for (const ith::ContentFolderRow& row : p.model().treeRows()) {
+                    paths.push_back(row.path);
+                }
+                return paths;
+            };
+            CHECK(rows() == std::vector<std::string>{"", "S"});
+            const auto generation = p.model().generation();
+            p.model().revealInTree("S/Nothing");
+            p.model().revealInTree("S/A.ithasset");
+            CHECK(p.model().generation() == generation);
+            p.model().revealInTree("S/Sub");
+            CHECK(p.model().isExpanded("S"));
+            CHECK(rows() == std::vector<std::string>{"", "S", "S/Sub"});
+            const auto expanded = p.model().generation();
+            p.model().revealInTree("S/Sub"); // already shown: nothing changes
+            CHECK(p.model().generation() == expanded);
+        }
+
+        SUBCASE("tree focus on the root: refused, nothing changes") {
+            p.navigate("");
+            p.select({"S"}, "replace");
+            p.model().setKeyboardFocus(true);
+            p.model().setTreeFocus(true);
+            fails(*p.session, "ith.content.rename", "{}", "editor.content.root");
+            fails(*p.session, "ith.content.rename", R"({"name": "X"})", "editor.content.root");
+            fails(*p.session, "ith.content.delete", "{}", "editor.content.root");
+            fails(*p.session, "ith.content.delete", R"({"confirmed": true})", "editor.content.root");
+            CHECK(p.model().prompt() == nullptr);
+            CHECK(exists(p.file("S/A.ithasset")));
+        }
+    }
+
     TEST_CASE("without an asset database the file operations fail") {
         ith::EditorSession session(ith::test::editor::types());
         for (const std::string_view id :

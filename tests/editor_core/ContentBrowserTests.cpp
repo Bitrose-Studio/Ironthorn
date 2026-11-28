@@ -795,6 +795,42 @@ TEST_SUITE("editor_core.content_browser") {
         p.model().setScreenRects({});
         p.model().pointerPressed(10.0f, 450.0f);
         CHECK_FALSE(p.model().keyboardFocus());
+
+        // A press inside the tree's rectangle gives the tree the focus; elsewhere in the browser, the
+        // asset view.
+        p.model().setScreenRects({ith::ContentScreenRect{.x = 0.0f, .y = 400.0f, .width = 800.0f, .height = 200.0f}},
+                                 {ith::ContentScreenRect{.x = 0.0f, .y = 420.0f, .width = 160.0f, .height = 160.0f}});
+        p.model().pointerPressed(10.0f, 450.0f);
+        CHECK(p.model().keyboardFocus());
+        CHECK(p.model().treeFocus());
+        p.model().pointerPressed(400.0f, 450.0f);
+        CHECK(p.model().keyboardFocus());
+        CHECK_FALSE(p.model().treeFocus());
+        p.model().pointerPressed(10.0f, 450.0f);
+        p.model().pointerPressed(10.0f, 100.0f);
+        CHECK_FALSE(p.model().keyboardFocus());
+        CHECK_FALSE(p.model().treeFocus());
+    }
+
+    TEST_CASE("navigating to the current folder itself keeps it and expands the folders above it") {
+        Project p;
+        // A path longer than a short string's inline buffer: a view into the replaced string would
+        // point at freed memory.
+        const std::string folder = "Alpha/Bravo/Charlie/Delta/Echo";
+        REQUIRE(folder.size() > 23);
+        p.native(folder + "/A.ithasset");
+        p.rescan();
+        p.navigate(folder);
+        p.model().setExpanded("Alpha", false);
+        p.model().setExpanded("Alpha/Bravo", false);
+        REQUIRE(p.model().navigate(p.model().currentFolder()).hasValue());
+        CHECK(p.model().currentFolder() == folder);
+        for (const std::string_view above :
+             {"Alpha", "Alpha/Bravo", "Alpha/Bravo/Charlie", "Alpha/Bravo/Charlie/Delta"}) {
+            CAPTURE(above);
+            CHECK(p.model().isExpanded(above));
+        }
+        CHECK(p.model().shown().size() == 1);
     }
 
     TEST_CASE("a new level saved into Content shows at once; a Save, or a save outside Content, rescans nothing") {

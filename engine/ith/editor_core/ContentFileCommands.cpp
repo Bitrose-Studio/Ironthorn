@@ -443,6 +443,27 @@ Expected<void> renameOnDisk(AssetDatabase& assets, const ContentItem& item, cons
     return {};
 }
 
+// The current folder when the folder tree has the keyboard focus and `args` has no `key` (spec 3.6:
+// F2 and Delete in the tree act on the tree's folder); nullopt otherwise, so the command takes its
+// explicit target or the content selection. "editor.content.root" when the current folder is the
+// root.
+Expected<std::optional<ContentItem>> treeFolderTarget(std::string_view command, const ContentBrowserModel& model,
+                                                      const Value& args, std::string_view key) {
+    const Value* target = args.kind() == Value::Kind::Object ? args.find(key) : nullptr;
+    if (!model.treeFocus() || (target != nullptr && target->kind() != Value::Kind::Null)) {
+        return std::optional<ContentItem>();
+    }
+    if (model.currentFolder().empty()) {
+        return makeError("editor.content.root", std::string(command) + ": the Content folder itself can't be changed");
+    }
+    const ContentItem* folder = model.findByPath(model.currentFolder());
+    if (folder == nullptr) {
+        return makeError("editor.content.not_found",
+                         std::string(command) + ": '" + model.currentFolder() + "' is not a folder in Content");
+    }
+    return std::optional<ContentItem>(*folder);
+}
+
 Expected<Value> renameItem(EditorSession& session, const Value& args) {
     constexpr std::string_view kCommand = "ith.content.rename";
     Expected<ContentBrowserModel*> model = fileBrowserOf(session);
@@ -450,7 +471,12 @@ Expected<Value> renameItem(EditorSession& session, const Value& args) {
         return makeUnexpected(std::move(model).error());
     }
     AssetDatabase& assets = *(*model)->assets();
-    Expected<ContentItem> item = targetItem(kCommand, **model, args);
+    Expected<std::optional<ContentItem>> treeFolder = treeFolderTarget(kCommand, **model, args, "item");
+    if (!treeFolder) {
+        return makeUnexpected(std::move(treeFolder).error());
+    }
+    Expected<ContentItem> item =
+        treeFolder->has_value() ? Expected<ContentItem>(std::move(**treeFolder)) : targetItem(kCommand, **model, args);
     if (!item) {
         return makeUnexpected(std::move(item).error());
     }
@@ -913,7 +939,13 @@ Expected<Value> deleteItems(EditorSession& session, const Value& args) {
         return makeUnexpected(std::move(model).error());
     }
     AssetDatabase& assets = *(*model)->assets();
-    Expected<std::vector<ContentItem>> items = targetItems(kCommand, **model, args);
+    Expected<std::optional<ContentItem>> treeFolder = treeFolderTarget(kCommand, **model, args, "items");
+    if (!treeFolder) {
+        return makeUnexpected(std::move(treeFolder).error());
+    }
+    Expected<std::vector<ContentItem>> items = treeFolder->has_value()
+                                                   ? Expected<std::vector<ContentItem>>(std::vector{**treeFolder})
+                                                   : targetItems(kCommand, **model, args);
     if (!items) {
         return makeUnexpected(std::move(items).error());
     }

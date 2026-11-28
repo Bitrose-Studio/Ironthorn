@@ -671,11 +671,15 @@ state; the drawer is never in a layout.
   the drop highlight, and runs a queued import, also while the drawer is closed.
 - **Focus.** `drawDrawer()` also reports whether the panel or the drawer (child windows included)
   had the keyboard focus this frame (`ContentBrowserModel::setKeyboardFocus`), which the keymap
-  reads to choose the Content context, and where each was drawn (`setScreenRects`). Between frames
-  a mouse press, which the platform backend hands to the model (`EditorUiDesc::content`), and
-  `ith.content.toggle_drawer` update the flag at once. A text field and an open popup keep every
-  key, so the shortcuts never fire while the search box is edited or a menu is open. When the panel
-  is in the layout the drawer closes: one browser on screen at a time.
+  reads to choose the Content context, whether the folder tree had it (`setTreeFocus`: F2 and
+  Delete then rename and delete the current folder, its rename field on its tree row, the folders
+  above it expanded when one was collapsed), and where each was drawn, the tree included
+  (`setScreenRects`). Between frames a mouse press, which the platform backend hands to the model
+  (`EditorUiDesc::content`), and `ith.content.toggle_drawer` update both flags at once, so a press
+  in the tree or the asset view and a key in the same batch of events reach the part pressed. A
+  text field and an open popup keep every key, so the shortcuts never fire while the search box is
+  edited or a menu is open. When the panel is in the layout the drawer closes: one browser on
+  screen at a time.
 - **Ctrl + Space and input methods.** Some input methods take Ctrl + Space for themselves (fcitx5 and
   IBus on Linux, the Chinese IMEs on Windows), so the editor never sees it. Rebind
   `ith.content.toggle_drawer` in the user's `Keymap.json` then.
@@ -714,7 +718,9 @@ running a shortcut; the list sorting by its Name and Type headers with a `##` in
 drawer closing when the panel is opened. For the file operations: the empty-folder text; the inline
 rename from F2 (Enter renaming with the id kept, an invalid and a taken name keeping the field open,
 Escape cancelling), from Add > New Folder (leaving the field commits, Escape keeps the default) and
-on a tree folder's row; the delete dialog's text (users, the open level and its unsaved changes,
+on a tree folder's row; with the focus in the folder tree, F2 opening the current folder's field on
+its tree row (expanding a collapsed folder above it) and Delete asking about that folder, not the
+selected asset, also when a press and the key come in one batch of events; the delete dialog's text (users, the open level and its unsaved changes,
 unreadable files, "and 2 more" past 20 items), Enter on the focused Cancel, Escape, Delete, and the
 drawer staying open behind it; Import through the recording host (its filters, `allowMany`, the
 start folder of the next dialog), the import queued a frame with its notice, the conflicts asked one
@@ -827,9 +833,6 @@ passed and 1 when it failed.
 
 ## Not here yet
 
-- In the Content Browser, with the keyboard focus in the folder tree, F2 and Delete act on the
-  content selection instead of the current folder (spec 3.8 and 3.11); the tree folder's context
-  menu renames and deletes it.
 - The main toolbar (a later P2 step); asset pickers in Details.
 - In the viewport: the rotate and scale gizmos and the gizmo's centre handle, the selection
   outline, and marquee selection; the active viewport for Add Shape is always `ith.viewport.1`.

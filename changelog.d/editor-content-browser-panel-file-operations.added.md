@@ -27,5 +27,6 @@
 - Files that arrive while a question of the browser is open, or while another import waits to run,
   are not imported: the status line says why. Files dropped where Windows reports no position go
   into the browser's current folder.
-- Known gap: with the keyboard focus in the folder tree, F2 and Delete still act on the selected
-  items, not on the folder; rename or delete a tree folder through its context menu.
+- With the keyboard focus in the folder tree, F2 renames the current folder in place on its tree
+  row, and Delete asks to delete that folder; the Content folder itself can't be renamed or
+  deleted.

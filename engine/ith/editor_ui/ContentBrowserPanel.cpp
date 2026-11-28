@@ -738,6 +738,12 @@ void ContentBrowserPanel::drawBrowser() {
             m_renameFocus = true;
             m_renameError.clear();
             m_scrollToFocus = m_model->focusItem() == prompt->item;
+            // A folder the asset view doesn't show is renamed on its tree row: expand the folders
+            // above it, so the row and the field are drawn this frame (nothing iterates the rows yet).
+            if (prompt->item.id.isNil() && !m_model->shownIndexOf(prompt->item).has_value()) {
+                const std::string path = prompt->item.path;
+                m_model->revealInTree(path);
+            }
         }
     } else {
         m_renameItem.reset();
@@ -901,11 +907,26 @@ void ContentBrowserPanel::drawFilterMenu(const ContentFilter& filter) {
 }
 
 void ContentBrowserPanel::drawTree(float width, float height) {
-    if (ImGui::BeginChild("##tree", ImVec2(width, height), ImGuiChildFlags_Borders)) {
+    const bool visible = ImGui::BeginChild("##tree", ImVec2(width, height), ImGuiChildFlags_Borders);
+    // F2 and Delete act on the tree's folder while it has the focus (spec 3.6).
+    m_treeFocused = m_treeFocused || ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+    // Where the tree was drawn, so a press in it between frames gives it the focus.
+    const ImVec2 position = ImGui::GetWindowPos();
+    const ImVec2 size = ImGui::GetWindowSize();
+    m_treeRects.push_back(ContentScreenRect{.x = position.x, .y = position.y, .width = size.x, .height = size.y});
+    if (visible) {
         // Changes wait for the end of the draw: they rebuild the rows.
         const std::vector<ContentFolderRow>& rows = m_model->treeRows();
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(rows.size()));
+        // A rename that starts on a tree row draws its row, scrolled off or not, so the field opens.
+        if (m_renameFocus && m_renameItem.has_value() && m_renameItem->id.isNil() &&
+            !m_model->shownIndexOf(*m_renameItem).has_value()) {
+            const auto row = std::ranges::find(rows, m_renameItem->path, &ContentFolderRow::path);
+            if (row != rows.end()) {
+                clipper.IncludeItemByIndex(static_cast<int>(row - rows.begin()));
+            }
+        }
         while (clipper.Step()) {
             for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
                 drawTreeRow(rows[static_cast<std::size_t>(index)]);
@@ -954,6 +975,9 @@ void ContentBrowserPanel::drawTreeRow(const ContentFolderRow& row) {
     dragAndDrop(key, nullptr);
     dropTarget(row.path);
     if (rename) {
+        if (m_renameFocus) {
+            ImGui::SetScrollHereY(); // the field opens in view
+        }
         ImGui::SameLine();
         drawRenameField(std::max(ImGui::GetContentRegionAvail().x, ImGui::GetFontSize() * 4.0f));
     }
@@ -1871,6 +1895,8 @@ void ContentBrowserPanel::drawDrawer() {
     }
     m_drawerWasOpen = m_model->drawerOpen();
     m_model->setKeyboardFocus(m_panelFocused || drawerFocused);
+    m_model->setTreeFocus(m_treeFocused);
+    m_treeFocused = false;
     // Where the browser was drawn this frame, for the presses and drops before the next frame.
     std::vector<ContentScreenRect> rects;
     m_browserRects.clear();
@@ -1884,7 +1910,8 @@ void ContentBrowserPanel::drawDrawer() {
             .x = m_drawerRect->x, .y = m_drawerRect->y, .width = m_drawerRect->width, .height = m_drawerRect->height});
         m_browserRects.push_back(*m_drawerRect);
     }
-    m_model->setScreenRects(std::move(rects));
+    m_model->setScreenRects(std::move(rects), std::move(m_treeRects));
+    m_treeRects.clear(); // valid but unspecified after the move
     m_panelRect.reset();
     m_panelFocused = false;
     drawDropHighlight();
