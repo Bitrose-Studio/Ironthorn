@@ -155,7 +155,7 @@ bool isElementOfVector(const DetailsRow& row) {
 
 } // namespace
 
-DetailsPanel::DetailsPanel(EditorSession& session) : m_model(session) {}
+DetailsPanel::DetailsPanel(EditorSession& session) : m_session(&session), m_model(session) {}
 
 std::optional<UiRect> DetailsPanel::valueRect(std::string_view key) const {
     const auto found = m_values.find(std::string(key));
@@ -163,8 +163,19 @@ std::optional<UiRect> DetailsPanel::valueRect(std::string_view key) const {
 }
 
 void DetailsPanel::draw() {
+    // Play or Stop ended the world a drag was editing (its edit is dropped, not committed): the drag
+    // ImGui still holds changes nothing until its release, so it can't write into the next world.
+    if (!m_editKey.empty() && !m_model.editing()) {
+        if (ImGui::IsAnyItemActive()) {
+            m_refusedKey = m_editKey;
+        }
+        m_editKey.clear();
+    }
     m_model.update();
     m_values.clear();
+    if (m_session->play() != nullptr) {
+        ImGui::TextDisabled("%.*s", static_cast<int>(kDetailsPlayNote.size()), kDetailsPlayNote.data());
+    }
     if (m_model.entities().empty()) {
         ImGui::TextDisabled("Select an entity to see its details.");
         return;
@@ -186,8 +197,11 @@ void DetailsPanel::draw() {
 }
 
 void DetailsPanel::drawHeader() {
+    // While playing the game world's structure and labels are read-only: values only (ADR-0053
+    // decision 13).
+    const bool playing = m_session->play() != nullptr;
     // The name, editable with one entity selected.
-    ImGui::BeginDisabled(!m_model.canRename());
+    ImGui::BeginDisabled(!m_model.canRename() || playing);
     constexpr std::string_view kNameKey = "#name";
     const bool owned = m_textKey == kNameKey;
     std::array<char, 1024> local{};
@@ -212,14 +226,21 @@ void DetailsPanel::drawHeader() {
     ImGui::SameLine();
     const std::optional<bool> enabled = m_model.enabled();
     bool on = enabled.value_or(false);
+    ImGui::BeginDisabled(playing);
     if (ImGui::Checkbox("Enabled", &on)) {
         report(m_model.setEnabled(on));
     }
-    ImGui::SetItemTooltip("%s", enabled.has_value()
-                                    ? "A disabled entity and everything below it are skipped by the game"
-                                    : kMultipleValues);
+    ImGui::EndDisabled();
+    const char* enabledTip =
+        enabled.has_value() ? "A disabled entity and everything below it are skipped by the game" : kMultipleValues;
+    if (playing) {
+        enabledTip = "Enabled can't change while playing";
+    }
+    ImGui::SetItemTooltip("%s", enabledTip);
     ImGui::SameLine();
+    ImGui::BeginDisabled(playing);
     drawAddComponent();
+    ImGui::EndDisabled();
 }
 
 void DetailsPanel::drawAddComponent() {
@@ -300,9 +321,11 @@ void DetailsPanel::drawRow(std::size_t index) {
     ImGui::TableSetColumnIndex(1);
     if (row.kind == DetailsRowKind::Component) {
         const std::string remove = iconText(icons::kTrash) + "##remove";
+        ImGui::BeginDisabled(m_session->play() != nullptr);
         if (ImGui::SmallButton(remove.c_str())) {
             report(m_model.removeComponent(*row.type));
         }
+        ImGui::EndDisabled();
         ImGui::SetItemTooltip("Remove Component");
     } else if (row.kind == DetailsRowKind::Property) {
         drawValue(index);
@@ -339,6 +362,12 @@ void DetailsPanel::applyEdit(std::size_t index, const std::string& key, EditEven
     }
     if (events.deactivated && ours) {
         m_model.commitEdit();
+    }
+    // The open drag's key, until it ends; a drag the model dropped behind it (Play, Stop) is refused.
+    if (ours && !events.deactivated) {
+        m_editKey = key;
+    } else if (events.deactivated && m_editKey == key) {
+        m_editKey.clear();
     }
 }
 

@@ -45,6 +45,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
 
 namespace ith {
 
@@ -59,6 +60,9 @@ enum class PlayMode : std::uint8_t {
 
 // The longest step ith.play.step takes in one call, in ticks.
 inline constexpr std::uint32_t kMaxStepFrames = 1000;
+
+// The id of Keep Simulation Changes (KeepSimulationChanges.cpp), which the UI offers in menus.
+inline constexpr std::string_view kKeepSimulationChanges = "ith.play.keep_simulation_changes";
 
 class PlaySession {
 public:
@@ -152,6 +156,9 @@ public:
     // (asserted; nothing runs otherwise), which ith.play.step checks as argument errors: 1 to
     // kMaxStepFrames frames, seconds in (0, kMaxTickDelta]. tick()'s recorded time doesn't change.
     void step(std::uint32_t frames, double seconds);
+
+    // The game time since the start: the game world's Time::elapsed, 0 while it has no Time.
+    [[nodiscard]] double elapsedSeconds() const;
 
     // The game world's Time, or null when a system removed it (the next tick inserts a new one).
     [[nodiscard]] const Time* time() const;

@@ -54,13 +54,22 @@ inline constexpr Icon kChevronRight{"chevron-right", 0xE06F};
 inline constexpr Icon kImport{"import", 0xE22F};
 inline constexpr Icon kFolderPlus{"folder-plus", 0xE0D9};
 inline constexpr Icon kFolders{"folders", 0xE33F};
+inline constexpr Icon kPlay{"play", 0xE13C};
+inline constexpr Icon kSimulate{"monitor-play", 0xE485};
+inline constexpr Icon kPause{"pause", 0xE12E};
+inline constexpr Icon kStop{"square", 0xE167};
+inline constexpr Icon kStep{"step-forward", 0xE3EA};
+inline constexpr Icon kPossess{"gamepad-2", 0xE0DF};
+inline constexpr Icon kEject{"eject", 0xE733};
+inline constexpr Icon kKeepChanges{"clipboard-check", 0xE219};
 
 // Every icon above, for the codepoint check.
-inline constexpr std::array kAll{kFilePlus, kFolderOpen,   kSave,      kSaveAll,      kUndo,     kRedo,  kTrash,
-                                 kCopy,     kPencil,       kSelectAll, kCircleX,      kPlus,     kReset, kSearch,
-                                 kClose,    kFolder,       kFile,      kFileQuestion, kFileText, kMap,   kBox,
-                                 kImage,    kMusic,        kWarning,   kRefresh,      kGrid,     kList,  kFilter,
-                                 kSort,     kChevronRight, kImport,    kFolderPlus,   kFolders};
+inline constexpr std::array kAll{kFilePlus, kFolderOpen,   kSave,      kSaveAll,      kUndo,     kRedo,       kTrash,
+                                 kCopy,     kPencil,       kSelectAll, kCircleX,      kPlus,     kReset,      kSearch,
+                                 kClose,    kFolder,       kFile,      kFileQuestion, kFileText, kMap,        kBox,
+                                 kImage,    kMusic,        kWarning,   kRefresh,      kGrid,     kList,       kFilter,
+                                 kSort,     kChevronRight, kImport,    kFolderPlus,   kFolders,  kPlay,       kSimulate,
+                                 kPause,    kStop,         kStep,      kPossess,      kEject,    kKeepChanges};
 
 } // namespace icons
 

@@ -302,10 +302,18 @@ UiPlatformBackend::~UiPlatformBackend() {
 InputReply UiPlatformBackend::onInputEvent(const Event& event) {
     ImGuiIO& io = ImGui::GetIO();
     const auto consumedIf = [](bool condition) { return condition ? InputReply::Consumed : InputReply::NotConsumed; };
+    // While Play In Editor has the mouse, the keyboard is the game's but for the Play In Editor keys
+    // above: ImGui gets no key press and no text, so a text field left active by the capturing click
+    // types nothing, and nothing is consumed here (ADR-0053 decision 21). Releases and the modifiers
+    // still reach ImGui, so a key it saw go down before the capture doesn't stay held.
+    const bool keyboardToGame = m_input->mouseCaptured(m_window);
     switch (event.type) {
         case EventType::KeyDown:
         case EventType::KeyUp: {
             const bool down = event.type == EventType::KeyDown;
+            if (keyboardToGame && down) {
+                return InputReply::NotConsumed;
+            }
             if (!event.repeat) {
                 addModifiers(io, event.modifiers);
                 const ImGuiKey key = keyFor(event);
@@ -317,6 +325,9 @@ InputReply UiPlatformBackend::onInputEvent(const Event& event) {
             return consumedIf(down && (m_textInput || anyPopupOpen()));
         }
         case EventType::TextInput: {
+            if (keyboardToGame) {
+                return InputReply::NotConsumed;
+            }
             const std::string text(event.text);
             io.AddInputCharactersUTF8(text.c_str());
             return InputReply::Consumed;
@@ -387,6 +398,11 @@ void UiPlatformBackend::newFrame(const UiFrameInput& frame) {
     // its hover doesn't follow a cursor it can't see.
     const bool captured = m_input->mouseCaptured(m_window);
     const bool mouseHidden = captured || viewportDragHeld();
+    // The keys ImGui holds when the capture starts are released, as its key-ups go to the game now.
+    if (captured && !m_captured) {
+        io.ClearInputKeys();
+    }
+    m_captured = captured;
     if (mouseHidden && !m_mouseHidden) {
         io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
     } else if (!mouseHidden && m_mouseHidden) {

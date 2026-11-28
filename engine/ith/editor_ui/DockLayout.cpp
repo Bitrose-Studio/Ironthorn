@@ -231,9 +231,10 @@ void DockLayout::readBack() {
     m_session->layouts().observe(std::move(layout));
 }
 
-void DockLayout::draw(float bottomReserved) {
+void DockLayout::draw(float bottomReserved, float topReserved) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const ImVec2 size{viewport->WorkSize.x, viewport->WorkSize.y - bottomReserved};
+    const ImVec2 position{viewport->WorkPos.x, viewport->WorkPos.y + topReserved};
+    const ImVec2 size{viewport->WorkSize.x, viewport->WorkSize.y - bottomReserved - topReserved};
     if (size.x <= 0.0f || size.y <= 0.0f) {
         return;
     }
@@ -243,7 +244,7 @@ void DockLayout::draw(float bottomReserved) {
         m_rescale = false;
         readBack();
     }
-    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowPos(position);
     ImGui::SetNextWindowSize(size);
     ImGui::SetNextWindowViewport(viewport->ID);
     // NOLINTBEGIN(bugprone-signed-bitwise): ImGui's flags are int enums
@@ -258,8 +259,8 @@ void DockLayout::draw(float bottomReserved) {
     ImGui::Begin("Dock space###ith.dockspace_host", nullptr, kHostFlags);
     ImGui::PopStyleVar(3);
     m_dockSpace = ImGui::GetID(kDockSpaceName);
-    m_x = viewport->WorkPos.x;
-    m_y = viewport->WorkPos.y;
+    m_x = position.x;
+    m_y = position.y;
     m_width = size.x;
     m_height = size.y;
     const bool rebuild = rescale || !m_built || m_applied != m_session->layouts().generation();

@@ -34,6 +34,8 @@ ith_add_module(editor_ui
         OutputLog.cpp
         OutlinerPanel.h
         OutlinerPanel.cpp
+        PlayIndicators.h
+        PlayIndicators.cpp
         Theme.h
         Theme.cpp
         ViewportPanel.h

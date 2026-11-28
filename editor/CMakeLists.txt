@@ -21,6 +21,7 @@ ith_add_application(ironthorn_editor
         reflection
         config
         ecs
+        gameplay
         shapes
         asset_database
         asset_importers

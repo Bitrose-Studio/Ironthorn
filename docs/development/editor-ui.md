@@ -2,10 +2,10 @@
 
 `engine/ith/editor_ui` is the editor's user interface on Dear ImGui
 ([ADR-0029](../decisions/0029-editor-ui-toolkit.md)): the one ImGui context with our own platform
-and renderer backends, the theme, fonts and icons, the idle policy, the dock space and the shell
-(main menu bar and status bar). It draws the state of [`editor_core`](editor-core.md) and runs its
-commands; `editor_core` never sees ImGui. The editor application, `ironthorn_editor`
-(`editor/`), puts it in a window.
+and renderer backends, the theme, fonts and icons, the idle policy, the dock space, the shell (main
+menu bar, main toolbar and status bar), the panels and Play In Editor's UI. It draws the state of
+[`editor_core`](editor-core.md) and runs its commands; `editor_core` never sees ImGui. The editor
+application, `ironthorn_editor` (`editor/`), puts it in a window.
 
 ## The boundary
 
@@ -32,7 +32,9 @@ commands; `editor_core` never sees ImGui. The editor application, `ironthorn_edi
 
 ith::Input input;
 ith::KeymapConsumer shortcuts(session, keymap);
-ith::ViewportConsumer viewportInput(session.viewports());
+ith::ViewportConsumer viewportInput(session);
+ith::SpectatorConsumer spectator(session);
+ith::PlayInputConsumer playKeys(session, keymap);
 input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &shortcuts});
 input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &viewportInput});
 ith::WindowUiHost host(platform, window);
@@ -40,13 +42,23 @@ auto ui = ith::EditorUi::create({.device = &device, .targetFormat = format,
                                  .vertexShader = vertex, .pixelShader = pixel,
                                  .fontDirectory = fonts, .input = &input,
                                  .window = window.id(), .host = &host,
-                                 .viewports = &viewportInput,
+                                 .viewports = &viewportInput, .playInput = &playKeys,
                                  .displayScale = window.displayScale()});
+// After the UI's consumer, so the Play In Editor keys are on top; the spectator is the game's.
+input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &playKeys});
+input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Game, .consumer = &spectator});
+session.setPlayInput(&input, window.id()); // unbound, after stopPlay(), before the Input goes
 ith::EditorShellState shell;
+shell.theme = (*ui)->theme();
+const ith::KeepChangesPrompt keepPrompt = ith::registerKeepSimulationChanges(session, shell);
 
 // every frame, after the events and main-thread jobs (ADR-0035 rule 22):
 input.processEvents(events, platform.pumpTimeNs());
-if (viewportInput.update(dt)) idle.requestFrame();
+if (viewportInput.update(dt) || spectator.update(dt)) idle.requestFrame();
+if (ith::PlaySession* play = session.play(); play != nullptr && !play->paused() && !minimized) {
+    play->tick(input.frameTimeNs()); // before the UI, so it shows this frame's game state
+    idle.requestFrame();
+}
 (*ui)->newFrame({.size = window.size(), .pixelSize = window.pixelSize(), .deltaSeconds = dt,
                  .focused = input.focusedWindow() == window.id()});
 ith::drawEditorShell(session, keymap, shell);
@@ -97,10 +109,12 @@ graph.execute(pool);
 
 The UI is an input consumer in the `Editor` layer of its window's stack. `EditorUi::create` adds
 it, so it sits above the consumers added before it: the application adds the keymap consumer, then
-the viewport consumer ([editor core](editor-core.md#viewport-input)), so the stack is, top first,
-the UI, the viewports, the keymap ([ADR-0029](../decisions/0029-editor-ui-toolkit.md) rule 7 as
-amended by [ADR-0042](../decisions/0042-editor-viewport.md) rule 8). It hands every event that
-reaches it to ImGui, and consumes:
+the viewport consumer ([editor core](editor-core.md#viewport-input)), then the UI, then the Play In
+Editor consumer, so the stack is, top first, the Play In Editor keys, the UI, the viewports, the
+keymap, then the game's layers ([ADR-0029](../decisions/0029-editor-ui-toolkit.md) rule 7 as
+amended by [ADR-0042](../decisions/0042-editor-viewport.md) rule 8 and
+[ADR-0053](../decisions/0053-play-in-editor-and-simulate.md) decision 19). It hands every event
+that reaches it to ImGui, and consumes:
 
 - **key presses only while a text field is active or an ImGui popup is open** (a menu, a context
   menu, a dialog), so Escape and Enter in a menu or a dialog never also run a shortcut, and W in a
@@ -128,9 +142,18 @@ ImGui gets the mouse's last position back (for a fly, the press position the cur
 so hover follows the cursor before it next moves.
 
 The want-capture flags come from the previous ImGui frame, because routing runs before
-`NewFrame`. While the mouse is captured (Play In Editor), ImGui is told the mouse is gone. Editor
-shortcuts are always bound through the keymap consumer, never through ImGui's own shortcut
-functions.
+`NewFrame`. While the mouse is captured (Play In Editor), ImGui is told the mouse is gone, and the
+UI's consumer neither hands key presses or text to ImGui nor consumes any key, so the keyboard
+reaches the game (ADR-0053 decision 21): a text field left active by the click that captured types
+nothing. Releases and the modifiers still reach ImGui, so a key it saw go down before the capture
+doesn't stay held, and the keys it held when the capture started are released
+(`ImGuiIO::ClearInputKeys`). Editor shortcuts are always bound through the keymap consumer, never
+through ImGui's own shortcut functions.
+
+At the end of every frame `EditorUi::endFrame` tells the Play In Editor consumer
+(`EditorUiDesc::playInput`) whether a text field is active and whether any popup is open
+(`PlayInputConsumer::reportUi`). With the mouse free, Escape then passes it on to the UI, which
+leaves the field or closes the popup and consumes it; only an Escape nothing uses stops play.
 
 ## Renderer backend
 
@@ -224,7 +247,8 @@ caller, so registering or importing the same RHI texture again must start from t
   the DPI font scale. `EditorUi::setDisplayScale` applies it again on
   `WindowDisplayScaleChanged`; fonts follow without rebuilding the atlas, since ImGui rasterizes
   glyphs on demand. `defaultDarkTheme()` is a neutral dark theme until the editor theme sets its
-  values.
+  values. Besides ImGui's colours, the tokens hold the viewport's, the gizmo's and Play In Editor's
+  (`playActive`, `playSimulate`, `playPaused`).
 - **Fonts**: Inter Regular and SemiBold for text (`UiFont::Text`, `UiFont::Bold`) and JetBrains
   Mono for code and logs (`UiFont::Mono`), read with the engine's file API from the `fonts/` folder
   next to the executable and handed to ImGui from memory. `EditorUi::pushFont`/`popFont` select
@@ -257,15 +281,16 @@ idle.frameFinished();
 ```
 
 Activity (events, a change of the document's counters, a finished job, a viewport pick waiting for
-its read-back (`ViewportPanel::picking()`), later Play In Editor and
-animations) draws at once, plus two frames for ImGui to settle. Otherwise the editor draws at the
+its read-back (`ViewportPanel::picking()`), a play session that ticks, a moving spectator, later
+animations) draws at once, plus two frames for ImGui to settle. A paused session follows the idle
+rate again. Otherwise the editor draws at the
 idle rate, 10 frames per second while one of its windows has focus and 2 while none has: the
 `preferences` section of `Editor.json` (`ith::EditorPreferences`, `ith::kEditorPreferences` in
 `editor_core`). A job that posts to the main thread ends the wait through `Platform::wake()`.
 
 ## The shell
 
-`drawEditorShell(session, keymap, state)` draws:
+`drawEditorShell(session, keymap, state, dock)` draws:
 
 - the **main menu bar**: File and Edit (`kShellMenus`), listing the registry's commands of those
   categories, the built-in ones in Unreal's order (New Level, Open Level, Save, Save As; Undo,
@@ -273,7 +298,10 @@ idle rate, 10 frames per second while one of its windows has focus and 2 while n
   ("Ctrl+Z"). A command that can't run now is disabled, its reason as the tooltip. Choosing one runs
   it through the registry as a user's gesture (`CommandRegistry::invoke`, so Rename starts renaming
   in the Outliner); commands that need arguments, such as Open Level's path, report the missing
-  argument in the status bar until their dialogs exist;
+  argument in the status bar until their dialogs exist. The Edit menu ends with Keep Simulation
+  Changes (see [Play In Editor](#play-in-editor));
+- the **main toolbar**, a strip under the menu bar over the whole window with the play controls
+  ([Play In Editor](#play-in-editor)); the dock space starts below it;
 - the **Window** menu: the panels (checked when open; choosing one opens or focuses it) and Load
   Layout, Save Layout As (a dialog for the name that asks before overwriting), Set as Default,
   Delete Layout and Reset Layout ([ADR-0040](../decisions/0040-editor-docking-panels-and-layouts.md));
@@ -282,8 +310,9 @@ idle rate, 10 frames per second while one of its windows has focus and 2 while n
   user arranges back into the layout session;
 - the **status bar**: the **Content Drawer** button, which runs `ith.content.toggle_drawer` on the
   press (a release would first close the open drawer as a click outside it), with the keymap's chord
-  in its tooltip; the level's file name or "Untitled", with " *" for unsaved changes; and the last
-  menu command or its error.
+  in its tooltip; the level's file name or "Untitled", with " *" for unsaved changes; while a play
+  session exists, its state chip ("Playing 0:12.4"); and the last menu or toolbar command or its
+  error.
 
 ## Panels
 
@@ -326,7 +355,7 @@ matches are dimmed.
 | Double click, or F2 | Rename in place: Enter or leaving the field keeps the name, Esc drops it |
 | Drag a row | Drop before or after another row (its top or bottom quarter), inside it (the middle), or on the empty space below the rows (the end of the roots); a line or frame shows where |
 | Click the empty space | Select None |
-| Right click | The context menu: Add Shape (see [Viewport](#viewport)) |
+| Right click | The context menu: Add Shape (see [Viewport](#viewport)); while playing, Keep Simulation Changes |
 
 F2 reaches the Outliner through the rename command's prompt: the keymap and the Edit menu
 *invoke* `ith.edit.rename`, and `registerOutliner` makes the prompt start renaming the primary
@@ -382,11 +411,15 @@ changes nothing and logs one warning instead of one per frame.
 **Multi-select.** Values that differ between the selected entities show "Multiple Values"; an edit
 writes the same value to all of them.
 
+**While playing**, the Outliner and Details show the game world, read-only except for values (see
+[Play In Editor](#play-in-editor)).
+
 ### Viewport
 
 `ViewportPanel` (`ViewportPanel.h`) draws the editor world from editor core's `Viewports` store
 ([editor core](editor-core.md#viewports)), as [ADR-0042](../decisions/0042-editor-viewport.md)
-rules 8 and 13 to 26 decide. It is the panel `ith.viewport`, instances `ith.viewport.1` to
+rules 8 and 13 to 26 decide; while a play session runs, its play viewport draws the game world
+instead ([Play In Editor](#play-in-editor)). It is the panel `ith.viewport`, instances `ith.viewport.1` to
 `ith.viewport.4`, docked in the centre; the engine's `Default.json` opens instance 1 in the central
 stack.
 
@@ -462,19 +495,21 @@ the image reads after them:
 
 Rendering is camera-relative ([ADR-0006](../decisions/0006-math-and-coordinate-conventions.md)
 rule 7): the camera's position is subtracted from every world matrix on the CPU. Game view
-(`ith.viewport.game_view`) draws neither the grid nor the tint. Once per graph, before the first
-draw list, the panel runs `propagateTransforms` on the editor world. That writes only the Transient
-`WorldTransform`, so the history and the dirty state stay as they were.
+(`ith.viewport.game_view`) draws neither the grid nor the tint. Once per graph and per world drawn,
+before that world's first draw list, the panel runs `propagateTransforms` on it. That writes only
+the Transient `WorldTransform`, so the history and the dirty state stay as they were.
 
 **The redraw rule** (ADR-0042 rule 16). An instance renders only when something it shows changed
 since its last render:
 
 - the camera's position, yaw, pitch or horizontal field of view (not its speed step or pivot; a
   resize changes the derived vertical angle and is covered by the target's size);
-- the entities, their values or the open level (`EditorChanges`);
-- the selection, except in game view, which doesn't show it;
+- the entities, their values or the open level of the world it draws (that world's
+  `EditorChanges`);
+- the active selection (`EditorSession::active()`), except in game view, which doesn't show it;
+- the active world's `identity`, which Play and Stop change;
 - its target's size;
-- the game-view flag.
+- the game-view flag (forced on in a possessed play viewport).
 
 Otherwise it adds no passes and the image shows the last render. The UI around it still follows
 the [idle policy](#idle-policy).
@@ -521,7 +556,10 @@ after its viewport is hidden: it reads the buffer, not the target. Clicks are on
 and release on the image without Alt within 4 logical points (editor core); RMB, MMB and the
 Alt gestures never pick, and losing focus with LMB held never picks. A pick read while a transaction is open
 (a gizmo drag began after the click) is dropped: the drag wins, and the selection would be
-refused. A refused selection is logged in the category `Viewport`.
+refused. So is a pick read after Play or Stop changed the active world: each pick keeps the active
+world's `identity` from its copy, because its texel names an entity of a world no longer drawn
+there (world ids and slots are reused, so the texel can't tell). A refused selection is logged in
+the category `Viewport`.
 
 **Translate gizmo** (ADR-0042 rules 24 to 26). When the instance shows a gizmo
 (`viewportGizmo()`, [editor core](editor-core.md#translate-gizmo): the Translate tool, a
@@ -687,6 +725,69 @@ state; the drawer is never in a layout.
   removal, so the session's panels must not be drawn after the panel is gone (the editor draws them
   only inside its frame loop).
 
+## Play In Editor
+
+The UI of [ADR-0053](../decisions/0053-play-in-editor-and-simulate.md) and the
+[spec](../specs/play-in-editor.md) (3.2, 3.7, 3.8, 3.12, 3.13); the session itself is
+[editor core's](editor-core.md#play-in-editor). Every control runs a command, so the toolbar, the
+keymap and automation share one path.
+
+- **The main toolbar** (`EditorShell.h`, `playToolbarControls`): without a session Play and
+  Simulate; with one Stop, Pause or Resume, Step and Eject or Possess, left to right. Every button
+  has one width, so Stop lands where Play was. Each runs its command without arguments as a user's
+  gesture (`CommandRegistry::invoke`); one whose command can't run now is disabled, so Step is
+  enabled only while paused, and Play and Simulate are disabled while a level opens or an
+  interaction is open. The tooltip names the control with its chord ("Play (Alt+P)"), then the
+  command's description or why it can't run. Icons are Lucide's `play`, `monitor-play`, `square`,
+  `pause`, `step-forward`, `eject` and `gamepad-2`. The toolbar is drawn while the mouse is captured
+  too; it can't be clicked then.
+- **The play viewport** draws the game world (`EditorSession::drawnWorld`), as game view while
+  possessed; the other viewports keep drawing the editor world, and since Keep Simulation Changes
+  moves the editor world's counters, they render what it kept at once. Every viewport tints the
+  active selection. Over the play viewport's image, also in game view, it draws a 2-point border and
+  the word "Playing", "Simulating" or "Paused" in `playActive`, `playSimulate` or `playPaused`, and
+  below it, while possessed with the mouse free, "Click to control the game · Shift+F1 frees the
+  mouse" (`kPlayCaptureHint`). `ViewportPanel::drawnPlayOverlay` tells tests what it drew.
+- **The status bar** shows a chip with the same word and colour and the game's elapsed time
+  (`PlaySession::elapsedSeconds`, so `editor_ui` needs no `gameplay` dependency) as `m:ss.t`
+  (`formatPlayTime`, clamped to `kMaxPlayTimeSeconds`) after the level's name; nothing without a
+  session. The indicator functions are in `PlayIndicators.h`, which the Viewport panel shares.
+- **The selected viewport** (ADR-0053 decision 5): `EditorSession::startPlay` plays in
+  `ith.viewport.1` when the Viewport panel is registered and the selected instance is not open in
+  the current layout, so closing a viewport and playing in the same frame plays in viewport 1; the
+  selection itself stays. When a session's viewport panel is closed, the shell opens it, once per
+  session (closing it during the session keeps it closed).
+- **The Outliner** lists the game world under "Game world · changes are lost on Stop"
+  (`kOutlinerPlayNote`). Rows select into the play selection, but don't rename, drag or drop (the
+  empty space takes no drop either), and the Enabled check boxes are disabled. Entities spawned
+  during play are greyed "Spawned <n>" rows that a click doesn't select
+  (`OutlinerPanel::spawnedRows`); their rows are keyed by the tree's keys, so a spawned parent
+  expands and collapses. An arrow's toggle is applied after the rows are drawn, since it changes
+  them. The context menu offers Keep Simulation Changes instead of Add Shape.
+- **Details** shows the play selection under "Game world · changes are lost on Stop. Keep
+  Simulation Changes keeps them." (`kDetailsPlayNote`). Values stay editable (a drag previews and Esc
+  cancels it, recording nothing); the name, the Enabled check box, Add and Remove are disabled. A
+  drag that Play or Stop cut off (the model drops its edit with the world) changes nothing until
+  its release, so its rest never writes into the other world.
+- **Keep Simulation Changes** (`kKeepSimulationChanges` in `PlaySession.h`) is the Edit menu's last
+  entry and in the Outliner's context menu. `registerKeepSimulationChanges(session, shell)` returns a
+  `KeepChangesPrompt`; while it lives, the command's prompt runs it on the play selection and shows
+  the result (`keptChangesNotice`: "Kept 2 components of 1 entity, 1 ignored") in the status bar and
+  the Output Log (category `Play`), each skipped and ignored entry and each warning as a warning; K
+  goes the same way, as the keymap invokes commands. Destroying it removes the prompt.
+- **Input**: the UI's consumer yields key presses and text to the game while the mouse is captured
+  (releases still reach ImGui, so nothing stays held) and reports Escape's users every frame
+  ([Input routing](#input-routing)).
+
+**As built** (recorded in ADR-0054, Play In Editor as built, to be written): the notice is the Keep
+command's prompt, so K, the menu and the Outliner show it alike, and `runMenuCommand` keeps a result
+a prompt reported; `startPlay` chooses `ith.viewport.1` when the selected viewport's panel is
+closed, and the shell only opens the play viewport's panel; the play viewport's elapsed time comes
+from `PlaySession::elapsedSeconds`; after an automation script the editor caps its extra frames at
+30 only while a play session the script left running keeps it busy; the toolbar is left-aligned
+with buttons of one width; the capture hint's text is fixed, so it doesn't follow a rebound
+Shift + F1.
+
 ## Tests of the panels
 
 `tests/editor_ui/PanelTests.cpp` draws the Outliner and Details in fixed windows on the null
@@ -702,6 +803,32 @@ keymap's consumer:
   Select None; typed degrees set a rotation, and a typed value sets every selected entity;
 - a drag whose edit is refused while playing changes nothing and logs one warning;
 - one drag edits two selected entities whose values differed.
+
+`tests/editor_ui/PlayInEditorUiTests.cpp` covers Play In Editor's UI on the null device, with the
+spec's requirement numbers: the toolbar's controls in each of the four states with Step enabled
+only while paused, their chords in the tooltips and Play and Simulate disabled during an
+interaction (5); each button clicked through the UI running its command, Stop where Play was (5);
+the status bar's chip and time in every state and nothing after Stop, and the indicators' words,
+colours and the time format, clamped and rounded (43); the play viewport's border, label and capture hint per state,
+captured or not, in game view, none on another viewport or after Stop, and no gizmo while playing
+(43, 33); the play viewport drawing the game world (a shape a game system spawned) while another
+viewport draws the level, and a session in viewport 2 leaving viewport 1 on the level; renders
+after a tick (the play viewport only) and after a play selection change (only the editor-world
+viewport while possessed, which draws as game view); Keep Simulation Changes re-rendering the
+editor-world viewport at once and not the play viewport (37); a pick copied before Stop or before
+Play dropped, and one within a session applied to the play selection; Play with the selected
+viewport's panel closed, also in the same frame as the close, playing in `ith.viewport.1`, which
+the shell opens once per session; while captured, a key and its text
+reaching neither ImGui nor a text field left active, E and Ctrl + Z reaching the game and running
+no command, and Escape stopping even with that field active (23); with the mouse free, Escape
+closing a popup and leaving a text field before it stops play (25); Keep Simulation Changes' notice
+from K and from the Edit menu's path (42a) and its wording; and the Outliner and Details while
+playing: their notes, a spawned row that a click doesn't select, rows selecting into the play
+selection only, the disabled Enabled check box, no rename on a double click, Keep Simulation
+Changes in place of Add Shape in the context menu, no warning logged, and the notes gone after
+Stop (28); a Details drag cut off by Stop writing nothing into the level, and the next drag
+recording as usual; a spawned parent with a spawned child expanding and collapsing; and a modifier
+released while captured released in ImGui too.
 
 `tests/editor_ui/ContentBrowserPanelTests.cpp` draws the Content Browser in a fixed window over a
 temporary project with an asset database, with the engine keymap's consumer under the UI: its
@@ -759,11 +886,22 @@ open-file dialog's results of its window go to `EditorUi::handleEvent`. Where th
 native handle (SDL's `offscreen` driver) it draws into an offscreen texture; where no GPU device
 can be created it renders on the null device. Closing the window quits after a running save has
 finished. With unsaved changes the first close is refused with a message in the status bar, and a
-second close discards them, until the Save / Don't Save / Cancel dialog exists.
+second close discards them, until the Save / Don't Save / Cancel dialog exists. A running play
+session is stopped first, at every close request and at exit, and the `Input` is unbound from the
+session before it goes.
+
+Play In Editor in the loop ([Play In Editor](#play-in-editor), ADR-0053 decisions 8 and 19): the
+Play In Editor consumer is added after the UI's, on top, and the spectator on the `Game` layer;
+`EditorSession::setPlayInput` binds the window, so Play captures the mouse on a click into the play
+viewport. After input routing and the spectator's `update`, a running, unpaused session ticks once
+with `Input::frameTimeNs()`, before the UI frame, and asks for a frame; a minimized window (no
+pixels) calls no tick. The keymap's warnings, `editor.keymap.unknown_command` included, are printed:
+every bound command exists now.
 
 `--automation <script>` runs an `ith.automation_script` ([editor core](editor-core.md#automation))
-once the shell has drawn its first frames, draws a few frames more, and exits 0 when the script
-passed and 1 when it failed.
+once the shell has drawn its first frames, draws a few frames more (until it is idle; while a play
+session the script left running keeps it drawing, 30 at most), and exits 0 when the script passed
+and 1 when it failed.
 
 ## Tests
 
@@ -794,16 +932,20 @@ passed and 1 when it failed.
   selection, the hovered arrow highlighted without a scene render, no highlight under a floating
   window, and a drag through the UI highlighted while held, re-rendering the scene, as one
   "Translate" undo entry; no highlight during an orbit over a handle or after Esc while the dead
-  drag is held, and a pick copied before a drag began dropped without changing the selection).
+  drag is held, and a pick copied before a drag began dropped without changing the selection); and
+  Play In Editor's UI (`PlayInEditorUiTests.cpp`, see [Tests of the panels](#tests-of-the-panels)).
 - `editor_automation_null` and `editor_automation_gpu` (label `sample`, the second also `gpu`):
   `ironthorn_editor` on SDL's offscreen driver runs `tests/editor/open_edit_save_reopen.json` in a
   fresh project - create, rename, attach, undo, redo, save, new level, open, query - on the null
   device and on the software GPU (WARP; lavapipe on Linux, else the null device), and exits 0; the
-  `_layouts`, `_viewport` and `_content` runs then play `layouts.json`, `viewport.json` and
-  `content_browser.json` of `tests/editor_core/scripts` in the same project.
+  `_layouts`, `_viewport`, `_content` and `_play` runs then play `layouts.json`, `viewport.json`,
+  `content_browser.json` and `play_in_editor.json` of `tests/editor_core/scripts` in the same
+  project; the last one leaves a Simulate session running, so the editor ticks it for 30 frames,
+  drawing the toolbar, the chip and the play viewport, and stops it at exit.
   Never on a desktop. Not in Release, where the editor isn't built.
 - `editor_ui_gpu` (label `gpu`, built with the shader compiler): a golden screenshot of the
-  shell in the Default layout (menu bar; the Outliner above Details on the right and the Output Log
+  shell in the Default layout (menu bar; the main toolbar with Play and Simulate; the Outliner
+  above Details on the right and the Output Log
   under the empty central area, all of an untitled level; the status bar with its Content Drawer
   button), 1280 x 720 at display scale 1, with a fixed time step and no caret blink, on WARP
   (`golden/shell_d3d12.ppm`) and on lavapipe (`golden/shell_vulkan.ppm`), the UI shader compiled
@@ -827,13 +969,18 @@ passed and 1 when it failed.
   cube and clicks empty space: the selection must be the cube, both, the sphere, then nothing. The
   id target is never shown, so it changes no golden image. A fourth golden image shows the default
   scene with the cube selected and the translate gizmo over it
-  (`golden/viewport_gizmo_<backend>.ppm`). The helpers of
+  (`golden/viewport_gizmo_<backend>.ppm`). A play picking test on each backend starts Simulate with
+  the sphere selected, lifts the cube 1.5 m in the game world only, and clicks the lifted cube, the
+  level's cube position (now empty in the game world) and, with Shift, the sphere: the play
+  selection must be the cube, nothing, then the sphere, and the editor selection the sphere
+  throughout (spec requirement 32). The helpers of
   the golden tests are in `GoldenImage.h`.
 - `imgui_confined` and `imgui_confined_refuses_imgui_outside_editor_ui` (label `lint`).
 
 ## Not here yet
 
-- The main toolbar (a later P2 step); asset pickers in Details.
+- Asset pickers in Details; the toolbar's place-actor menu and build controls.
+- The capture hint names Shift + F1 whatever the keymap binds.
 - In the viewport: the rotate and scale gizmos and the gizmo's centre handle, the selection
   outline, and marquee selection; the active viewport for Add Shape is always `ith.viewport.1`.
 - A shader cache for the UI and viewport shaders (with the shader cache of ADR-0011 rule 8).

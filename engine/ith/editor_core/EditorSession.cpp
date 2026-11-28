@@ -5,6 +5,7 @@
 #include "ith/assets/AssetId.h"
 #include "ith/editor_core/CommandArgs.h"
 #include "ith/editor_core/ContentPaths.h"
+#include "ith/editor_core/EditorLayout.h"
 #include "ith/file_system/FileSystem.h"
 #include "ith/file_system/Path.h"
 #include "ith/foundation/Assert.h"
@@ -137,7 +138,13 @@ Expected<void> EditorSession::startPlay(PlayMode mode, bool paused) {
     if (Expected<void> allowed = canStartPlay(); !allowed) {
         return allowed;
     }
-    const std::size_t viewport = m_viewports.selected();
+    // The selected viewport, unless the Viewport panel is registered and that instance is closed:
+    // then ith.viewport.1, which the UI opens (ADR-0053 decision 5).
+    std::size_t viewport = m_viewports.selected();
+    if (viewport != 0 && m_panels.find(kViewportPanel) != nullptr &&
+        !isPanelOpen(m_layouts.current(), Viewports::instanceId(viewport))) {
+        viewport = 0;
+    }
     Expected<std::unique_ptr<PlaySession>> started =
         PlaySession::start(m_document.world(), m_document.selection(), m_options.gameSystems, mode, paused,
                            m_playSessions + 1, viewport, m_viewports.at(viewport).camera);

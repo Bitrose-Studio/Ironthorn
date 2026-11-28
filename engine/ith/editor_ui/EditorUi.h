@@ -61,6 +61,7 @@ class UiRenderer;
 class ContentBrowserModel;
 class ContentBrowserPanel;
 class ViewportConsumer;
+class PlayInputConsumer;
 
 // What the UI needs from the window it runs in: the clipboard, the IME's place, the cursor
 // (ADR-0029 rule 6) and the open-file dialog (ADR-0049 rule 26). WindowUiHost implements it over
@@ -171,6 +172,11 @@ struct EditorUiDesc {
     // open-file dialog's results (ADR-0049 rule 26). Null: those events are ignored. Must outlive
     // the EditorUi.
     ContentBrowserPanel* contentBrowser = nullptr;
+    // The window's Play In Editor consumer (ADR-0053 decision 19), which the application adds to the
+    // stack after the UI, on top. endFrame() reports to it, every frame, whether a text field is
+    // active and whether a popup is open (PlayInputConsumer::reportUi), so Escape stops play only
+    // when nothing in the UI uses it. Null: no report. Must outlive the EditorUi.
+    PlayInputConsumer* playInput = nullptr;
     ThemeTokens theme = defaultDarkTheme();
     float displayScale = 1.0f;
     // Off draws the text cursor without blinking, for reproducible images.
@@ -245,7 +251,8 @@ public:
     // (asserted). Precondition (asserted): no frame is open.
     void newFrame(const UiFrameInput& input);
 
-    // Ends the UI frame and turns it into draw data, and opens the graph-import phase of
+    // Ends the UI frame and turns it into draw data, reports the text field and popup state to the
+    // Play In Editor consumer (EditorUiDesc::playInput), and opens the graph-import phase of
     // importUserTexture(). Main thread (asserted). Precondition (asserted): a frame is open.
     void endFrame();
 
@@ -357,6 +364,7 @@ private:
     std::unique_ptr<UiPlatformBackend> m_platform;
     std::unique_ptr<UiRenderer> m_renderer;
     ContentBrowserPanel* m_contentBrowser = nullptr;
+    PlayInputConsumer* m_playInput = nullptr;
     WindowId m_window = kNoWindow;
     ThemeTokens m_theme;
     float m_displayScale = 1.0f;

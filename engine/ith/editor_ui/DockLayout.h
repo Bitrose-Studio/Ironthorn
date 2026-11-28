@@ -8,7 +8,7 @@
 //   session.layouts().restore();
 //   while (running) {
 //       ui.newFrame(...);
-//       dock.draw(statusBarHeight);          // the dock space and every open panel
+//       dock.draw(statusBarHeight, toolbarHeight); // the dock space and every open panel
 //       ui.endFrame();
 //   }
 //   dock.readBack();                         // at exit: what the user arranged, into the session file
@@ -51,9 +51,9 @@ public:
     DockLayout& operator=(DockLayout&&) = delete;
 
     // Draws the dock space over the main window's work area (below the main menu bar), leaving
-    // `bottomReserved` pixels free at the bottom for the status bar, and every open panel. Inside a
-    // UI frame.
-    void draw(float bottomReserved);
+    // `bottomReserved` window units free at the bottom for the status bar and `topReserved` at the
+    // top for the main toolbar, and every open panel. Inside a UI frame.
+    void draw(float bottomReserved, float topReserved = 0.0f);
 
     // Reads ImGui's dock tree into the layout session now. Does nothing before the first draw.
     void readBack();

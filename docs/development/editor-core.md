@@ -274,8 +274,10 @@ playKeys.reportUi(textFieldActive, popupOpen); // at the end of the UI's frame
 `PlayInput.h`, ADR-0053 decisions 5 and 16 to 22.
 
 - **The selected viewport** (`Viewports::selected`): the viewport the last mouse press on a viewport
-  image went to, `ith.viewport.1` at first. A session plays there (`PlaySession::viewport`);
-  `ith.query.play` and the Play and Simulate results name it. It is session state, not saved.
+  image went to, `ith.viewport.1` at first. A session plays there (`PlaySession::viewport`), except
+  when the Viewport panel is registered and that instance is not open in the current layout: then
+  in `ith.viewport.1`, which the UI opens. `ith.query.play` and the Play and Simulate results name
+  it. It is session state, not saved.
 - **The play camera** is the play viewport's own camera. The session keeps its pose from the start
   (`PlaySession::savedCamera`) and Stop puts it back; `saveViewports` during a session writes that
   pose, so `Viewports.json` never holds a session pose. Simulate and an ejected session fly it with
@@ -318,18 +320,13 @@ playKeys.reportUi(textFieldActive, popupOpen); // at the end of the UI's frame
   ids the active world doesn't have change nothing. Focus frames the active selection in the world
   its viewport draws. The gizmo stays hidden while playing.
 
-Not here yet (slice 5 of ADR-0053), the UI and the application:
+The UI and the application side (the toolbar, the indicators, the play viewport drawing the game
+world, the Escape report, Keep Simulation Changes' menu entries and notice, and the editor's tick,
+consumer order and Quit) are in the [editor UI guide](editor-ui.md#play-in-editor).
 
-- the toolbar, the play state indicators and the Escape report (`PlayInputConsumer::reportUi`);
-- the Outliner's and the Edit menu's Keep Simulation Changes entries;
-- the play viewport drawing `drawnWorld(index)` with the active selection, its redraw key built on
-  `active().changes` and the active world's `identity`;
-- transform propagation for the game world before the first viewport that draws it;
-- the Viewport panel dropping its in-flight instance picks when the play identity changes;
-- the ImGui consumer neither consuming nor forwarding keys while the mouse is captured;
-- opening `ith.viewport.1` when the selected viewport's panel is closed;
-- in `editor/Main.cpp`: `setPlayInput` (and unbinding at exit), the consumer order, the spectator's
-  `update`, the tick and the idle rule, and Quit stopping the session.
+Not here yet: the lifecycle events `WorldStarted` and `WorldEnding` (requirement 36), which wait
+for ECS events (ADR-0053 decision 11), and a player with a view target in place of the spectator,
+which comes with the gameplay framework.
 
 ## Editor camera
 

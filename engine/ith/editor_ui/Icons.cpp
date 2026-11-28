@@ -8,8 +8,14 @@
 namespace ith {
 namespace {
 
-// The icons of the built-in commands in the File and Edit menus.
-constexpr std::array<std::pair<std::string_view, const Icon*>, 11> kCommandIcons{{
+// The icons of the built-in commands in the File and Edit menus and the main toolbar.
+constexpr std::array<std::pair<std::string_view, const Icon*>, 17> kCommandIcons{{
+    {"ith.play.keep_simulation_changes", &icons::kKeepChanges},
+    {"ith.play.pause", &icons::kPause},
+    {"ith.play.play", &icons::kPlay},
+    {"ith.play.simulate", &icons::kSimulate},
+    {"ith.play.step", &icons::kStep},
+    {"ith.play.stop", &icons::kStop},
     {"ith.edit.delete", &icons::kTrash},
     {"ith.edit.duplicate", &icons::kCopy},
     {"ith.edit.redo", &icons::kRedo},

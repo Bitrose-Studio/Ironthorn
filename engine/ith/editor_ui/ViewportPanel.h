@@ -1,7 +1,8 @@
 #pragma once
 
-// ith::ViewportPanel: the Viewport panel (ADR-0042 rules 8 and 13 to 26, ADR-0040 rule 3), drawn
-// from editor_core's Viewports store: a toolbar, and the editor world rendered into a texture the
+// ith::ViewportPanel: the Viewport panel (ADR-0042 rules 8 and 13 to 26, ADR-0040 rule 3, ADR-0053
+// decision 16), drawn from editor_core's Viewports store: a toolbar, and the world the instance
+// draws (the editor world, or the game world in the play viewport) rendered into a texture the
 // panel shows as an image.
 //
 //   auto viewport = ith::ViewportPanel::create(session, ui, device, shaders); // compiled by the app
@@ -42,15 +43,26 @@
 // reversed (greater-equal, ADR-0006 rule 6), and rendering is camera-relative: the camera's position
 // is subtracted on the CPU before the matrices are built (rule 7). Nothing is culled, so a shape
 // with a negative scale (mirrored) draws too, and a Plane shows from both sides. Game view
-// (ViewportState::gameView) draws neither the grid nor the tint. Transforms are propagated for the
-// editor world (propagateTransforms) once per graph, before the draws are listed; that writes only
-// the Transient WorldTransform, so the document, its history and its dirty state are untouched.
+// (ViewportState::gameView) draws neither the grid nor the tint. Transforms are propagated
+// (propagateTransforms) once per graph for each world drawn, before its first draw list; that writes
+// only the Transient WorldTransform, so the document, its history and its dirty state are untouched.
+//
+// Play In Editor (ADR-0053 decisions 16 and 17): while a session runs, its play viewport draws the
+// game world (the world EditorSession::drawnWorld names, through PlaySession::mutableWorld), as game
+// view while possessed whatever its flag says, and the other viewports keep drawing the editor
+// world. Every viewport tints the active selection
+// (EditorSession::active, the play selection while playing). The play viewport shows its state over
+// the image (drawnPlayOverlay, spec 3.13): a 2-point border in the theme's playActive (Playing),
+// playSimulate (Simulating) or playPaused (Paused), the state's word in the top-left corner and,
+// while possessed with the mouse free, kPlayCaptureHint below it.
 //
 // The scene re-renders only on change (ADR-0042 rule 16): when the camera's position, yaw, pitch or
-// field of view, the document's entities, values or open level (EditorChanges), the selection
-// (except in game view, which doesn't show it), the target's size or the game-view flag differ from
-// what the instance last rendered. Otherwise addRenderPasses() adds nothing for it and the image
-// shows the last render.
+// field of view, the drawn world's entities, values or open level (its EditorChanges), the active
+// world's selection (except in game view, which doesn't show it) or identity (Play and Stop), the
+// target's size or the game-view flag differ from what the instance last rendered. Otherwise
+// addRenderPasses() adds nothing for it and the image shows the last render. A ticking session moves
+// the game world's values every tick, so the play viewport renders every frame while it runs; Keep
+// Simulation Changes moves the editor world's, so the other viewports render it at once.
 //
 // Input (rule 8): every frame a drawn instance reports its image rectangle in window pixels (ImGui
 // coordinates times the framebuffer scale) and whether the image is hovered with nothing on top of
@@ -74,7 +86,9 @@
 // before the scene passes: the same frame redraws the tint, and the Outliner and Details, already
 // drawn, show the selection a frame later. The selection so changes exactly kFramesInFlight frames
 // after the click; while a pick waits, picking() is true and the editor keeps drawing frames. A
-// click on an instance without a rendered target is dropped. A refused selection is logged as a
+// click on an instance without a rendered target is dropped, and so is a pick whose read comes after
+// Play or Stop changed the active world (its identity is kept with the pick): its texel names an
+// entity of a world no longer drawn there. A refused selection is logged as a
 // warning in the "Viewport" category.
 //
 // The translate gizmo (ADR-0042 rules 24 to 26): when the instance shows one (viewportGizmo(),
@@ -118,6 +132,7 @@ namespace ith {
 
 class EditorSession;
 class PanelRegistry;
+class World;
 
 // The colour target format of every viewport.
 inline constexpr rhi::Format kViewportColorFormat = rhi::Format::R8G8B8A8Srgb;
@@ -125,6 +140,20 @@ inline constexpr rhi::Format kViewportColorFormat = rhi::Format::R8G8B8A8Srgb;
 // The id target format of every viewport (ADR-0042 rule 21): R = entity slot index + 1, G = its
 // generation, 0 for no entity.
 inline constexpr rhi::Format kViewportIdFormat = rhi::Format::R32G32Uint;
+
+// The hint the play viewport shows while a session is possessed and the mouse is free
+// (docs/specs/play-in-editor.md 3.7 rule 1).
+inline constexpr std::string_view kPlayCaptureHint = "Click to control the game \xC2\xB7 Shift+F1 frees the mouse";
+
+// What draw() drew over the play viewport's image (spec 3.13).
+struct ViewportPlayOverlay {
+    // The 2-point border's and the label's colour: the theme's playActive, playSimulate or playPaused.
+    ThemeColor border;
+    // "Playing", "Simulating" or "Paused", in the image's top-left corner.
+    std::string_view label;
+    // kPlayCaptureHint below the label: possessed, the mouse not captured.
+    bool captureHint = false;
+};
 
 // The compiled stages of viewportShapesShaderSource() and viewportGridShaderSource()
 // (ViewportShaders.h), in the device's bytecode format; read during ViewportPanel::create() only.
@@ -201,6 +230,10 @@ public:
     // none was), or std::nullopt when it drew no gizmo.
     [[nodiscard]] std::optional<GizmoHandle> drawnGizmo(std::string_view instance) const;
 
+    // The play overlay `instance` drew in its last draw(), or std::nullopt when it drew none (it is
+    // not the play viewport, or no session runs).
+    [[nodiscard]] std::optional<ViewportPlayOverlay> drawnPlayOverlay(std::string_view instance) const;
+
     // How many times addRenderPasses() added scene passes, over every instance, since creation.
     [[nodiscard]] std::uint64_t renders() const noexcept { return m_renders; }
 
@@ -224,9 +257,17 @@ private:
     void release(Instance& instance);
     // Imports the instance's id target into `graph`.
     static rg::Texture importIds(rg::RenderGraph& graph, Instance& instance);
+
+    // What an instance's scene shows: the world it draws and whether it draws as game view.
+    struct SceneView {
+        World* world = nullptr;
+        bool gameView = false;
+    };
+
     // Adds the instance's passes and returns its id target's import; null when its colour target
     // can't be imported.
-    rg::Texture addScenePasses(rg::RenderGraph& graph, Instance& instance, const ViewportState& state, rg::Buffer mesh);
+    rg::Texture addScenePasses(rg::RenderGraph& graph, Instance& instance, const ViewportState& state,
+                               const SceneView& scene, rg::Buffer mesh);
     // Applies every pick whose copy the GPU has finished by device frame `open`.
     void readPicks(std::uint64_t open);
 

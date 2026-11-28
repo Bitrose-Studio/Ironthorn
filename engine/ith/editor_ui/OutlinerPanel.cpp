@@ -5,6 +5,7 @@
 #include "ith/editor_core/EditorCamera.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/PanelRegistry.h"
+#include "ith/editor_core/PlaySession.h"
 #include "ith/editor_core/Viewports.h"
 #include "ith/editor_ui/Icons.h"
 #include "ith/foundation/Log.h"
@@ -87,7 +88,11 @@ std::optional<UiRect> OutlinerPanel::rowRect(const Uuid& id) const {
 void OutlinerPanel::draw() {
     m_model.update();
     m_rows.clear();
+    m_spawnedRows.clear();
     m_empty.reset();
+    if (m_session->play() != nullptr) {
+        ImGui::TextDisabled("%.*s", static_cast<int>(kOutlinerPlayNote.size()), kOutlinerPlayNote.data());
+    }
 
     std::array<char, 256> search{};
     m_search.copy(search.data(), search.size() - 1);
@@ -117,6 +122,11 @@ void OutlinerPanel::draw() {
             }
             ImGui::EndTable();
         }
+        // An arrow toggled while the clipper walked the rows changes them only now.
+        if (m_toggled.has_value()) {
+            m_model.tree().setExpanded(m_toggled->first, m_toggled->second);
+            m_toggled.reset();
+        }
         // The empty space below the rows: a click clears the selection, a drop makes the last roots.
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         ImGui::InvisibleButton("##empty", ImVec2(std::max(avail.x, 1.0f), std::max(avail.y, ImGui::GetFrameHeight())));
@@ -126,7 +136,7 @@ void OutlinerPanel::draw() {
                 ITH_LOG_WARNING(Outliner, "{}", cleared.error().message);
             }
         }
-        if (ImGui::BeginDragDropTarget()) {
+        if (m_session->play() == nullptr && ImGui::BeginDragDropTarget()) {
             if (m_model.canDrop(m_dragged, std::nullopt, DropZone::End)) {
                 const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kRowsPayload);
                 if (payload != nullptr && payload->IsDelivery()) {
@@ -142,6 +152,24 @@ void OutlinerPanel::draw() {
 
 void OutlinerPanel::drawContextMenu() {
     if (!ImGui::BeginPopupContextWindow("##outliner_context")) {
+        return;
+    }
+    // While playing the structure is read-only; values of the game world can be kept (spec 3.12).
+    if (m_session->play() != nullptr) {
+        const Expected<void> enabled = m_session->commands().canExecute(*m_session, kKeepSimulationChanges);
+        const std::string label = iconText(icons::kKeepChanges) + "  Keep Simulation Changes";
+        if (ImGui::MenuItem(label.c_str(), nullptr, false, enabled.hasValue())) {
+            // A user's gesture: the shell's prompt, when registered, shows the result.
+            if (const Expected<serialization::Value> kept =
+                    m_session->commands().invoke(*m_session, kKeepSimulationChanges);
+                !kept) {
+                ITH_LOG_WARNING(Outliner, "{}", kept.error().message);
+            }
+        }
+        if (!enabled) {
+            ImGui::SetItemTooltip("%s", enabled.error().message.c_str());
+        }
+        ImGui::EndPopup();
         return;
     }
     if (ImGui::BeginMenu("Add Shape")) {
@@ -169,18 +197,24 @@ void OutlinerPanel::drawRow(std::size_t rowIndex) {
     const OutlinerEntry entry = m_model.entries()[row.item];
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    const std::string id = entry.id.toString();
-    ImGui::PushID(id.c_str());
-    const bool dim = entry.disabledInHierarchy || !row.matches;
+    // The row's tree key: stable across rebuilds and unique, also for spawned entities, which share
+    // the nil id.
+    ImGui::PushID(std::to_string(m_model.tree().items()[row.item].key).c_str());
+    // Spawned entities are greyed: they have no stable id and can't be selected (spec 3.8).
+    const bool dim = entry.disabledInHierarchy || !row.matches || entry.spawned;
     if (dim) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     }
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + static_cast<float>(row.depth) * ImGui::GetStyle().IndentSpacing);
+    // While playing, rows select but neither rename nor move: the structure is read-only.
+    const bool playing = m_session->play() != nullptr;
     if (m_model.renaming() == entry.id) {
         drawRename(entry);
     } else {
         drawNode(row, entry);
-        dragAndDrop(entry);
+        if (!playing) {
+            dragAndDrop(entry);
+        }
     }
     if (dim) {
         ImGui::PopStyleColor();
@@ -188,15 +222,19 @@ void OutlinerPanel::drawRow(std::size_t rowIndex) {
 
     ImGui::TableSetColumnIndex(1);
     bool enabled = !entry.disabled;
+    // Adding or removing Disabled is structural, refused while playing (ADR-0053 decision 13).
+    ImGui::BeginDisabled(playing || entry.spawned);
     if (ImGui::Checkbox("##enabled", &enabled)) {
         report(m_model.setEnabled(entry.id, enabled));
     }
-    ImGui::SetItemTooltip("Enabled: a disabled entity and everything below it are skipped by the game");
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("%s", playing ? "Enabled: can't change while playing"
+                                        : "Enabled: a disabled entity and everything below it are skipped by the game");
     ImGui::PopID();
 }
 
 void OutlinerPanel::drawNode(const TreeRow& row, const OutlinerEntry& entry) {
-    const std::uint64_t key = OutlinerModel::keyOf(entry.id);
+    const std::uint64_t key = m_model.tree().items()[row.item].key;
     const bool selected = m_model.tree().isSelected(key);
     // NOLINTBEGIN(bugprone-signed-bitwise): ImGui's flags are int enums
     ImGuiTreeNodeFlags flags =
@@ -212,10 +250,17 @@ void OutlinerPanel::drawNode(const TreeRow& row, const OutlinerEntry& entry) {
         ImGui::SetNextItemOpen(row.expanded);
     }
     const bool open = ImGui::TreeNodeEx("##node", flags, "%s", entry.label.c_str());
-    m_rows[entry.id] = rectOfItem();
+    if (entry.spawned) {
+        m_spawnedRows.push_back(rectOfItem());
+    } else {
+        m_rows[entry.id] = rectOfItem();
+    }
     if (ImGui::IsItemToggledOpen() && m_model.tree().filter().empty()) {
-        m_model.tree().setExpanded(key, open);
-    } else if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        m_toggled = std::pair<std::uint64_t, bool>(key, open); // applied after the rows: it changes them
+    } else if (entry.spawned) {
+        // Not selectable (it has no stable id); expanding it still works.
+    } else if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+               m_session->play() == nullptr) {
         m_focusRename = m_model.beginRename(entry.id);
     } else if (selectsOnClick(selected)) {
         report(m_model.click(entry.id, clickMode()));

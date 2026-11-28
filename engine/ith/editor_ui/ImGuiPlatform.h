@@ -6,9 +6,9 @@
 //
 // It is the UI's input consumer, in the Editor layer of its window's stack, and sees every event
 // that reaches it. It hands key, mouse and text events to ImGui, and consumes
-// - key presses only while ImGui wants text input (a text field is active), so W in a text field
-//   types W and doesn't reach the keymap below; it is then also the window's focused consumer
-//   with acceptsText, which turns the platform's text input on;
+// - key presses only while ImGui wants text input (a text field is active) or a popup is open, so W
+//   in a text field types W and doesn't reach the keymap below; with a text field it is then also
+//   the window's focused consumer with acceptsText, which turns the platform's text input on;
 // - mouse presses, motion and the wheel while ImGui wants the mouse, except over a hovered viewport
 //   image (ViewportState::imageHovered) while no ImGui popup is open: those go on to the viewport
 //   consumer below (ADR-0042 rule 9).
@@ -20,8 +20,12 @@
 // frame, because routing runs before NewFrame; whether a text field is active is known at the end
 // of the frame that activates it (ImGui reports it with the IME data), so the focus and the key
 // routing follow at once. While the mouse is captured (Play In Editor), ImGui is told the mouse is
-// gone. Relative mouse mode is on while the mouse is captured or a viewport flies (ADR-0042 rule
-// 11); when fly ends, the cursor is put back where its press was before relative mode turns off.
+// gone and gets no key press or text, and the UI consumes no key, so the keyboard reaches the game
+// below (ADR-0053 decision 21); releases and modifiers still reach ImGui, and the keys it held when
+// the capture started are released. An open popup keeps its key presses, Escape included, from
+// everything below (decision 19). Relative mouse mode is on while the mouse is captured or a
+// viewport flies (ADR-0042 rule 11); when fly ends, the cursor is put back where its press was before
+// relative mode turns off.
 
 #include "ith/input/Input.h"
 #include "ith/math/Types.h"
@@ -98,6 +102,8 @@ private:
     bool m_focused = true;
     // ImGui was told the mouse is gone: it is captured, or a viewport drag is held.
     bool m_mouseHidden = false;
+    // The mouse was captured at the last newFrame.
+    bool m_captured = false;
     // The relative mouse mode last handed to the host; windows start without it.
     bool m_relativeMouse = false;
     // Where the current fly's press was, in window pixels, to put the cursor back when it ends.

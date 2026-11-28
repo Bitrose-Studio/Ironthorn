@@ -171,10 +171,11 @@ public:
 
     // Starts Play (possessed) or Simulate (ejected) on the editor world as it is in memory, paused
     // when `paused` (ADR-0053 decision 7): canStartPlay, PlaySession::start with
-    // options().gameSystems in the selected viewport (Viewports::selected), saving its camera, then
-    // the document's play flag. Play turns capture on click on for the bound window
-    // (setPlayInput); the mouse is captured only by a click. Fails, changing nothing, with
-    // canStartPlay's errors, the schedule's "ecs.schedule.*" error (logged) and
+    // options().gameSystems in the selected viewport (Viewports::selected; ith.viewport.1 instead
+    // when the "ith.viewport" panel is registered and the selected instance is not open in the
+    // current layout), saving its camera, then the document's play flag. Play turns capture on click
+    // on for the bound window (setPlayInput); the mouse is captured only by a click. Fails, changing
+    // nothing, with canStartPlay's errors, the schedule's "ecs.schedule.*" error (logged) and
     // "editor.play.copy_failed". Precondition (asserted): not called from inside a command run by
     // another command (CommandRegistry::depth at most 1), whose scopes may point at the game world.
     Expected<void> startPlay(PlayMode mode, bool paused = false);

@@ -59,6 +59,12 @@ struct ThemeTokens {
     ThemeColor gizmoAxisY{0x5CCB3E};
     ThemeColor gizmoAxisZ{0x3E7CF0};
     ThemeColor gizmoHovered{0xFFD94A};
+    // Play In Editor (ADR-0053 decision 4, docs/specs/play-in-editor.md 3.13): the play viewport's
+    // border and label and the status bar's chip while running possessed (Playing), running ejected
+    // (Simulating) and paused (Paused).
+    ThemeColor playActive{0x3FB950};
+    ThemeColor playSimulate{0x3DA5E0};
+    ThemeColor playPaused{0xE3A33B};
 
     // The base type size, and the monospace size, in units.
     float fontSize = 14.0f;

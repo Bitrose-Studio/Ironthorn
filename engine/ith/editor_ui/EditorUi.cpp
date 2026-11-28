@@ -1,5 +1,6 @@
 #include "ith/editor_ui/EditorUi.h"
 
+#include "ith/editor_core/PlayInput.h"
 #include "ith/editor_ui/ContentBrowserPanel.h"
 #include "ith/editor_ui/ImGuiPlatform.h"
 #include "ith/editor_ui/ImGuiRenderer.h"
@@ -145,6 +146,7 @@ Expected<std::unique_ptr<EditorUi>> EditorUi::create(const EditorUiDesc& desc) {
     }
     ui->m_renderer = std::move(*renderer);
     ui->m_contentBrowser = desc.contentBrowser;
+    ui->m_playInput = desc.playInput;
     ui->m_window = desc.window;
     ui->m_platform =
         std::make_unique<UiPlatformBackend>(*desc.input, desc.window, desc.host, desc.viewports, desc.content);
@@ -178,6 +180,13 @@ void EditorUi::endFrame() {
     }
     ImGui::Render();
     m_platform->endFrame();
+    // Escape's report for the next frame's events (ADR-0053 decision 19): ImGui has told the
+    // backend about an active text field by now; any popup counts, at any level.
+    if (m_playInput != nullptr) {
+        // NOLINTNEXTLINE(bugprone-signed-bitwise): ImGui's flags are int enums
+        const bool popupOpen = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        m_playInput->reportUi(m_platform->textInput(), popupOpen);
+    }
     m_frameOpen = false;
     m_frameEnded = true;
     m_renderer->beginGraphImports();

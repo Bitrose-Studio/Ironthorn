@@ -10,7 +10,9 @@
 // instead of aliasing into false curves, and the grid must not end on a visible rim. A fourth picks
 // by readback (ADR-0042 rules 21 and 22) at framebuffer scale 2: clicks select the cube, add the
 // sphere, toggle the cube out and clear on empty space. A fifth shows the default scene with the
-// cube selected and the translate gizmo over it (viewport_gizmo_<backend>.ppm, ADR-0042 rule 24).
+// cube selected and the translate gizmo over it (viewport_gizmo_<backend>.ppm, ADR-0042 rule 24). A
+// sixth picks in the play viewport of a Simulate session, where the cube is moved in the game world
+// only (ADR-0053 decision 16): the clicks hit the game world and change the play selection.
 
 #include "ith/ecs/StableId.h"
 #include "ith/ecs/World.h"
@@ -18,6 +20,7 @@
 #include "ith/editor_core/EditorDocument.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/PanelRegistry.h"
+#include "ith/editor_core/PlaySession.h"
 #include "ith/editor_core/Selection.h"
 #include "ith/editor_core/Viewports.h"
 #include "ith/editor_ui/EditorUi.h"
@@ -433,6 +436,70 @@ void pickDefaultScene(rhi::Device& device) {
     CHECK(seen[4].empty());
 }
 
+// Picks in the play viewport (ADR-0053 decision 16, spec requirement 32): with the sphere selected in
+// the level, Simulate starts paused and the cube is lifted 1.5 m in the game world only. The play
+// viewport draws the game world, so a click where the lifted cube shows selects it in the play
+// selection, a click where the level's cube still is hits nothing there and clears it, and Shift on
+// the sphere adds it; the editor selection stays the sphere throughout.
+void pickPlayViewport(rhi::Device& device) {
+    const Shot shot = defaultShot();
+    constexpr std::size_t kStep = 1 + rhi::kFramesInFlight + 1;
+    const std::vector<ImVec2> frames(1 + 4 * kStep, fullWindow(shot));
+    constexpr Vec3 kLifted{-0.8f, 2.0f, 0.0f};
+    std::vector<std::vector<Uuid>> seen;
+    std::optional<Uuid> cubeId;
+    std::optional<Uuid> sphereId;
+    const FrameHook hook = [&](std::size_t frame, EditorSession& session) {
+        ViewportState& state = session.viewports().at(0);
+        if (frame == 0) {
+            cubeId = idOfShape(session, Shape::Cube);
+            sphereId = idOfShape(session, Shape::Sphere);
+            serialization::Value select = serialization::Value::object();
+            serialization::Value entities = serialization::Value::array();
+            entities.elements().push_back(serialization::Value::string(sphereId->toString()));
+            select.set("entities", std::move(entities));
+            REQUIRE(session.execute("ith.selection.set", select).hasValue());
+            serialization::Value paused = serialization::Value::object();
+            paused.set("paused", serialization::Value::boolean(true));
+            REQUIRE(session.execute("ith.play.simulate", paused).hasValue());
+            serialization::Value lift = serialization::Value::object();
+            serialization::Value ids = serialization::Value::array();
+            ids.elements().push_back(serialization::Value::string(cubeId->toString()));
+            lift.set("ids", std::move(ids));
+            lift.set("path", serialization::Value::string("ith::LocalTransform.value.translation"));
+            lift.set("value", vec3(kLifted.x, kLifted.y, kLifted.z));
+            REQUIRE(session.execute("ith.entity.set_property", lift).hasValue());
+            return;
+        }
+        if ((frame - 1) % kStep != 0) {
+            return;
+        }
+        REQUIRE(session.play() != nullptr);
+        seen.push_back(session.play()->selection().entities());
+        CHECK(session.document().selection().entities() == std::vector<Uuid>{*sphereId});
+        switch ((frame - 1) / kStep) {
+            case 0:
+                state.click = ViewportClick{.position = imagePixelOf(state, kLifted), .mode = PickMode::Replace};
+                break;
+            case 1:
+                state.click =
+                    ViewportClick{.position = imagePixelOf(state, {-0.8f, 0.5f, 0.0f}), .mode = PickMode::Replace};
+                break;
+            case 2:
+                state.click = ViewportClick{.position = imagePixelOf(state, {0.9f, 0.5f, 0.4f}), .mode = PickMode::Add};
+                break;
+            default:
+                break;
+        }
+    };
+    static_cast<void>(renderViewport(device, shot, frames, hook));
+    REQUIRE(seen.size() == 4);
+    CHECK(seen[0] == std::vector<Uuid>{*sphereId}); // the play selection starts as the editor's
+    CHECK(seen[1] == std::vector<Uuid>{*cubeId});
+    CHECK(seen[2].empty());
+    CHECK(seen[3] == std::vector<Uuid>{*sphereId});
+}
+
 } // namespace
 
 TEST_SUITE("editor_ui_gpu.viewport") {
@@ -476,6 +543,14 @@ TEST_SUITE("editor_ui_gpu.viewport") {
         }
         pickDefaultScene(*device);
     }
+
+    TEST_CASE("clicks on WARP in the play viewport pick in the game world, into the play selection") {
+        std::optional<rhi::Device> device = softwareDevice(rhi::Backend::D3D12);
+        if (!device) {
+            return;
+        }
+        pickPlayViewport(*device);
+    }
 #endif
 
     TEST_CASE("a cube and a sphere on the grid on lavapipe match their golden image") {
@@ -516,5 +591,13 @@ TEST_SUITE("editor_ui_gpu.viewport") {
             return;
         }
         pickDefaultScene(*device);
+    }
+
+    TEST_CASE("clicks on lavapipe in the play viewport pick in the game world, into the play selection") {
+        std::optional<rhi::Device> device = softwareDevice(rhi::Backend::Vulkan);
+        if (!device || !isLavapipe(*device)) {
+            return;
+        }
+        pickPlayViewport(*device);
     }
 }

@@ -15,19 +15,32 @@
 // Shape submenu (Cube, Sphere, Plane, Cylinder) runs ith.entity.create with addShapeArgs
 // (AddShape.h): the shape 2 m in front of the camera of ith.viewport.1, resting on the ground,
 // selected. Every change runs a command through the model; a refused one is logged.
+//
+// While playing (ADR-0053 decisions 14 and 15, docs/specs/play-in-editor.md 3.8) it lists the game
+// world, under the note kOutlinerPlayNote. Rows still select (the play selection), but the structure
+// is read-only: no rename, no drag and drop, the Enabled check boxes are disabled, and the context
+// menu offers Keep Simulation Changes instead of Add Shape (invoked as a user's gesture, so the
+// shell's prompt shows its result). Entities spawned during play are listed greyed as
+// "Spawned <n>" and can't be selected.
 
 #include "ith/editor_core/OutlinerModel.h"
 #include "ith/editor_ui/EditorUi.h"
 #include "ith/foundation/Uuid.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace ith {
 
 class EditorSession;
+
+// The note at the top of the Outliner while it lists the game world.
+inline constexpr std::string_view kOutlinerPlayNote = "Game world \xC2\xB7 changes are lost on Stop";
 
 class OutlinerPanel {
 public:
@@ -49,6 +62,9 @@ public:
     // Where the last draw put the empty space below the rows, or nullopt.
     [[nodiscard]] std::optional<UiRect> emptyRect() const { return m_empty; }
 
+    // Where the last draw put the rows of entities spawned during play, in row order.
+    [[nodiscard]] const std::vector<UiRect>& spawnedRows() const noexcept { return m_spawnedRows; }
+
 private:
     void drawRow(std::size_t rowIndex);
     void drawContextMenu();
@@ -63,7 +79,10 @@ private:
     std::vector<Uuid> m_dragged;
     // The rename field was just opened and takes keyboard focus.
     bool m_focusRename = false;
+    // The expansion a row's arrow changed in this draw, by tree key, applied once the rows are drawn.
+    std::optional<std::pair<std::uint64_t, bool>> m_toggled;
     std::unordered_map<Uuid, UiRect> m_rows;
+    std::vector<UiRect> m_spawnedRows;
     std::optional<UiRect> m_empty;
 };
 

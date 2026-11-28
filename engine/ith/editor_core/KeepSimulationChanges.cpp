@@ -55,7 +55,7 @@ using detail::idValue;
 using detail::invalidArgs;
 using serialization::Value;
 
-constexpr std::string_view kCommand = "ith.play.keep_simulation_changes";
+constexpr std::string_view kCommand = kKeepSimulationChanges;
 
 // The reasons of `skipped` and `ignored` (docs/specs/play-in-editor.md 3.12).
 constexpr std::string_view kNotFound = "editor.play.not_found";

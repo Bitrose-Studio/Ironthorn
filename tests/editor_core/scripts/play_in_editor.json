@@ -73,7 +73,14 @@
       {"command": "ith.play.simulate", "args": {"paused": true}, "expect": {"possessed": false, "paused": true}},
       {"command": "ith.play.stop"},
       {"command": "ith.edit.undo"},
-      {"command": "ith.query.document", "expect": {"entities": 0}}
+      {"command": "ith.query.document", "expect": {"entities": 0}},
+
+      {"command": "ith.entity.create", "args": {"label": "Ball",
+       "components": {"ith::LocalTransform": {"value": {"translation": {"x": 0, "y": 1, "z": 0}}},
+                      "ith::ShapeRenderer": {"shape": "Sphere"}}}},
+      {"command": "ith.play.simulate",
+       "expect": {"state": "running", "possessed": false, "paused": false, "viewport": "ith.viewport.1"}},
+      {"command": "ith.query.play", "expect": {"state": "running", "paused": false, "entities": 1}}
     ]
   }
 }

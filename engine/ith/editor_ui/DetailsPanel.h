@@ -30,6 +30,10 @@
 // boxes, combo boxes, pickers and text fields set their value with one command. Values that
 // differ between the selected entities show "Multiple Values". A row that isn't its default shows
 // a Reset to Default button. A refused change is logged.
+//
+// While playing (ADR-0053 decision 13, docs/specs/play-in-editor.md 3.8) it shows the play
+// selection in the game world, under the note kDetailsPlayNote. Values stay editable (drags preview
+// and Esc cancels, recording nothing); the name, the Enabled check box, Add and Remove are disabled.
 
 #include "ith/editor_core/DetailsModel.h"
 #include "ith/editor_ui/EditorUi.h"
@@ -45,6 +49,10 @@ namespace ith {
 
 class EditorSession;
 class PanelRegistry;
+
+// The note at the top of Details while it shows the game world.
+inline constexpr std::string_view kDetailsPlayNote =
+    "Game world \xC2\xB7 changes are lost on Stop. Keep Simulation Changes keeps them.";
 
 class DetailsPanel {
 public:
@@ -77,6 +85,7 @@ private:
     EditEvents drawText(const DetailsRow& row, std::string& value, bool mixed);
     EditEvents drawEntity(const DetailsRow& row, Entity& value, bool mixed);
 
+    EditorSession* m_session;
     DetailsModel m_model;
     std::unordered_map<std::string, UiRect> m_values;
     // The text field being edited and its text, kept while it is active.
@@ -85,6 +94,9 @@ private:
     // The field whose press couldn't begin an edit (while playing, for one), until it is released:
     // its drag changes nothing.
     std::string m_refusedKey;
+    // The row of the drag the model is editing, while it lasts: when Play or Stop drops that edit, the
+    // drag becomes refused (m_refusedKey) until ImGui releases it.
+    std::string m_editKey;
     // The rotation being dragged, kept as Euler degrees so the drag doesn't drift.
     std::string m_eulerKey;
     Vec3 m_euler{0.0f};

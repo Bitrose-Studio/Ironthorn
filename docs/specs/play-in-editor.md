@@ -1,7 +1,11 @@
 # Spec: Play In Editor and Simulate
 
-- **Status:** Decided in [ADR-0053](../decisions/0053-play-in-editor-and-simulate.md), not
-  implemented yet. The owner decided every open question and conflict on 2026-11-28 (section 6);
+- **Status:** Implemented in ADR-0053's five slices; the
+  [editor core](../development/editor-core.md#play-in-editor) and
+  [editor UI](../development/editor-ui.md#play-in-editor) guides describe the code. Requirement 36
+  waits for ECS events (ADR-0053 decision 11). Decided in
+  [ADR-0053](../decisions/0053-play-in-editor-and-simulate.md): the owner decided every open
+  question and conflict on 2026-11-28 (section 6);
   ADR-0053 records them, settles ADR-0042 rule 1 and makes the amendments they need (ADR-0013
   rule 10, ADR-0014, ADR-0016 rule 15, ADR-0017 rule 10, ADR-0029 rule 7, ADR-0037 rules 1, 4, 10
   and 17, ADR-0042 rules 1 and 3). Where this spec and ADR-0053 differ, the ADR wins; the spec has
@@ -150,8 +154,8 @@ Transitions, each a command (3.14):
 ### 3.2 The main toolbar
 
 The main toolbar is a strip under the main menu bar, over the whole width of the main window
-(ADR-0008 rule 2). The editor has none yet (the guide's "Not here yet"); this step adds it with
-the play controls only. The place-actor menu and build come later.
+(ADR-0008 rule 2). This step added it with the play controls only. The place-actor menu and build
+come later.
 
 | Control | stopped | running, possessed | running, ejected | paused |
 |---|---|---|---|---|

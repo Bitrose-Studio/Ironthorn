@@ -942,6 +942,7 @@ if(TARGET ith_editor_ui)
             editor_ui/EditorUiTests.cpp
             editor_ui/OutputLogTests.cpp
             editor_ui/PanelTests.cpp
+            editor_ui/PlayInEditorUiTests.cpp
             editor_ui/RendererTests.cpp
             editor_ui/ShellTests.cpp
             editor_ui/ViewportPanelTests.cpp

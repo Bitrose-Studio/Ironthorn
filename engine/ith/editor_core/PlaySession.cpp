@@ -118,6 +118,11 @@ const Time* PlaySession::time() const {
     return m_world.resource<const Time>();
 }
 
+double PlaySession::elapsedSeconds() const {
+    const Time* current = time();
+    return current != nullptr ? current->elapsed : 0.0;
+}
+
 std::size_t PlaySession::spawnedCount() {
     std::size_t spawned = 0;
     m_world.query<Without<StableId>, IncludeDisabled>().forEach([&spawned](Entity) { ++spawned; });

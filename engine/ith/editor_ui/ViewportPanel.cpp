@@ -12,9 +12,11 @@
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/Gizmo.h"
 #include "ith/editor_core/PanelRegistry.h"
+#include "ith/editor_core/PlaySession.h"
 #include "ith/editor_core/Selection.h"
 #include "ith/editor_core/ViewportGizmo.h"
 #include "ith/editor_core/ViewportPick.h"
+#include "ith/editor_ui/PlayIndicators.h"
 #include "ith/editor_ui/Theme.h"
 #include "ith/editor_ui/ViewportShaders.h"
 #include "ith/foundation/Assert.h"
@@ -152,14 +154,23 @@ struct ViewportRendered {
     float yaw = 0.0f;
     float pitch = 0.0f;
     float fovX = 0.0f;
-    // EditorChanges' structure, values and document counters, summed.
+    // The drawn world's EditorChanges: structure, values and document counters, summed.
     std::uint64_t document = 0;
-    // EditorChanges' selection counter; 0 in game view.
+    // The active world's selection counter; 0 in game view.
     std::uint64_t selection = 0;
+    // The active world's identity (ActiveWorld::identity): Play and Stop change the world the
+    // selection comes from and the play viewport's world, even when every counter happens to match.
+    std::uint64_t identity = 0;
     bool gameView = false;
 
     friend bool operator==(const ViewportRendered&, const ViewportRendered&) = default;
 };
+
+// The play overlay (spec 3.13): the border's width and the labels' padding in logical points, and
+// how opaque the backdrop behind a label is.
+constexpr float kPlayBorderWidth = 2.0f;
+constexpr float kPlayLabelPadding = 6.0f;
+constexpr float kPlayLabelBackdrop = 0.75f;
 
 // The gizmo's strokes, in logical points: the arrows' line width (wider when highlighted), their
 // heads' length and half width, and the plane squares' outline.
@@ -233,23 +244,89 @@ void drawGizmo(ImDrawList& list, const ViewportGizmo& gizmo, GizmoHandle highlig
     }
 }
 
-ViewportRendered renderedKey(const ViewportState& state, const EditorChanges& changes) {
+// The play session drawn by viewport `index`, or null when it draws the editor world (ADR-0053
+// decision 16).
+PlaySession* playSessionOf(EditorSession& session, std::size_t index) {
+    PlaySession* play = session.play();
+    return play != nullptr && play->viewport() == index ? play : nullptr;
+}
+
+// What viewport `index` draws (ADR-0053 decisions 16 and 17): the game world for the play viewport,
+// as game view while possessed, the editor world otherwise. `slot` is 1 for the game world and 0 for
+// the editor world, to propagate each once per graph.
+struct DrawnScene {
+    World* world = nullptr;
+    const EditorChanges* changes = nullptr;
+    bool gameView = false;
+    std::size_t slot = 0;
+};
+
+DrawnScene drawnScene(EditorSession& session, std::size_t index, const ViewportState& state) {
+    if (PlaySession* play = playSessionOf(session, index); play != nullptr) {
+        return {.world = &play->mutableWorld(),
+                .changes = &play->changes(),
+                .gameView = state.gameView || play->possessed(),
+                .slot = 1};
+    }
+    return {.world = &session.document().mutableWorld(),
+            .changes = &session.document().changes(),
+            .gameView = state.gameView,
+            .slot = 0};
+}
+
+// The play viewport's indicator over its image (spec 3.13): a border in the state's colour, 2 points
+// wide, the state's word in the top-left corner and, below it, the capture hint. `origin` and `size`
+// are the image in ImGui coordinates; `points` converts logical points to them.
+void drawPlayOverlay(ImDrawList& list, const ViewportPlayOverlay& overlay, ImVec2 origin, ImVec2 size, float points,
+                     const ThemeTokens& theme) {
+    const float border = kPlayBorderWidth * points;
+    const ImU32 color = vertexColor(overlay.border, 1.0f);
+    list.AddRect(ImVec2(origin.x + border * 0.5f, origin.y + border * 0.5f),
+                 ImVec2(origin.x + size.x - border * 0.5f, origin.y + size.y - border * 0.5f), color, 0.0f, border);
+    const float padding = kPlayLabelPadding * points;
+    ImVec2 at(origin.x + border + padding, origin.y + border + padding);
+    const ImU32 backdrop = vertexColor(theme.background, kPlayLabelBackdrop);
+    const auto label = [&](std::string_view text, ImU32 textColor) {
+        const char* begin = text.data();
+        const char* end = text.data() + text.size();
+        const ImVec2 extent = ImGui::CalcTextSize(begin, end);
+        list.AddRectFilled(ImVec2(at.x - padding, at.y - padding * 0.5f),
+                           ImVec2(at.x + extent.x + padding, at.y + extent.y + padding * 0.5f), backdrop);
+        list.AddText(at, textColor, begin, end);
+        at.y += extent.y + padding;
+    };
+    list.PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
+    label(overlay.label, color);
+    if (overlay.captureHint) {
+        label(kPlayCaptureHint, vertexColor(theme.text, 1.0f));
+    }
+    list.PopClipRect();
+}
+
+// `drawn` is the drawn world's counters, `active` the active world, which the tint's selection is of.
+ViewportRendered renderedKey(const ViewportState& state, bool gameView, const EditorChanges& drawn,
+                             const ActiveWorld& active) {
     return {.position = state.camera.position,
             .yaw = state.camera.yaw,
             .pitch = state.camera.pitch,
             .fovX = state.camera.fovX,
-            .document = changes.structure() + changes.values() + changes.document(),
-            .selection = state.gameView ? 0 : changes.selection(),
-            .gameView = state.gameView};
+            .document = drawn.structure() + drawn.values() + drawn.document(),
+            .selection = gameView ? 0 : active.changes.selection(),
+            .identity = active.identity,
+            .gameView = gameView};
 }
 
 } // namespace
 
 struct ViewportPanel::Instance {
-    // A click whose texel is being copied: the device frame that copies it, and how it selects.
+    // A click whose texel is being copied: the device frame that copies it, how it selects, and the
+    // active world's identity when it was copied. A pick read after Play or Stop changed the active
+    // world is dropped: its texel names an entity of a world that is no longer drawn there (world ids
+    // and slots are reused, so the texel alone can't tell).
     struct Pick {
         std::uint64_t frame = 0;
         PickMode mode = PickMode::Replace;
+        std::uint64_t identity = 0;
     };
 
     // "Viewport <n> colour" and "Viewport <n> ids", the targets' debug names.
@@ -268,6 +345,8 @@ struct ViewportPanel::Instance {
     // The highlighted handle of the gizmo the last draw() drew (None: no highlight), or std::nullopt
     // when it drew none.
     std::optional<GizmoHandle> gizmo;
+    // The play overlay the last draw() drew, or std::nullopt when it drew none.
+    std::optional<ViewportPlayOverlay> overlay;
     // Drawn in this frame: draw() sets it, newFrame() releases the target when it is still unset
     // and clears it.
     bool drawn = false;
@@ -529,6 +608,7 @@ void ViewportPanel::draw(std::string_view instanceId) {
     Instance& instance = *m_instances[*index];
     instance.drawn = true;
     instance.gizmo.reset();
+    instance.overlay.reset();
     drawToolbar(instanceId, state);
 
     // The image fills the rest of the window, its target sized in pixels.
@@ -570,13 +650,23 @@ void ViewportPanel::draw(std::string_view instanceId) {
     state.imagePosition = {(origin.x - display.x) * scale.x, (origin.y - display.y) * scale.y};
     state.imageSize = {pixelWidth, pixelHeight};
     state.imageHovered = hovered;
+    const float displayScale = m_ui->displayScale();
+
+    // The play viewport tells the game world from the editor world in every view (spec 3.13).
+    if (const PlaySession* play = playSessionOf(*m_session, *index); play != nullptr) {
+        const PlayIndicator indicator = playIndicator(*m_session);
+        const ViewportPlayOverlay overlay{.border = playIndicatorColor(indicator, m_ui->theme()),
+                                          .label = playIndicatorLabel(indicator),
+                                          .captureHint = play->possessed() && !m_session->mouseCaptured()};
+        drawPlayOverlay(*ImGui::GetWindowDrawList(), overlay, origin, size, displayScale / scale.x, m_ui->theme());
+        instance.overlay = overlay;
+    }
 
     // The translate gizmo over the image, clipped to it (ADR-0042 rule 24): the handle being dragged,
     // or else the one under the pointer, is highlighted, hit-tested as the viewport consumer does.
     if (instance.texture == 0) {
         return;
     }
-    const float displayScale = m_ui->displayScale();
     const std::optional<ViewportGizmo> gizmo = viewportGizmo(*m_session, state, displayScale);
     if (!gizmo.has_value()) {
         return;
@@ -625,8 +715,13 @@ void ViewportPanel::readPicks(std::uint64_t open) {
             continue;
         }
         const PickMode mode = instance.pick->mode;
+        const std::uint64_t identity = instance.pick->identity;
         instance.pick.reset();
-        if (m_session->document().transactions().isOpen() || m_session->active().transactions.isOpen()) {
+        const ActiveWorld active = m_session->active();
+        if (identity != active.identity) {
+            continue; // Play or Stop since the copy: the texel is of a world no longer drawn there
+        }
+        if (m_session->document().transactions().isOpen() || active.transactions.isOpen()) {
             continue; // a drag began since the click (a gizmo, or Details on the game world): it wins
         }
         std::array<std::uint32_t, 2> texel{};
@@ -651,6 +746,9 @@ void ViewportPanel::addRenderPasses(rg::RenderGraph& graph, const rhi::Frame& op
     const std::uint64_t frame = opened.number;
     rg::Buffer mesh;
     rg::Buffer picks;
+    const ActiveWorld active = m_session->active();
+    // Whether this graph propagated the editor world's transforms, and the game world's.
+    std::array<bool, 2> propagated{};
     for (std::size_t index = 0; index < kMaxViewports; ++index) {
         Instance& instance = *m_instances[index];
         ViewportState& state = m_session->viewports().at(index);
@@ -666,14 +764,19 @@ void ViewportPanel::addRenderPasses(rg::RenderGraph& graph, const rhi::Frame& op
             continue;
         }
         rg::Texture ids;
-        const ViewportRendered now = renderedKey(state, m_session->document().changes());
+        const DrawnScene scene = drawnScene(*m_session, index, state);
+        const ViewportRendered now = renderedKey(state, scene.gameView, *scene.changes, active);
         if (instance.rendered != now) {
+            // Once per graph and world, before its first draw list: world matrices for what changed.
+            // It writes only the Transient WorldTransform, so no history or dirty state moves.
+            if (!propagated[scene.slot]) {
+                propagateTransforms(*scene.world);
+                propagated[scene.slot] = true;
+            }
             if (mesh.isNull()) {
-                // Once per graph, before the first draw list: world matrices for what changed.
-                propagateTransforms(m_session->document().mutableWorld());
                 mesh = graph.importBuffer({.buffer = m_mesh, .desc = m_meshDesc, .state = &m_meshState});
             }
-            ids = addScenePasses(graph, instance, state, mesh);
+            ids = addScenePasses(graph, instance, state, {.world = scene.world, .gameView = scene.gameView}, mesh);
             if (!ids.isNull()) {
                 instance.rendered = now;
                 ++m_renders;
@@ -724,12 +827,12 @@ void ViewportPanel::addRenderPasses(rg::RenderGraph& graph, const rhi::Frame& op
                                                     .region = region});
             },
             rg::PassFlags::NeverCull);
-        instance.pick = Instance::Pick{.frame = frame, .mode = click.mode};
+        instance.pick = Instance::Pick{.frame = frame, .mode = click.mode, .identity = active.identity};
     }
 }
 
 rg::Texture ViewportPanel::addScenePasses(rg::RenderGraph& graph, Instance& instance, const ViewportState& state,
-                                          rg::Buffer mesh) {
+                                          const SceneView& scene, rg::Buffer mesh) {
     const rg::Texture color = m_ui->importUserTexture(graph, instance.texture);
     if (color.isNull()) {
         return {};
@@ -750,10 +853,11 @@ rg::Texture ViewportPanel::addScenePasses(rg::RenderGraph& graph, Instance& inst
     const Mat4 clipFromWorld = projectionMatrix(camera, aspect, kViewportNearPlane) * Mat4(rotation);
 
     std::vector<ShapeDraw> draws;
-    const bool tint = !state.gameView;
+    const bool tint = !scene.gameView;
     const Vec3 tintColor = linearRgb(theme.viewportSelection);
-    const Selection& selection = m_session->document().selection();
-    World& world = m_session->document().mutableWorld();
+    // Every viewport tints the active selection, matched by stable id in the world it draws.
+    const Selection& selection = m_session->active().selection;
+    World& world = *scene.world;
     world.query<const ShapeRenderer, const WorldTransform>().forEach(
         [&](Entity entity, const ShapeRenderer& renderer, const WorldTransform& transform) {
             const auto shape = static_cast<std::size_t>(renderer.shape);
@@ -813,7 +917,7 @@ rg::Texture ViewportPanel::addScenePasses(rg::RenderGraph& graph, Instance& inst
         });
 
     // Game view draws what a game would see: no grid.
-    if (state.gameView) {
+    if (scene.gameView) {
         return ids;
     }
     // The projection's angles (ADR-0046): fovX across the image, the derived vertical angle up it.
@@ -859,6 +963,11 @@ std::optional<rhi::TextureDesc> ViewportPanel::colorTarget(std::string_view inst
 std::optional<GizmoHandle> ViewportPanel::drawnGizmo(std::string_view instance) const {
     const std::optional<std::size_t> index = indexOf(instance);
     return index.has_value() ? m_instances[*index]->gizmo : std::nullopt;
+}
+
+std::optional<ViewportPlayOverlay> ViewportPanel::drawnPlayOverlay(std::string_view instance) const {
+    const std::optional<std::size_t> index = indexOf(instance);
+    return index.has_value() ? m_instances[*index]->overlay : std::nullopt;
 }
 
 std::optional<rhi::TextureDesc> ViewportPanel::idTarget(std::string_view instance) const {

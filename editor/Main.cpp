@@ -1,8 +1,9 @@
-// ironthorn_editor: the Ironthorn editor (ADR-0008, ADR-0029, ADR-0040, ADR-0049). It opens a window
-// with the editor shell - the main menu with the File, Edit and Window commands and their shortcuts,
-// the dock space with the panels (Viewport, Outliner, Details, Content Browser, Output Log) in the
-// last session's layout, the content drawer on Ctrl + Space, and the status bar - over one editor
-// session of a project, whose Content folder is scanned when it opens.
+// ironthorn_editor: the Ironthorn editor (ADR-0008, ADR-0029, ADR-0040, ADR-0049, ADR-0053). It opens
+// a window with the editor shell - the main menu with the File, Edit and Window commands and their
+// shortcuts, the main toolbar with Play In Editor's controls, the dock space with the panels
+// (Viewport, Outliner, Details, Content Browser, Output Log) in the last session's layout, the
+// content drawer on Ctrl + Space, and the status bar - over one editor session of a project, whose
+// Content folder is scanned when it opens. A play session ticks once per frame while it runs.
 //
 //   ironthorn_editor --project <dir>            edits the project in <dir>
 //   ironthorn_editor ... --user-dir <dir>       the user configuration layer (default: the user's
@@ -28,6 +29,8 @@
 #include "ith/editor_core/EditorPreferences.h"
 #include "ith/editor_core/EditorSession.h"
 #include "ith/editor_core/Keymap.h"
+#include "ith/editor_core/PlayInput.h"
+#include "ith/editor_core/PlaySession.h"
 #include "ith/editor_core/ViewportInput.h"
 #include "ith/editor_ui/ContentBrowserPanel.h"
 #include "ith/editor_ui/DetailsPanel.h"
@@ -77,6 +80,7 @@
 
 ITH_DECLARE_REFLECTION_MODULE(ecs)
 ITH_DECLARE_REFLECTION_MODULE(editor_core)
+ITH_DECLARE_REFLECTION_MODULE(gameplay)
 ITH_DECLARE_REFLECTION_MODULE(shapes)
 
 namespace {
@@ -86,6 +90,9 @@ using Clock = std::chrono::steady_clock;
 constexpr ith::rhi::Format kTargetFormat = ith::rhi::Format::B8G8R8A8Srgb;
 // The log records the Output Log keeps.
 constexpr std::size_t kLogHistory = 4096;
+// The most frames the editor draws after an automation script while a play session it left running
+// keeps it from going idle.
+constexpr std::uint64_t kFramesAfterScript = 30;
 
 #ifdef _WIN32
 constexpr std::string_view kPlatformName = "Windows";
@@ -492,6 +499,28 @@ void applyWindowEvent(const ith::Event& event, const ith::Window& window, Render
     }
 }
 
+// Whether the frames after an automation script are drawn, `drawn` frames after it: the editor is
+// idle again, or a play session the script left running has kept it drawing kFramesAfterScript.
+bool afterScriptDrawn(const ith::IdlePolicy& idle, const ith::EditorSession& session, std::uint64_t drawn) {
+    if (idle.pendingFrames() == 0) {
+        return true;
+    }
+    return session.play() != nullptr && drawn >= kFramesAfterScript;
+}
+
+// Ticks a running, unpaused play session once, at the frame's input time, after input and the
+// main-thread jobs and before the UI (ADR-0053 decision 8); a minimized window (no pixels) calls no
+// tick. Returns whether it ticked, so the frame loop keeps drawing.
+bool tickPlaySession(ith::EditorSession& session, const ith::Input& input, const ith::Window& window) {
+    const ith::WindowSize pixels = window.pixelSize();
+    ith::PlaySession* play = session.play();
+    if (play == nullptr || play->paused() || pixels.width <= 0 || pixels.height <= 0) {
+        return false;
+    }
+    play->tick(input.frameTimeNs());
+    return true;
+}
+
 // Readies the viewport consumer for routing the batch `events` of `window`: drags move cameras in
 // window coordinates and the click slop is in logical points, the same on every display scale; and a
 // focus loss in the batch cancels a held gizmo drag and the clicks before Input synthesises the
@@ -533,6 +562,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     ith::TypeRegistry types;
     ith::generated::registerReflection_ecs(types);
     ith::generated::registerReflection_editor_core(types);
+    ith::generated::registerReflection_gameplay(types);
     ith::generated::registerReflection_shapes(types);
     // The project's assets (ADR-0015): the importers, then the database the Content Browser scans.
     ith::ImporterRegistry importers;
@@ -544,10 +574,6 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     const ith::Keymap keymap = ith::Keymap::load(config, session.commands(), warnings);
     warnings.insert(warnings.end(), config.warnings().begin(), config.warnings().end());
     for (const ith::Error& warning : warnings) {
-        // Commands of later editor work (Play In Editor) are bound before they exist.
-        if (warning.code == "editor.keymap.unknown_command") {
-            continue;
-        }
         warn(warning);
     }
 
@@ -567,8 +593,12 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     ith::Input input;
     ith::KeymapConsumer shortcuts(session, keymap);
     ith::ViewportConsumer viewportInput(session);
-    // The keymap consumer first, then the viewports': the UI's consumer, added last, sits above both,
-    // and the viewports above the keymap (ADR-0029 rule 7, ADR-0042 rule 8).
+    // Play In Editor's (ADR-0053 decisions 17 and 19): the spectator in the Game layer, and the Play
+    // In Editor keys on top of the Editor layer, added once the UI's consumer is in.
+    ith::SpectatorConsumer spectator(session);
+    ith::PlayInputConsumer playKeys(session, keymap);
+    // The keymap consumer first, then the viewports': the UI's consumer, added after them, sits above
+    // both, and the viewports above the keymap (ADR-0029 rule 7, ADR-0042 rule 8).
     const ith::ConsumerId shortcutConsumer =
         input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &shortcuts});
     const ith::ConsumerId viewportConsumer =
@@ -590,6 +620,7 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
                                .viewports = &viewportInput,
                                .content = &session.content(),
                                .contentBrowser = &contentBrowser,
+                               .playInput = &playKeys,
                                .displayScale = window.displayScale()});
     if (!created) {
         input.removeConsumer(viewportConsumer);
@@ -609,6 +640,14 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         input.removeConsumer(shortcutConsumer);
         return fail(viewportPanel.error());
     }
+    // Top first: the Play In Editor keys, the UI, the viewports, the keymap; then the game's (ADR-0053
+    // decision 19). Play captures the mouse in this window (ADR-0027 rule 3); unbound at exit, before
+    // the Input goes.
+    const ith::ConsumerId playConsumer =
+        input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Editor, .consumer = &playKeys});
+    const ith::ConsumerId spectatorConsumer =
+        input.addConsumer({.window = window.id(), .layer = ith::ConsumerLayer::Game, .consumer = &spectator});
+    session.setPlayInput(&input, window.id());
 
     // The Output Log shows the log from here on; the dock space restores the last session's layout,
     // or the default one (ADR-0040 rule 16), once the panels are registered.
@@ -633,11 +672,16 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     ith::IdlePolicy idle(
         {.focused = preferences.idleFramesPerSecond, .unfocused = preferences.idleFramesPerSecondUnfocused});
     ith::EditorShellState shell;
+    shell.theme = ui.theme();
+    // K, the Edit menu and the Outliner show what Keep Simulation Changes kept in the status bar.
+    const ith::KeepChangesPrompt keepPrompt = ith::registerKeepSimulationChanges(session, shell);
     StateWatch watch;
     Clock::time_point last = Clock::now();
     std::uint64_t frames = 0;
     int status = 0;
     bool automationDone = options.automation.empty();
+    // The frame the automation script ran in.
+    std::uint64_t scriptFrame = 0;
     bool running = true;
     // A close was refused once because of unsaved changes.
     bool closeWarned = false;
@@ -652,6 +696,8 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         for (const ith::Event& event : events) {
             if (event.type == ith::EventType::QuitRequested ||
                 (event.type == ith::EventType::WindowCloseRequested && event.window == window.id())) {
+                // A running session stops first, then the unsaved-changes rule applies (spec 3.1).
+                session.stopPlay();
                 running = !mayClose(session, shell, closeWarned);
             } else if (event.window == window.id()) {
                 applyWindowEvent(event, window, target, ui, dock);
@@ -662,12 +708,17 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         const Clock::time_point now = Clock::now();
         const float deltaSeconds = secondsBetween(last, now);
         last = now;
-        // A moving viewport camera keeps frames coming, also while no event arrives (a held W).
+        // A moving viewport camera keeps frames coming, also while no event arrives (a held W); so
+        // does the spectator's.
         const bool cameraMoved = viewportInput.update(deltaSeconds);
+        const bool spectatorMoved = spectator.update(deltaSeconds);
+        const bool ticking = tickPlaySession(session, input, window);
 
         const bool changed = watch.changed(session, logHistory);
-        // A queued import runs two frames after it was queued: it never waits on the idle rate.
-        if (!events.empty() || jobsRun > 0 || changed || cameraMoved || contentBrowser.importPending()) {
+        // A queued import runs two frames after it was queued: it never waits on the idle rate. A
+        // ticking session draws every frame; paused, the idle policy applies again.
+        if (!events.empty() || jobsRun > 0 || changed || cameraMoved || spectatorMoved || ticking ||
+            contentBrowser.importPending()) {
             idle.requestFrame();
         }
 
@@ -691,21 +742,28 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
         }
         ++frames;
 
-        // Automation runs once the shell has drawn a few frames, then the editor exits.
+        // Automation runs once the shell has drawn a few frames, then the editor exits once the frames
+        // after the script are drawn: when it is idle again, or, while a play session the script left
+        // running keeps it drawing, after kFramesAfterScript.
         if (!automationDone && frames >= 1 + ith::IdlePolicy::kSettleFrames) {
             if (!runAutomation(session, options.automation)) {
                 status = 1;
             }
             automationDone = true;
+            scriptFrame = frames;
             idle.requestFrame();
-        } else if (!options.automation.empty() && automationDone && idle.pendingFrames() == 0) {
-            running = false; // the frames after the script have been drawn
+        } else if (!options.automation.empty() && automationDone &&
+                   afterScriptDrawn(idle, session, frames - scriptFrame)) {
+            running = false;
         }
         if (options.frameLimit != 0 && frames >= options.frameLimit) {
             running = false;
         }
         ITH_PROFILE_FRAME();
     }
+    // Quitting stops a running session first, then the Input is unbound before it goes.
+    session.stopPlay();
+    session.setPlayInput(nullptr, ith::kNoWindow);
     finishSession(session, dock);
     // A graph whose execution failed still holds the passes; the last UI frame may not have been
     // rendered (minimized, failed), leaving the UI in its graph-import phase. Both are closed before
@@ -714,6 +772,8 @@ int runEditor(const Options& options, ith::Platform& platform, ith::JobSystem& j
     ui.abandonFrame();
     viewportPanel->reset();
     created->reset();
+    input.removeConsumer(spectatorConsumer);
+    input.removeConsumer(playConsumer);
     input.removeConsumer(viewportConsumer);
     input.removeConsumer(shortcutConsumer);
     std::printf("ironthorn_editor: %llu frames\n", static_cast<unsigned long long>(frames));
