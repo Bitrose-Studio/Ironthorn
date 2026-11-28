@@ -137,6 +137,13 @@ set_target_properties(ith_input_actions_benchmark PROPERTIES
 add_test(NAME input_actions_benchmark COMMAND ith_input_actions_benchmark)
 set_tests_properties(input_actions_benchmark PROPERTIES LABELS "benchmark" TIMEOUT 600)
 
+# The gameplay module (ADR-0053 decision 1) on a plain World, without the editor: Time's advance
+# by tickGameWorld, buildGameSchedule's order and errors, and Time's reflection record.
+ith_add_test_suite(gameplay
+    SOURCES
+        gameplay/GameWorldTests.cpp
+    LIBRARIES ith::gameplay)
+
 # The platform layer on SDL's headless "offscreen" driver. The tests also call SDL directly, to
 # list its compiled-in video drivers and to push events the offscreen driver can't produce.
 # WakeTests.cpp checks waitEvents and Platform::wake with a JobSystem (ADR-0035 rule 23);
@@ -487,6 +494,7 @@ ith_add_test_suite(ecs
         ecs/ResourceTests.cpp
         ecs/ScheduleTests.cpp
         ecs/StableIdTests.cpp
+        ecs/StructureGenerationTests.cpp
         ecs/WorldCopyTests.cpp
         ecs/WorldTests.cpp
     LIBRARIES ith_test_ecs_components ith::jobs Threads::Threads)

@@ -224,6 +224,21 @@ public:
     // The number of live entities.
     [[nodiscard]] std::size_t entityCount() const noexcept { return m_entityCount; }
 
+    // The structure generation (ADR-0053 decision 2): a counter that moves on, by an unspecified
+    // amount, with every structural change, so that a view can tell whether the world's entities,
+    // their component sets or the hierarchy changed since it last looked without walking the world.
+    // It moves on every spawn, despawn, add that gives an entity a type it didn't have, remove,
+    // ChildOf added or replaced (reparenting), placeBefore, clear (also of an empty world) and in
+    // the target of copyWorld, whether the call is direct, a command or part of applyPatches. It
+    // never moves on value-only writes (get, writable queries and forEachComponent, add replacing a
+    // value of a type other than ChildOf, patches written in place, resources), nor on calls and
+    // commands that change nothing (stale handles). It only grows, so a value read earlier differs
+    // from the current one whenever the structure changed since. Values never repeat across
+    // worlds: each World starts 2^32 above the one created before it in the process, so a view that
+    // caches a generation can't mistake a new world (which may reuse the old one's id()) for the
+    // one it saw, unless a world makes 2^32 structural changes. Compare values for equality only.
+    [[nodiscard]] std::uint64_t structureGeneration() const noexcept { return m_structureGeneration; }
+
     // True while a query, forEachRoot or forEachComponent iterates this world, a system runs on it
     // or a hook runs: the times when structural changes are refused. For callers that must check
     // before they start a change made of several steps, such as loading a level.
@@ -642,6 +657,8 @@ private:
     std::unordered_map<std::uint64_t, std::uint32_t> m_lastRuns;
     // The entity of each stable id, kept by the StableId hooks.
     std::unordered_map<Uuid, Entity> m_stableIds;
+    // See structureGeneration().
+    std::uint64_t m_structureGeneration;
 };
 
 template <typename Function>

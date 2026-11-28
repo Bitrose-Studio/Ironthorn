@@ -158,6 +158,32 @@ ith::copyWorld(editorWorld, play, {.excludeEditorOnly = true}); // what Play In 
   being iterated or running a hook, and a target that isn't fresh. Fresh means as the
   constructor left it: nothing ever spawned or reserved, no resources, no system run.
 
+## Structure generation
+
+```cpp
+const std::uint64_t seen = world.structureGeneration();
+// ... later
+if (world.structureGeneration() != seen) {
+    rebuildTree(world); // entities, component sets or the hierarchy changed
+}
+```
+
+`World::structureGeneration()` is a 64-bit counter that moves on with every structural change
+(ADR-0053 decision 2), so a view such as the editor's Outliner can follow a running game world
+without walking it every frame:
+
+- **It moves** on every spawn and despawn, every add that gives an entity a new type, every
+  remove, every `ChildOf` added or replaced (reparenting), `placeBefore`, `clear` (also of an
+  empty world), whether directly, by command or through `applyPatches`, and in the target of
+  `copyWorld`.
+- **It never moves** on value-only writes (`get`, writable queries, `forEachComponent`, an `add`
+  that replaces a value of a type other than `ChildOf`, patches written in place, resources), nor
+  on calls and commands that change nothing, such as those on stale handles.
+- It only grows, possibly by more than one per call, so compare values for equality only.
+- **Values never repeat across worlds.** Each `World` starts 2^32 above the one created before it,
+  so a cached value can't match a new world that reuses the old one's `id()`, unless a world makes
+  2^32 structural changes.
+
 ## Queries
 
 ```cpp
@@ -798,12 +824,14 @@ spawn and the schedule have no target. Record results with the machine they ran 
   (what stamps a tick, typed and dynamic `Added` and `Changed`, each system's window per world,
   refused use outside systems and without declared access, the 32-bit wraparound, and propagation
   that writes only the changed subtrees, removals included) and `StableIdTests.cpp` (the lookup
-  through every change, duplicate and nil ids refused) and `WorldCopyTests.cpp` (values, slots,
-  hierarchy and order, remapped entities in components and resources, EditorOnly left out, fresh
-  ticks, no hooks, refusals) and `EntityOpTests.cpp` (Spawns under placeholders, Despawns
-  refused with children and undone into the old place, placements, a spawn, reparent and delete
-  in one call applied all or not at all, and a reparent undone and redone bit for bit without the
-  inverse growing) and `EntityPatchTests.cpp` (`applyPatches`: writes in place without
+  through every change, duplicate and nil ids refused) and `StructureGenerationTests.cpp` (what
+  moves the structure generation and what doesn't: value writes, refused calls, commands that
+  change nothing and schedule runs without structural commands; values unique across worlds) and
+  `WorldCopyTests.cpp` (values, slots, hierarchy and order, remapped entities in components and
+  resources, EditorOnly left out, fresh ticks, no hooks, refusals) and `EntityOpTests.cpp` (Spawns
+  under placeholders, Despawns refused with children and undone into the old place, placements, a
+  spawn, reparent and delete in one call applied all or not at all, and a reparent undone and
+  redone bit for bit without the inverse growing) and `EntityPatchTests.cpp` (`applyPatches`: writes in place without
   hooks, replaces with hooks, adds and removes, inverses that undo, reparenting and its undo,
   refused values and cycles across entities, every error, and failures that change nothing);
 - a randomized model test (`ModelTests.cpp`) that runs thousands of random operations, typed and

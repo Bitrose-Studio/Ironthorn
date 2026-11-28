@@ -54,6 +54,13 @@ void releaseWorldId(std::uint8_t id) {
     ids.used.reset(id);
 }
 
+// The first structure generation of a new world: each world starts 2^32 above the one before, so
+// two worlds never hand out the same value unless one of them changes 2^32 times.
+std::uint64_t firstStructureGeneration() noexcept {
+    static std::atomic<std::uint64_t> next{0};
+    return next.fetch_add(std::uint64_t{1} << 32, std::memory_order_relaxed);
+}
+
 std::uint64_t hashTypes(std::span<const detail::ComponentIndex> types) noexcept {
     std::uint64_t hash = kFnv1a64Basis;
     for (const detail::ComponentIndex type : types) {
@@ -64,7 +71,7 @@ std::uint64_t hashTypes(std::span<const detail::ComponentIndex> types) noexcept 
 
 } // namespace
 
-World::World() : m_id(acquireWorldId()) {
+World::World() : m_id(acquireWorldId()), m_structureGeneration(firstStructureGeneration()) {
     // The hierarchy's hooks, once per process, before any World stores ChildOf or Disabled.
     [[maybe_unused]] static const bool kHierarchyHooks = setHierarchyHooks();
     m_archetypes.push_back(std::make_unique<detail::Archetype>(std::span<const detail::ComponentIndex>()));
@@ -184,6 +191,7 @@ std::uint32_t World::placeReserved(Entity entity, detail::ArchetypeIndex archety
     record.archetype = archetype;
     record.row = m_archetypes[archetype]->pushRow(entity, m_clock.tick);
     ++m_entityCount;
+    ++m_structureGeneration;
     linkRoot(entity.index(), kNoSlot); // a ChildOf among its components takes it out again
     return record.row;
 }
@@ -195,6 +203,7 @@ void World::releaseSlot(std::uint32_t index) {
     record.previousRoot = kNoSlot;
     record.nextRoot = kNoSlot;
     --m_entityCount;
+    ++m_structureGeneration;
     freeSlot(index);
 }
 
@@ -235,6 +244,7 @@ void World::moveEntity(EntityRecord& record, detail::ArchetypeIndex target) {
     }
     record.archetype = target;
     record.row = row;
+    ++m_structureGeneration; // the entity gained or lost a type
 }
 
 bool World::despawn(Entity entity) {
@@ -393,6 +403,9 @@ void* World::prepareAdd(Entity entity, detail::ComponentIndex type, bool& added)
     detail::Archetype& current = *m_archetypes[record->archetype];
     if (const std::size_t column = current.columnOf(type); column != detail::Archetype::kNoColumn) {
         runHook(HookKind::Replace, current, column, record->row); // the old value is still there
+        if (type == detail::componentIndexOf<ChildOf>()) {
+            ++m_structureGeneration; // reparenting; other replacements are value writes
+        }
         void* value = current.column(column).at(record->row);
         current.column(column).destroy(value);
         return value;
@@ -559,6 +572,7 @@ void World::clear() {
     }
     // Every remove hook runs while the whole world is still there. The hierarchy's hooks do
     // nothing: everything they would keep goes.
+    ++m_structureGeneration; // also for an empty world
     m_clearing = true;
     for (const std::unique_ptr<detail::Archetype>& archetype : m_archetypes) {
         if (archetype->hasHooks()) {
@@ -1028,14 +1042,18 @@ bool World::placeBefore(Entity entity, Entity sibling) {
         }
     }
     if (parent.isNull()) {
+        ++m_structureGeneration;
         unlinkRoot(entity.index());
         linkRoot(entity.index(), sibling.isNull() ? kNoSlot : sibling.index());
         return true;
     }
     std::vector<Entity>* children = childrenOf(parent);
+    // Reachable: a placeBefore that a hook recorded during a spawn runs before the LinkChild command
+    // that creates the parent's Children list. Nothing changes then.
     if (children == nullptr) {
         return false;
     }
+    ++m_structureGeneration;
     const auto same = [](Entity wanted) { return [wanted](Entity candidate) { return candidate == wanted; }; };
     if (const auto found = std::ranges::find_if(*children, same(entity)); found != children->end()) {
         children->erase(found);

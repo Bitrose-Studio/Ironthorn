@@ -158,6 +158,12 @@ struct StructureProbe {
     ITH_TYPE(Component)
 };
 
+// Its onInsert hook records placing the entity at the end of its siblings, which runs before the
+// LinkChild of a ChildOf given after it in the same spawn. StructureGenerationTests.cpp sets it.
+struct PlacesItself {
+    ITH_TYPE(Component)
+};
+
 // Stored by a World before any hooks are set, to check that setting them later is refused.
 struct LateHooked {
     ITH_TYPE(Component)

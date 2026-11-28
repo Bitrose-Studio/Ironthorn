@@ -23,6 +23,7 @@ add_subdirectory(ith/shapes)
 add_subdirectory(ith/assets)
 add_subdirectory(ith/input)
 add_subdirectory(ith/input_actions)
+add_subdirectory(ith/gameplay)
 add_subdirectory(ith/render_graph)
 # The shader compiler needs Slang and DXC, which sanitizer builds leave out (ITH_BUILD_SHADER_COMPILER).
 if(ITH_BUILD_SHADER_COMPILER)

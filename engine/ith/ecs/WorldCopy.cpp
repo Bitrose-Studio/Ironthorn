@@ -125,6 +125,7 @@ bool copyWorld(const World& source, World& target, const WorldCopyOptions& optio
         void* memory = target.prepareResource(type);
         copyValue(type, memory, value.get(), map);
     }
+    ++target.m_structureGeneration;
     return true;
 }
 
